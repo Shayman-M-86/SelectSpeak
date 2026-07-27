@@ -1,18 +1,40 @@
 [project]
-name = "my-TTS"
+name = "selectspeak"
 version = "0.1.0"
-description = "Add your description here"
+description = "Read selected Windows text aloud with a global hotkey."
 readme = "README.md"
+requires-python = ">=3.11"
 dependencies = [
+    "pillow>=11.0",
+    "pynput>=1.8.2",
+    "pystray>=0.19.5",
+    "pywin32>=308; sys_platform == 'win32'",
 ]
 
+[project.scripts]
+selectspeak = "selectspeak:main"
 
-[tool.testing.pytest.ini_options]
-pythonpath = ["./src", "./tests"]
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
-[tool.ty.rules]
-unsupported-base = "ignore"
+[dependency-groups]
+dev = [
+    "pytest>=8.4",
+    "ruff>=0.12",
+    "ty>=0.0.63",
+    "types-pywin32",
+]
+
+[tool.ruff]
+line-length = 88
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "N", "W", "UP"]
-ignore = []
+select = ["E", "F", "I", "UP"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/selectspeak"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

@@ -18,18 +18,11 @@
 		],
 		"python.envFile": "${workspaceFolder}/.env",
 		"python.terminal.activateEnvironment": true,
-		"python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
-		// Test settings
-		"python.testing.pytestEnabled": true,
-		"python.testing.unittestEnabled": false,
-		"python.testing.cwd": "${workspaceFolder}/tests",
-		"python.testing.pytestPath": "${workspaceFolder}/.venv/bin/pytest",
-		"python.testing.autoTestDiscoverOnSaveEnabled": true,
+		"python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
 		// Code Runner settings
 		"code-runner.executorMap": {
-			"python": "source .venv/Scripts/activate ; python $fullFileName"
+			"python": "uv run python $fullFileName"
 		},
-		"code-runner.runInTerminal": true,
-		"hide-files.files": []
+		"code-runner.runInTerminal": true
 	}
 }

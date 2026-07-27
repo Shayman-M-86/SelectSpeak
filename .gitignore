@@ -1,63 +1,25 @@
-# Byte-compiled / optimized / DLL files
+# Python
 __pycache__/
 *.py[cod]
-*$py.class
-
-# C extensions
-*.so
-
-# Distribution / packaging
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-pip-wheel-metadata/
-share/python-wheels/
 *.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
+.python-version
 
-# Virtual environment directories
-*.env
+# Environments and local configuration
+.env
+.env.*
+.venv/
 env/
 venv/
-ENV/
-env.bak/
-venv.bak
-.venv/
 
-
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
+# Build and tool output
+build/
+dist/
 .coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py,cover
-.hypothesis/
-pytest_cache/
-cover/
+.pytest_cache/
+.ruff_cache/
 
-
-*temp*
-*env*
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# python version
-.python-version
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+.vscode/*.log
+selectspeak.log
