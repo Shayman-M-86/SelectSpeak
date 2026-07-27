@@ -8,9 +8,10 @@ class AppConfig:
     preferred_voice_match: str = "natural"
     speech_rate: int = 0
     speech_volume: int = 100
+    structure_pause_seconds: float = 0.1
+    logging_enabled: bool = False
+    log_file: str = "selectspeak.log"
     minimum_text_length: int = 3
-    clipboard_wait_seconds: float = 2.0
-    clipboard_poll_seconds: float = 0.05
     hotkey_debounce_seconds: float = 0.3
     capture_timeout_seconds: float = 15.0
 

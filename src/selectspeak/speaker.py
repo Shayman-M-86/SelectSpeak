@@ -1,4 +1,5 @@
 import logging
+import re
 import threading
 import time
 from collections.abc import Callable
@@ -11,6 +12,7 @@ import win32com.client
 
 from .config import AppConfig
 from .logging_setup import log_event, log_exception, text_preview
+from .text_processing import strip_display_bullet_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +84,7 @@ class SapiSpeaker:
             preferred_voice=config.preferred_voice_match,
             rate=config.speech_rate,
             volume=config.speech_volume,
+            structure_pause_seconds=config.structure_pause_seconds,
         )
 
     @property
@@ -283,65 +286,84 @@ class SapiSpeaker:
             text_preview=text_preview(request.text),
         )
         try:
-            voice.Speak(request.text, async_flag)
-            log_event(
-                logger,
-                logging.DEBUG,
-                "speaker.sapi_speak.called",
-                generation=request.generation,
-            )
-            time.sleep(0.1)
-            last_word_position = -1
-            while voice.Status.RunningState != 1:
-                if self._is_superseded(request.generation):
-                    log_event(
-                        logger,
-                        logging.INFO,
-                        "speaker.request.superseded",
-                        generation=request.generation,
-                    )
-                    if self.paused:
-                        voice.Resume()
-                    voice.Speak("", async_flag | purge_before_speak)
-                    return
-                if self._pause_requested.is_set():
-                    self._pause_requested.clear()
-                    voice.Pause()
-                    with self._condition:
-                        self._paused = True
-                    log_event(
-                        logger,
-                        logging.INFO,
-                        "speaker.sapi_paused",
-                        generation=request.generation,
-                    )
-                if self._resume_requested.is_set():
-                    self._resume_requested.clear()
-                    if self.paused:
-                        voice.Resume()
-                        with self._condition:
-                            self._paused = False
+            segments = [
+                (match.start(), match.group())
+                for match in re.finditer(r"[^\n]+", request.text)
+            ]
+            for segment_index, (text_offset, segment) in enumerate(segments):
+                spoken_segment, display_prefix_length = strip_display_bullet_prefix(
+                    segment
+                )
+                voice.Speak(spoken_segment, async_flag)
+                log_event(
+                    logger,
+                    logging.DEBUG,
+                    "speaker.sapi_speak.called",
+                    generation=request.generation,
+                    segment_index=segment_index,
+                    segment_count=len(segments),
+                    segment_length=len(spoken_segment),
+                    display_prefix_length=display_prefix_length,
+                )
+                time.sleep(0.1)
+                last_word_position = -1
+                while voice.Status.RunningState != 1:
+                    if self._is_superseded(request.generation):
                         log_event(
                             logger,
                             logging.INFO,
-                            "speaker.sapi_resumed",
+                            "speaker.request.superseded",
                             generation=request.generation,
                         )
-                if not self.paused and self._word_callback:
-                    position = voice.Status.InputWordPosition
-                    length = voice.Status.InputWordLength
-                    if length > 0 and position != last_word_position:
-                        last_word_position = position
+                        if self.paused:
+                            voice.Resume()
+                        voice.Speak("", async_flag | purge_before_speak)
+                        return
+                    if self._pause_requested.is_set():
+                        self._pause_requested.clear()
+                        voice.Pause()
+                        with self._condition:
+                            self._paused = True
                         log_event(
                             logger,
-                            logging.DEBUG,
-                            "speaker.word_observed",
+                            logging.INFO,
+                            "speaker.sapi_paused",
                             generation=request.generation,
-                            position=position,
-                            length=length,
                         )
-                        self._word_callback(request.text, position, length)
-                time.sleep(0.05)
+                    if self._resume_requested.is_set():
+                        self._resume_requested.clear()
+                        if self.paused:
+                            voice.Resume()
+                            with self._condition:
+                                self._paused = False
+                            log_event(
+                                logger,
+                                logging.INFO,
+                                "speaker.sapi_resumed",
+                                generation=request.generation,
+                            )
+                    if not self.paused and self._word_callback:
+                        position = voice.Status.InputWordPosition
+                        length = voice.Status.InputWordLength
+                        if length > 0 and position != last_word_position:
+                            last_word_position = position
+                            absolute_position = (
+                                text_offset + display_prefix_length + position
+                            )
+                            log_event(
+                                logger,
+                                logging.DEBUG,
+                                "speaker.word_observed",
+                                generation=request.generation,
+                                position=absolute_position,
+                                length=length,
+                            )
+                            self._word_callback(request.text, absolute_position, length)
+                    time.sleep(0.05)
+
+                if segment_index < len(segments) - 1:
+                    if not self._wait_for_structure_pause(request.generation):
+                        return
         except Exception:
             log_exception(
                 logger,
@@ -364,6 +386,62 @@ class SapiSpeaker:
                 current_generation=self._generation,
                 completed_generation=self._completed_generation,
             )
+
+    def _wait_for_structure_pause(self, generation: int) -> bool:
+        remaining = self._config.structure_pause_seconds
+        last_tick = time.monotonic()
+        log_event(
+            logger,
+            logging.DEBUG,
+            "speaker.structure_pause.started",
+            generation=generation,
+            duration_seconds=remaining,
+        )
+        while remaining > 0:
+            if self._is_superseded(generation):
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "speaker.structure_pause.superseded",
+                    generation=generation,
+                )
+                return False
+
+            if self._pause_requested.is_set():
+                self._pause_requested.clear()
+                with self._condition:
+                    self._paused = True
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "speaker.structure_pause.user_paused",
+                    generation=generation,
+                )
+            if self._resume_requested.is_set():
+                self._resume_requested.clear()
+                if self.paused:
+                    with self._condition:
+                        self._paused = False
+                    log_event(
+                        logger,
+                        logging.INFO,
+                        "speaker.structure_pause.user_resumed",
+                        generation=generation,
+                    )
+
+            now = time.monotonic()
+            if not self.paused:
+                remaining -= now - last_tick
+            last_tick = now
+            time.sleep(0.05)
+
+        log_event(
+            logger,
+            logging.DEBUG,
+            "speaker.structure_pause.completed",
+            generation=generation,
+        )
+        return True
 
     def _is_superseded(self, generation: int) -> bool:
         with self._condition:

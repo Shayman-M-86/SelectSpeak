@@ -1,7 +1,8 @@
 import json
 import logging
 
-from selectspeak.logging_setup import JsonLineFormatter
+from selectspeak.config import AppConfig
+from selectspeak.logging_setup import JsonLineFormatter, configure_logging
 
 
 def test_json_line_formatter_emits_structured_event() -> None:
@@ -25,3 +26,11 @@ def test_json_line_formatter_emits_structured_event() -> None:
     assert payload["details"] == {"answer": 42}
     assert payload["timestamp"]
     assert payload["session"]
+
+
+def test_logging_is_disabled_by_app_config() -> None:
+    try:
+        assert configure_logging(AppConfig(logging_enabled=False)) is None
+        assert logging.root.manager.disable == logging.CRITICAL
+    finally:
+        logging.disable(logging.NOTSET)

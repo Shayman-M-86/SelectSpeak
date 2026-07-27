@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from .config import AppConfig
+
 _SESSION_ID = uuid4().hex
 
 
@@ -32,18 +34,19 @@ class JsonLineFormatter(logging.Formatter):
         return json.dumps(payload, ensure_ascii=False, default=str)
 
 
-def configure_logging() -> Path:
-    """Configure the process to append all diagnostics to one JSONL file."""
-    configured_path = os.environ.get("SELECTSPEAK_LOG_FILE")
-    log_path = (
-        Path(configured_path).expanduser()
-        if configured_path
-        else Path.cwd() / "selectspeak.log"
-    )
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-
+def configure_logging(config: AppConfig) -> Path | None:
+    """Configure diagnostics from the application configuration."""
     root_logger = logging.getLogger()
     root_logger.handlers.clear()
+    if not config.logging_enabled:
+        logging.captureWarnings(False)
+        logging.disable(logging.CRITICAL)
+        return None
+
+    logging.disable(logging.NOTSET)
+    log_path = Path(config.log_file).expanduser()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
     root_logger.setLevel(logging.DEBUG)
 
     handler = logging.FileHandler(log_path, mode="a", encoding="utf-8")

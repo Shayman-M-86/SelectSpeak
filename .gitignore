@@ -23,3 +23,4 @@ dist/
 Thumbs.db
 .vscode/*.log
 selectspeak.log
+.runtime/

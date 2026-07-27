@@ -1,4 +1,6 @@
+import ctypes
 import logging
+import os
 import tkinter as tk
 from collections.abc import Callable
 from queue import Empty, SimpleQueue
@@ -16,9 +18,14 @@ DIM_FOREGROUND = "#6c7086"
 GREEN = "#a6e3a1"
 RED = "#f38ba8"
 ACCENT = "#89b4fa"
-IDLE_HEIGHT = 88
-READING_HEIGHT = 155
+WINDOW_WIDTH = 440
+IDLE_HEIGHT = 92
+READING_HEIGHT = 250
+STATUS_WRAP_LENGTH = WINDOW_WIDTH - 22
 SPINNER = ("⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷")
+_GWL_EXSTYLE = -20
+_WS_EX_NOACTIVATE = 0x08000000
+_SWP_REFRESH_FRAME_NO_ACTIVATE = 0x0037
 
 
 class PlayerWindow(tk.Tk):
@@ -28,6 +35,7 @@ class PlayerWindow(tk.Tk):
         app_name: str,
         hotkey: str,
         on_play: Callable[[], None],
+        on_read: Callable[[], None],
         on_pause: Callable[[], None],
         on_resume: Callable[[], None],
         on_stop: Callable[[], None],
@@ -39,6 +47,7 @@ class PlayerWindow(tk.Tk):
         self._hotkey = hotkey
         self._clipboard_mode = False
         self._on_play = on_play
+        self._on_read = on_read
         self._on_pause = on_pause
         self._on_resume = on_resume
         self._on_stop = on_stop
@@ -57,13 +66,15 @@ class PlayerWindow(tk.Tk):
         self.attributes("-alpha", 0.95)
         self.configure(bg=BACKGROUND)
         self.resizable(False, False)
+        self.update_idletasks()
+        self._enable_no_activate()
 
-        width = 330
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         self.geometry(
-            f"{width}x{IDLE_HEIGHT}"
-            f"+{screen_width - width - 20}+{screen_height - IDLE_HEIGHT - 60}"
+            f"{WINDOW_WIDTH}x{IDLE_HEIGHT}"
+            f"+{screen_width - WINDOW_WIDTH - 20}"
+            f"+{screen_height - IDLE_HEIGHT - 60}"
         )
         self.bind("<ButtonPress-1>", self._begin_drag)
         self.bind("<B1-Motion>", self._drag)
@@ -87,7 +98,7 @@ class PlayerWindow(tk.Tk):
             "player.created",
             app_name=app_name,
             hotkey=hotkey,
-            initial_mode="selection",
+            initial_mode="auto",
         )
 
     def call_soon(self, callback: Callable[[], None]) -> None:
@@ -104,6 +115,47 @@ class PlayerWindow(tk.Tk):
         self.deiconify()
         self.lift()
 
+    def hide(self) -> None:
+        log_event(logger, logging.INFO, "player.hidden")
+        self.withdraw()
+
+    def _enable_no_activate(self) -> None:
+        if os.name != "nt":
+            log_event(logger, logging.DEBUG, "player.no_activate.unavailable")
+            return
+        try:
+            user32 = ctypes.windll.user32
+            client_handle = self.winfo_id()
+            window_handle = user32.GetParent(client_handle) or client_handle
+            extended_style = user32.GetWindowLongPtrW(
+                window_handle,
+                _GWL_EXSTYLE,
+            )
+            ctypes.set_last_error(0)
+            previous_style = user32.SetWindowLongPtrW(
+                window_handle,
+                _GWL_EXSTYLE,
+                extended_style | _WS_EX_NOACTIVATE,
+            )
+            if previous_style == 0 and ctypes.get_last_error() != 0:
+                raise ctypes.WinError(ctypes.get_last_error())
+            user32.SetWindowPos(
+                window_handle,
+                0,
+                0,
+                0,
+                0,
+                _SWP_REFRESH_FRAME_NO_ACTIVATE,
+            )
+            log_event(
+                logger,
+                logging.INFO,
+                "player.no_activate.enabled",
+                window_handle=window_handle,
+            )
+        except Exception:
+            log_exception(logger, "player.no_activate.failed")
+
     def set_hotkey(self, hotkey: str) -> None:
         log_event(logger, logging.INFO, "player.hotkey.updated", hotkey=hotkey)
         self._hotkey = hotkey
@@ -114,7 +166,7 @@ class PlayerWindow(tk.Tk):
             logger,
             logging.INFO,
             "player.capture_mode.updated",
-            mode="clipboard" if enabled else "selection",
+            mode="clipboard" if enabled else "auto",
         )
         self._clipboard_mode = enabled
         if enabled:
@@ -125,7 +177,7 @@ class PlayerWindow(tk.Tk):
             )
         else:
             self._clipboard_button.config(
-                text="Mode: Selection",
+                text="Mode: Auto",
                 fg=DIM_FOREGROUND,
                 font=("Segoe UI", 7),
             )
@@ -158,7 +210,7 @@ class PlayerWindow(tk.Tk):
         self.after(2000, self.show_idle_hint)
 
     def show_idle_hint(self) -> None:
-        target = "clipboard" if self._clipboard_mode else "selected text"
+        target = "clipboard" if self._clipboard_mode else "selection or clipboard"
         log_event(
             logger,
             logging.DEBUG,
@@ -279,7 +331,7 @@ class PlayerWindow(tk.Tk):
             anchor="w",
         )
         self._animation_label.pack(side="left", padx=(4, 0))
-        self._title_button(row, "✕", self._hide).pack(side="right")
+        self._title_button(row, "✕", self.hide).pack(side="right")
         self._title_button(row, "–", self._minimize).pack(side="right")
 
     def _build_status(self, parent: tk.Frame) -> None:
@@ -289,7 +341,7 @@ class PlayerWindow(tk.Tk):
             bg=BACKGROUND,
             fg=DIM_FOREGROUND,
             font=("Segoe UI", 8),
-            wraplength=308,
+            wraplength=STATUS_WRAP_LENGTH,
             justify="left",
             anchor="w",
         )
@@ -299,10 +351,10 @@ class PlayerWindow(tk.Tk):
         self._reader_frame = tk.Frame(parent, bg=READER_BACKGROUND)
         self._reader = tk.Text(
             self._reader_frame,
-            height=4,
+            height=9,
             bg=READER_BACKGROUND,
             fg=FOREGROUND,
-            font=("Segoe UI", 8),
+            font=("Segoe UI", 9),
             wrap="word",
             relief="flat",
             bd=0,
@@ -312,10 +364,21 @@ class PlayerWindow(tk.Tk):
             cursor="arrow",
         )
         self._reader.tag_config(
+            "structured_line",
+            lmargin1=8,
+            lmargin2=8,
+            spacing1=3,
+            spacing3=5,
+        )
+        self._reader.tag_config(
+            "bullet_line",
+            lmargin1=8,
+            lmargin2=24,
+        )
+        self._reader.tag_config(
             "current",
             background=BUTTON_BACKGROUND,
             foreground="#ffffff",
-            font=("Segoe UI", 8, "bold"),
         )
         self._reader.pack(fill="both", expand=True)
 
@@ -328,6 +391,13 @@ class PlayerWindow(tk.Tk):
     ) -> None:
         self._control_row = tk.Frame(parent, bg=BACKGROUND)
         self._control_row.pack(fill="x")
+
+        read_wrapper = tk.Frame(self._control_row, bg=BUTTON_BORDER, padx=1, pady=1)
+        read_wrapper.pack(side="left", padx=(0, 6))
+        self._read_button = self._control_button(
+            read_wrapper, "▶ Read", GREEN, self._on_read
+        )
+        self._read_button.pack()
 
         play_wrapper = tk.Frame(self._control_row, bg=BUTTON_BORDER, padx=1, pady=1)
         play_wrapper.pack(side="left", padx=(0, 6))
@@ -348,7 +418,7 @@ class PlayerWindow(tk.Tk):
         )
         self._hotkey_button.pack(side="right")
         self._clipboard_button = self._small_button(
-            self._control_row, "Mode: Selection", on_toggle_clipboard
+            self._control_row, "Mode: Auto", on_toggle_clipboard
         )
         self._clipboard_button.pack(side="right", padx=(0, 4))
 
@@ -364,12 +434,30 @@ class PlayerWindow(tk.Tk):
         self._reader.config(state="normal")
         self._reader.delete("1.0", "end")
         self._reader.insert("1.0", text)
+        for line_number, line in enumerate(text.splitlines(), start=1):
+            if line.strip():
+                self._reader.tag_add(
+                    "structured_line",
+                    f"{line_number}.0",
+                    f"{line_number}.end",
+                )
+                if line.startswith("• "):
+                    self._reader.tag_add(
+                        "bullet_line",
+                        f"{line_number}.0",
+                        f"{line_number}.end",
+                    )
         self._reader.tag_remove("current", "1.0", "end")
         self._reader.tag_config("current", background=BUTTON_BACKGROUND)
         self._reader.config(state="disabled")
         if not self._reader_frame.winfo_ismapped():
             self._status.pack_forget()
-            self._reader_frame.pack(fill="x", pady=(3, 5), before=self._control_row)
+            self._reader_frame.pack(
+                fill="both",
+                expand=True,
+                pady=(3, 5),
+                before=self._control_row,
+            )
             self._resize(READING_HEIGHT)
 
     def _hide_reader(self, hint: str) -> None:
@@ -408,7 +496,7 @@ class PlayerWindow(tk.Tk):
             self._animation_label.config(text="")
 
     def _idle_hint(self) -> str:
-        target = "clipboard" if self._clipboard_mode else "selected text"
+        target = "clipboard" if self._clipboard_mode else "selection or clipboard"
         return f"Press {self._hotkey.upper()} to read {target}"
 
     def _drain_callbacks(self) -> None:
@@ -438,7 +526,9 @@ class PlayerWindow(tk.Tk):
             pass
 
     def _resize(self, height: int) -> None:
-        self.geometry(f"330x{height}+{self.winfo_x()}+{self.winfo_y()}")
+        current_bottom = self.winfo_y() + self.winfo_height()
+        new_y = max(0, current_bottom - height)
+        self.geometry(f"{WINDOW_WIDTH}x{height}+{self.winfo_x()}+{new_y}")
 
     def _begin_drag(self, event: tk.Event) -> None:
         log_event(
@@ -463,16 +553,13 @@ class PlayerWindow(tk.Tk):
         self.overrideredirect(False)
         self.iconify()
 
-    def _hide(self) -> None:
-        log_event(logger, logging.INFO, "player.hidden")
-        self.withdraw()
-
     def _on_map(self, _event: tk.Event) -> None:
         if self.state() == "normal" and self._user_minimized:
             log_event(logger, logging.INFO, "player.restored")
             self._user_minimized = False
             self.overrideredirect(True)
             self.attributes("-topmost", True)
+            self.after_idle(self._enable_no_activate)
 
     @staticmethod
     def _title_button(

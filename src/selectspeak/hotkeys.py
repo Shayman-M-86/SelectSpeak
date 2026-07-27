@@ -6,16 +6,10 @@ from typing import Protocol, cast
 
 from pynput import keyboard
 
-from .keymap import (
-    build_hotkey,
-    normalize_key,
-    to_pynput_hotkey,
-    to_windows_hotkey,
-)
-from .logging_setup import log_event, log_exception
+from .autohotkey import AutoHotkeySidecar
+from .keymap import build_hotkey, normalize_key
+from .logging_setup import log_event
 
-_WINDOWS_KEY_DOWN_MESSAGES = frozenset((0x0100, 0x0104))
-_WINDOWS_KEY_UP_MESSAGES = frozenset((0x0101, 0x0105))
 logger = logging.getLogger(__name__)
 
 
@@ -25,15 +19,11 @@ class KeyboardListener(Protocol):
     def stop(self) -> None: ...
 
 
-class SuppressingKeyboardListener(KeyboardListener, Protocol):
-    def suppress_event(self) -> None: ...
-
-
 class HotkeyManager:
-    def __init__(self, hotkey: str, handler: Callable[[], None]) -> None:
+    def __init__(self, hotkey: str, handler: Callable[[str], None]) -> None:
         self.hotkey = hotkey
         self._handler = handler
-        self._hotkey_listener: KeyboardListener | None = None
+        self._hotkey_listener: AutoHotkeySidecar | None = None
         self._capture_listener: KeyboardListener | None = None
         self._release_timer: threading.Timer | None = None
         self._timeout_timer: threading.Timer | None = None
@@ -61,7 +51,7 @@ class HotkeyManager:
             logging.INFO,
             "hotkey.register.completed",
             hotkey=self.hotkey,
-            pynput_hotkey=to_pynput_hotkey(self.hotkey),
+            engine="autohotkey_v2",
         )
 
     def rebind(self, hotkey: str) -> None:
@@ -158,109 +148,22 @@ class HotkeyManager:
             listener.stop()
         log_event(logger, logging.INFO, "hotkey.manager.close.completed")
 
-    def _create_hotkey_listener(self, hotkey: str) -> KeyboardListener:
-        pynput_hotkey = to_pynput_hotkey(hotkey)
-        modifier_groups, trigger_vk = to_windows_hotkey(hotkey)
+    def trigger(self) -> None:
+        with self._lock:
+            listener = self._hotkey_listener
+        if listener is None:
+            raise RuntimeError("Global hotkey listener is not registered")
+        listener.trigger()
+
+    def _create_hotkey_listener(self, hotkey: str) -> AutoHotkeySidecar:
         log_event(
             logger,
             logging.DEBUG,
             "hotkey.listener.creating",
             hotkey=hotkey,
-            pynput_hotkey=pynput_hotkey,
-            trigger_vk=trigger_vk,
+            engine="autohotkey_v2",
         )
-        state_lock = threading.RLock()
-        pressed_vks: set[int] = set()
-        trigger_suppressed = False
-        activation_pending = False
-        listener_box: list[SuppressingKeyboardListener] = []
-
-        def required_modifiers_held() -> bool:
-            return all(group & pressed_vks for group in modifier_groups)
-
-        def no_required_modifiers_held() -> bool:
-            return not any(group & pressed_vks for group in modifier_groups)
-
-        def event_filter(message: int, data: object) -> bool:
-            nonlocal trigger_suppressed, activation_pending
-            vk_code = int(getattr(data, "vkCode"))
-            run_handler = False
-            suppress = False
-
-            with state_lock:
-                if message in _WINDOWS_KEY_DOWN_MESSAGES:
-                    pressed_vks.add(vk_code)
-                    if (
-                        vk_code == trigger_vk
-                        and required_modifiers_held()
-                        and not trigger_suppressed
-                    ):
-                        trigger_suppressed = True
-                        activation_pending = True
-                        suppress = True
-                        log_event(
-                            logger,
-                            logging.INFO,
-                            "hotkey.listener.activated",
-                            hotkey=hotkey,
-                            trigger_vk=trigger_vk,
-                            action="trigger_suppressed_until_release",
-                        )
-                    elif vk_code == trigger_vk and trigger_suppressed:
-                        # Suppress key-repeat messages for the trigger too.
-                        suppress = True
-                elif message in _WINDOWS_KEY_UP_MESSAGES:
-                    pressed_vks.discard(vk_code)
-                    if vk_code == trigger_vk and trigger_suppressed:
-                        trigger_suppressed = False
-                        suppress = True
-                    if (
-                        activation_pending
-                        and not trigger_suppressed
-                        and no_required_modifiers_held()
-                    ):
-                        activation_pending = False
-                        run_handler = True
-
-            if run_handler:
-                log_event(
-                    logger,
-                    logging.INFO,
-                    "hotkey.listener.released",
-                    hotkey=hotkey,
-                    action="dispatching_handler",
-                )
-                timer = threading.Timer(0, self._run_handler)
-                timer.daemon = True
-                timer.start()
-            if suppress:
-                listener_box[0].suppress_event()
-            return True
-
-        try:
-            listener = cast(
-                SuppressingKeyboardListener,
-                keyboard.Listener(win32_event_filter=event_filter),
-            )
-            listener_box.append(listener)
-            return listener
-        except Exception:
-            log_exception(
-                logger,
-                "hotkey.listener.create_failed",
-                hotkey=hotkey,
-                pynput_hotkey=pynput_hotkey,
-            )
-            raise
-
-    def _run_handler(self) -> None:
-        log_event(logger, logging.DEBUG, "hotkey.handler.started")
-        try:
-            self._handler()
-        except Exception:
-            log_exception(logger, "hotkey.handler.failed")
-        else:
-            log_event(logger, logging.DEBUG, "hotkey.handler.completed")
+        return AutoHotkeySidecar(hotkey, self._handler)
 
     def _on_capture_press(self, key: object) -> None:
         name = self._key_name(key)

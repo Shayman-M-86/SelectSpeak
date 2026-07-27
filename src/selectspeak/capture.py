@@ -1,28 +1,31 @@
-import logging
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Literal
 
-from .logging_setup import log_event, text_preview
+from .text_processing import prepare_for_speech
 
-logger = logging.getLogger(__name__)
+CaptureSource = Literal["selection", "clipboard", "clipboard_fallback"]
 
 
-def fresh_clipboard_text(original: str | None, candidate: str | None) -> str | None:
-    """Accept copied text only when it differs from the pre-copy clipboard.
+@dataclass(frozen=True, slots=True)
+class CaptureResult:
+    source: CaptureSource
+    raw_text: str
+    text: str
 
-    A same-value copy is ambiguous: it may be a legitimate identical selection,
-    but it may also be stale clipboard data after a failed synthetic Ctrl+C.
-    Refusing to speak is safer than reading unrelated stale content.
-    """
-    accepted = bool(candidate) and candidate != original
-    log_event(
-        logger,
-        logging.DEBUG,
-        "capture.candidate.evaluated",
-        original_length=len(original) if original is not None else None,
-        candidate_length=len(candidate) if candidate is not None else None,
-        original_preview=text_preview(original),
-        candidate_preview=text_preview(candidate),
-        accepted=accepted,
-    )
-    if not accepted:
-        return None
-    return candidate
+
+def resolve_capture(
+    selected_text: str,
+    read_clipboard: Callable[[], str | None],
+    *,
+    force_clipboard: bool,
+) -> CaptureResult:
+    """Prefer meaningful selected text, otherwise fall back to the clipboard."""
+    if not force_clipboard:
+        cleaned_selection = prepare_for_speech(selected_text)
+        if cleaned_selection:
+            return CaptureResult("selection", selected_text, cleaned_selection)
+
+    clipboard_text = read_clipboard() or ""
+    source: CaptureSource = "clipboard" if force_clipboard else "clipboard_fallback"
+    return CaptureResult(source, clipboard_text, prepare_for_speech(clipboard_text))

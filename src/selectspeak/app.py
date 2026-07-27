@@ -3,12 +3,12 @@ import logging
 import threading
 import time
 
+from .capture import resolve_capture
 from .clipboard import ClipboardService
 from .config import DEFAULT_CONFIG, AppConfig
 from .hotkeys import HotkeyManager
 from .logging_setup import log_event, log_exception, text_preview
 from .speaker import SapiSpeaker
-from .text import tidy_text
 from .ui.player import PlayerWindow
 from .ui.tray import TrayController
 
@@ -44,13 +44,14 @@ class SelectSpeakApp:
             app_name=self._config.app_name,
             hotkey=self._config.default_hotkey,
             on_play=self.replay,
+            on_read=self.read_current,
             on_pause=self.pause,
             on_resume=self.resume,
             on_stop=self.stop,
             on_toggle_clipboard=self.toggle_clipboard_mode,
             on_capture_hotkey=self.start_hotkey_capture,
         )
-        self._clipboard = ClipboardService(self._config)
+        self._clipboard = ClipboardService()
         self._speaker = SapiSpeaker(self._config, self._on_word)
         self._hotkeys = HotkeyManager(self._config.default_hotkey, self._on_hotkey)
         self._tray = TrayController(
@@ -134,6 +135,18 @@ class SelectSpeakApp:
         else:
             log_event(logger, logging.DEBUG, "playback.replay.ignored_no_text")
 
+    def read_current(self) -> None:
+        """Run the same sidecar capture used by the global hotkey."""
+        log_event(logger, logging.INFO, "capture.button.requested")
+        self._trigger_button_capture()
+
+    def _trigger_button_capture(self) -> None:
+        try:
+            self._hotkeys.trigger()
+        except Exception:
+            log_exception(logger, "capture.button.failed")
+            self._player.show()
+
     def toggle_clipboard_mode(self) -> None:
         with self._state_lock:
             self._clipboard_mode = not self._clipboard_mode
@@ -143,7 +156,7 @@ class SelectSpeakApp:
             logger,
             logging.INFO,
             "capture.mode.changed",
-            mode="clipboard" if enabled else "selection",
+            mode="clipboard" if enabled else "auto",
         )
 
     def start_hotkey_capture(self) -> None:
@@ -180,7 +193,7 @@ class SelectSpeakApp:
         self._player.destroy()
         log_event(logger, logging.INFO, "app.shutdown.completed")
 
-    def _on_hotkey(self) -> None:
+    def _on_hotkey(self, selected_text: str) -> None:
         log_event(logger, logging.INFO, "hotkey.activated", hotkey=self._hotkeys.hotkey)
         if self._hotkeys.capturing:
             log_event(logger, logging.DEBUG, "hotkey.ignored_during_capture")
@@ -200,36 +213,44 @@ class SelectSpeakApp:
             clipboard_mode = self._clipboard_mode
             speaking = self._is_speaking
 
-        source = "clipboard" if clipboard_mode else "selection"
+        requested_mode = "clipboard" if clipboard_mode else "auto"
         log_event(
             logger,
             logging.INFO,
             "capture.started",
-            source=source,
+            mode=requested_mode,
             already_speaking=speaking,
         )
-        raw_text = (
-            self._clipboard.read_text()
-            if clipboard_mode
-            else self._clipboard.capture_selection()
+        capture = resolve_capture(
+            selected_text,
+            self._clipboard.read_text,
+            force_clipboard=clipboard_mode,
         )
-        text = tidy_text(raw_text or "")
+        if capture.source == "clipboard_fallback":
+            log_event(
+                logger,
+                logging.INFO,
+                "capture.fallback_to_clipboard",
+                reason="selection_empty",
+                selected_length=len(selected_text),
+                clipboard_length=len(capture.raw_text),
+            )
         log_event(
             logger,
             logging.INFO,
             "capture.completed",
-            source=source,
-            raw_length=len(raw_text or ""),
-            cleaned_length=len(text),
-            raw_preview=text_preview(raw_text),
-            cleaned_preview=text_preview(text),
+            source=capture.source,
+            raw_length=len(capture.raw_text),
+            cleaned_length=len(capture.text),
+            raw_preview=text_preview(capture.raw_text),
+            cleaned_preview=text_preview(capture.text),
         )
-        if not text:
+        if not capture.text:
             log_event(
                 logger,
                 logging.WARNING,
                 "capture.empty",
-                source=source,
+                source=capture.source,
                 action="stop" if speaking else "show_player",
             )
             if speaking:
@@ -237,7 +258,7 @@ class SelectSpeakApp:
             else:
                 self._player.call_soon(self._player.show)
             return
-        self._begin_speech(text)
+        self._begin_speech(capture.text)
 
     def _begin_speech(self, text: str) -> None:
         log_event(

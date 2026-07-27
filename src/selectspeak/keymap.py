@@ -26,36 +26,30 @@ _MODIFIER_ALIASES = {
 }
 _MODIFIER_NAMES = {"ctrl", "shift", "alt", "windows"}
 _MODIFIER_ORDER = ("ctrl", "alt", "shift", "windows")
-_PYNPUT_MODIFIERS = {
-    "ctrl": "<ctrl>",
-    "alt": "<alt>",
-    "shift": "<shift>",
-    "windows": "<cmd>",
+_AUTOHOTKEY_MODIFIERS = {
+    "ctrl": "^",
+    "alt": "!",
+    "shift": "+",
+    "windows": "#",
 }
-_WINDOWS_MODIFIER_VKS = {
-    "ctrl": frozenset((0x11, 0xA2, 0xA3)),
-    "shift": frozenset((0x10, 0xA0, 0xA1)),
-    "alt": frozenset((0x12, 0xA4, 0xA5)),
-    "windows": frozenset((0x5B, 0x5C)),
+_AUTOHOTKEY_NAMED_KEYS = {
+    "backspace": "Backspace",
+    "tab": "Tab",
+    "enter": "Enter",
+    "esc": "Esc",
+    "space": "Space",
+    "page_up": "PgUp",
+    "page_down": "PgDn",
+    "end": "End",
+    "home": "Home",
+    "left": "Left",
+    "up": "Up",
+    "right": "Right",
+    "down": "Down",
+    "insert": "Insert",
+    "delete": "Delete",
 }
-_WINDOWS_NAMED_VKS = {
-    "backspace": 0x08,
-    "tab": 0x09,
-    "enter": 0x0D,
-    "esc": 0x1B,
-    "space": 0x20,
-    "page_up": 0x21,
-    "page_down": 0x22,
-    "end": 0x23,
-    "home": 0x24,
-    "left": 0x25,
-    "up": 0x26,
-    "right": 0x27,
-    "down": 0x28,
-    "insert": 0x2D,
-    "delete": 0x2E,
-}
-_WINDOWS_NAMED_VKS.update({f"f{number}": 0x6F + number for number in range(1, 25)})
+_AUTOHOTKEY_NAMED_KEYS.update({f"f{number}": f"F{number}" for number in range(1, 25)})
 
 
 def normalize_key(name: str) -> str:
@@ -97,55 +91,32 @@ def build_hotkey(keys: set[str]) -> str:
     return result
 
 
-def to_pynput_hotkey(hotkey: str) -> str:
-    """Translate ``alt+s`` style configuration to pynput's parser syntax."""
+def to_autohotkey_hotkey(hotkey: str) -> tuple[str, str]:
+    """Translate ``alt+s`` into a suppressing AutoHotkey v2 hook hotkey."""
     parts = [normalize_key(part.strip()) for part in hotkey.split("+")]
-    translated = []
-    for part in parts:
-        if part in _PYNPUT_MODIFIERS:
-            translated.append(_PYNPUT_MODIFIERS[part])
-        elif len(part) == 1:
-            translated.append(part)
-        else:
-            translated.append(f"<{part}>")
-    result = "+".join(translated)
-    log_event(
-        logger,
-        logging.DEBUG,
-        "hotkey.translated_for_pynput",
-        input=hotkey,
-        output=result,
-    )
-    return result
-
-
-def to_windows_hotkey(
-    hotkey: str,
-) -> tuple[tuple[frozenset[int], ...], int]:
-    """Return required modifier VK groups and the trigger key's Windows VK."""
-    parts = [normalize_key(part.strip()) for part in hotkey.split("+")]
-    modifier_groups = tuple(
-        _WINDOWS_MODIFIER_VKS[part] for part in parts if part in _MODIFIER_NAMES
-    )
     ordinary_keys = [part for part in parts if part not in _MODIFIER_NAMES]
     if len(ordinary_keys) != 1:
         raise ValueError("A global hotkey must contain exactly one trigger key")
 
     trigger = ordinary_keys[0]
-    if len(trigger) == 1:
-        trigger_vk = ord(trigger.upper())
+    if len(trigger) == 1 and trigger.isalnum():
+        ahk_trigger = trigger
     else:
         try:
-            trigger_vk = _WINDOWS_NAMED_VKS[trigger]
+            ahk_trigger = _AUTOHOTKEY_NAMED_KEYS[trigger]
         except KeyError as error:
-            raise ValueError(f"Unsupported global hotkey key: {trigger}") from error
+            raise ValueError(f"Unsupported AutoHotkey key: {trigger}") from error
 
+    modifiers = "".join(
+        _AUTOHOTKEY_MODIFIERS[part] for part in _MODIFIER_ORDER if part in parts
+    )
+    result = f"${modifiers}{ahk_trigger}"
     log_event(
         logger,
         logging.DEBUG,
-        "hotkey.translated_for_windows",
+        "hotkey.translated_for_autohotkey",
         input=hotkey,
-        modifier_vks=[sorted(group) for group in modifier_groups],
-        trigger_vk=trigger_vk,
+        output=result,
+        trigger=ahk_trigger,
     )
-    return modifier_groups, trigger_vk
+    return result, ahk_trigger
