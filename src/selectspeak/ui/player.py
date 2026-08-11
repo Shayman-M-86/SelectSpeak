@@ -19,8 +19,8 @@ GREEN = "#a6e3a1"
 RED = "#f38ba8"
 ACCENT = "#89b4fa"
 WINDOW_WIDTH = 440
-IDLE_HEIGHT = 92
-READING_HEIGHT = 250
+MIN_IDLE_HEIGHT = 92
+MIN_READING_HEIGHT = 250
 STATUS_WRAP_LENGTH = WINDOW_WIDTH - 22
 SPINNER = ("⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷")
 _GWL_EXSTYLE = -20
@@ -40,12 +40,15 @@ class PlayerWindow(tk.Tk):
         on_resume: Callable[[], None],
         on_stop: Callable[[], None],
         on_toggle_clipboard: Callable[[], None],
+        on_toggle_auto_hide: Callable[[], None],
         on_capture_hotkey: Callable[[], None],
+        auto_hide: bool = True,
     ) -> None:
         super().__init__()
         self._app_name = app_name
         self._hotkey = hotkey
         self._clipboard_mode = False
+        self._auto_hide = auto_hide
         self._on_play = on_play
         self._on_read = on_read
         self._on_pause = on_pause
@@ -69,26 +72,29 @@ class PlayerWindow(tk.Tk):
         self.update_idletasks()
         self._enable_no_activate()
 
-        screen_width = self.winfo_screenwidth()
-        screen_height = self.winfo_screenheight()
-        self.geometry(
-            f"{WINDOW_WIDTH}x{IDLE_HEIGHT}"
-            f"+{screen_width - WINDOW_WIDTH - 20}"
-            f"+{screen_height - IDLE_HEIGHT - 60}"
-        )
         self.bind("<ButtonPress-1>", self._begin_drag)
         self.bind("<B1-Motion>", self._drag)
         self.bind("<Map>", self._on_map)
 
-        pad = tk.Frame(self, bg=BACKGROUND, padx=10, pady=8)
-        pad.pack(fill="both", expand=True)
-        self._build_title_row(pad)
-        self._build_status(pad)
-        self._build_reader(pad)
+        self._content = tk.Frame(self, bg=BACKGROUND, padx=10, pady=8)
+        self._content.pack(fill="both", expand=True)
+        self._build_title_row(self._content)
+        self._build_status(self._content)
+        self._build_reader(self._content)
         self._build_controls(
-            pad,
+            self._content,
             on_toggle_clipboard=on_toggle_clipboard,
+            on_toggle_auto_hide=on_toggle_auto_hide,
             on_capture_hotkey=on_capture_hotkey,
+        )
+        self.update_idletasks()
+        width, height = self._required_size(MIN_IDLE_HEIGHT)
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        self.geometry(
+            f"{width}x{height}"
+            f"+{max(0, screen_width - width - 20)}"
+            f"+{max(0, screen_height - height - 60)}"
         )
         self.after(20, self._drain_callbacks)
         self.withdraw()
@@ -99,6 +105,12 @@ class PlayerWindow(tk.Tk):
             app_name=app_name,
             hotkey=hotkey,
             initial_mode="auto",
+            auto_hide=auto_hide,
+            width=width,
+            height=height,
+            requested_width=self._content.winfo_reqwidth(),
+            requested_height=self._content.winfo_reqheight(),
+            scaling=round(float(self.tk.call("tk", "scaling")), 3),
         )
 
     def call_soon(self, callback: Callable[[], None]) -> None:
@@ -182,6 +194,20 @@ class PlayerWindow(tk.Tk):
                 font=("Segoe UI", 7),
             )
         self.show_idle_hint()
+
+    def set_auto_hide(self, enabled: bool) -> None:
+        self._auto_hide = enabled
+        self._auto_hide_button.config(
+            text=f"Auto hide: {'On' if enabled else 'Off'}",
+            fg=ACCENT if enabled else DIM_FOREGROUND,
+            font=("Segoe UI", 7, "bold" if enabled else "normal"),
+        )
+        log_event(
+            logger,
+            logging.INFO,
+            "player.auto_hide.updated",
+            enabled=enabled,
+        )
 
     def show_capture_started(self) -> None:
         log_event(logger, logging.INFO, "player.hotkey_capture.started")
@@ -272,6 +298,8 @@ class PlayerWindow(tk.Tk):
                 fg=FOREGROUND,
             )
             self._stop_button.config(bg=BUTTON_BACKGROUND, fg=RED)
+            if self._auto_hide:
+                self.after_idle(self.hide)
 
     def highlight_word(self, position: int, length: int) -> None:
         generation = self._reader_generation
@@ -387,6 +415,7 @@ class PlayerWindow(tk.Tk):
         parent: tk.Frame,
         *,
         on_toggle_clipboard: Callable[[], None],
+        on_toggle_auto_hide: Callable[[], None],
         on_capture_hotkey: Callable[[], None],
     ) -> None:
         self._control_row = tk.Frame(parent, bg=BACKGROUND)
@@ -421,6 +450,16 @@ class PlayerWindow(tk.Tk):
             self._control_row, "Mode: Auto", on_toggle_clipboard
         )
         self._clipboard_button.pack(side="right", padx=(0, 4))
+        self._auto_hide_button = self._small_button(
+            self._control_row,
+            f"Auto hide: {'On' if self._auto_hide else 'Off'}",
+            on_toggle_auto_hide,
+        )
+        self._auto_hide_button.config(
+            fg=ACCENT if self._auto_hide else DIM_FOREGROUND,
+            font=("Segoe UI", 7, "bold" if self._auto_hide else "normal"),
+        )
+        self._auto_hide_button.pack(side="right", padx=(0, 4))
 
     def _show_reader(self, text: str) -> None:
         log_event(
@@ -458,7 +497,7 @@ class PlayerWindow(tk.Tk):
                 pady=(3, 5),
                 before=self._control_row,
             )
-            self._resize(READING_HEIGHT)
+            self._resize(MIN_READING_HEIGHT)
 
     def _hide_reader(self, hint: str) -> None:
         log_event(
@@ -471,7 +510,7 @@ class PlayerWindow(tk.Tk):
         self._reader_frame.pack_forget()
         self._status.config(text=hint, fg=DIM_FOREGROUND)
         self._status.pack(fill="x", pady=(3, 5), before=self._control_row)
-        self._resize(IDLE_HEIGHT)
+        self._resize(MIN_IDLE_HEIGHT)
 
     def _start_animation(self) -> None:
         log_event(logger, logging.DEBUG, "player.animation.started")
@@ -525,10 +564,30 @@ class PlayerWindow(tk.Tk):
         except tk.TclError:
             pass
 
-    def _resize(self, height: int) -> None:
+    def _required_size(self, minimum_height: int) -> tuple[int, int]:
+        self.update_idletasks()
+        width = max(WINDOW_WIDTH, self._content.winfo_reqwidth())
+        height = max(minimum_height, self._content.winfo_reqheight())
+        return width, height
+
+    def _resize(self, minimum_height: int) -> None:
         current_bottom = self.winfo_y() + self.winfo_height()
+        width, height = self._required_size(minimum_height)
         new_y = max(0, current_bottom - height)
-        self.geometry(f"{WINDOW_WIDTH}x{height}+{self.winfo_x()}+{new_y}")
+        max_x = max(0, self.winfo_screenwidth() - width)
+        new_x = min(max(0, self.winfo_x()), max_x)
+        self.geometry(f"{width}x{height}+{new_x}+{new_y}")
+        log_event(
+            logger,
+            logging.DEBUG,
+            "player.resized_to_content",
+            width=width,
+            height=height,
+            requested_width=self._content.winfo_reqwidth(),
+            requested_height=self._content.winfo_reqheight(),
+            minimum_height=minimum_height,
+            scaling=round(float(self.tk.call("tk", "scaling")), 3),
+        )
 
     def _begin_drag(self, event: tk.Event) -> None:
         log_event(

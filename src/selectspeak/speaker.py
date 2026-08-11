@@ -19,6 +19,42 @@ logger = logging.getLogger(__name__)
 WordCallback = Callable[[str, int, int], None]
 
 
+class Speaker(Protocol):
+    def speak(self, text: str) -> int | None: ...
+
+    def stop(self) -> None: ...
+
+    def pause(self) -> None: ...
+
+    def resume(self) -> None: ...
+
+    def wait_until_done(self, generation: int) -> bool: ...
+
+
+def create_speaker(
+    config: AppConfig, word_callback: WordCallback | None = None
+) -> Speaker:
+    """Prefer the direct Natural Voice bridge and retain SAPI as auto fallback."""
+    backend = config.speech_backend.casefold()
+    if backend not in {"auto", "natural", "sapi"}:
+        raise ValueError(f"Unknown speech backend: {config.speech_backend}")
+    if backend != "sapi":
+        try:
+            from .natural_voice import NaturalVoiceSpeaker
+
+            speaker = NaturalVoiceSpeaker(config, word_callback)
+            log_event(
+                logger, logging.INFO, "speaker.backend.selected", backend="natural"
+            )
+            return speaker
+        except Exception:
+            if backend == "natural":
+                raise
+            log_exception(logger, "speaker.natural_voice.unavailable")
+    log_event(logger, logging.INFO, "speaker.backend.selected", backend="sapi")
+    return SapiSpeaker(config, word_callback)
+
+
 class SapiToken(Protocol):
     def GetDescription(self) -> str: ...
 

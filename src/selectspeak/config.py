@@ -6,10 +6,15 @@ class AppConfig:
     app_name: str = "SelectSpeak"
     default_hotkey: str = "alt+s"
     preferred_voice_match: str = "natural"
+    speech_backend: str = "auto"
+    natural_voice_dll: str = ""
+    natural_voice_path: str = ""
+    natural_voice_credential: str = ""
+    auto_hide: bool = True
     speech_rate: int = 0
     speech_volume: int = 100
     structure_pause_seconds: float = 0.1
-    logging_enabled: bool = False
+    logging_enabled: bool = True
     log_file: str = "selectspeak.log"
     minimum_text_length: int = 3
     hotkey_debounce_seconds: float = 0.3

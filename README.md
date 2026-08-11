@@ -1,7 +1,8 @@
 # SelectSpeak
 
 Select text anywhere in Windows, press `Alt+S`, and hear it read aloud
-using the built-in SAPI voice. The tray app includes pause, resume, stop,
+using a locally installed Narrator Natural Voice when the optional native bridge
+is available, with the built-in SAPI voice as an automatic fallback. The tray app includes pause, resume, stop,
 replay, clipboard mode, word highlighting, and hotkey rebinding. Global
 shortcut suppression and selection copying are handled by a generated
 AutoHotkey v2 sidecar. `pynput` is used only while recording a new shortcut.
@@ -30,6 +31,36 @@ a machine-wide installation.
 Set `SELECTSPEAK_AUTOHOTKEY` to an alternative `AutoHotkey64.exe` path if you
 prefer to manage the runtime yourself.
 
+### Optional direct Natural Voice backend
+
+The in-house bridge bypasses SAPI and streams PCM plus exact word-boundary
+events from Microsoft's embedded Speech SDK. Install Visual Studio 2022 Build
+Tools with the C++ and CMake components, install a Narrator Natural Voice in
+Windows Settings, then run:
+
+```powershell
+.\native\natural_voice\build.ps1
+```
+
+If the C++ toolchain is not installed yet, use
+`.\native\natural_voice\build.ps1 -InstallPrerequisites` to install the
+official Visual Studio Build Tools package through WinGet and continue.
+
+`AppConfig.speech_backend` defaults to `"auto"`: SelectSpeak uses the bridge
+when it is present and usable, otherwise it retains the current SAPI backend.
+Set it to `"natural"` to require the bridge or `"sapi"` to disable it. You may
+also set `SELECTSPEAK_NATURAL_VOICE_DLL` to an alternate DLL path.
+
+For a compatible voice package extracted to a local folder, set
+`AppConfig.natural_voice_path` to that folder. This bypasses installed-package
+discovery and is useful with the last compatible package versions linked by the
+upstream adapter project.
+
+This depends on an unofficial, version-sensitive interface to Microsoft's
+installed voice packages. The build pins Speech SDK 1.41.1 for compatibility;
+the SDK and voice-model redistribution terms are separate from this project's
+source license. See `native/natural_voice/THIRD_PARTY_NOTICES.md`.
+
 ## Run
 
 ```powershell
@@ -48,10 +79,15 @@ Run `install_startup.ps1` once from PowerShell. Run
 ## Controls
 
 - Select text and press `Alt+S` to read it.
+- Press the hotkey again on the same selection while it is speaking to stop;
+  press it once more after stopping to read the selection again. Selecting
+  different text replaces the current reading immediately.
 - In **Mode: Auto**, the hotkey reads selected text when available and
   automatically falls back to the existing clipboard when nothing is selected.
 - Click **Mode: Auto** to switch to **Mode: Clipboard** when you want to force
   clipboard reading.
+- Click **Auto hide: On** to keep the player open after speech finishes, or
+  click it again to restore automatic hiding. Auto hide is enabled by default.
 - Click **Read** to perform the same capture and reading action as the global
   hotkey. The player remains visible without taking foreground focus from the
   source application.
@@ -83,10 +119,10 @@ starting it again; closing the player window only hides the existing process.
 ## Debug log
 
 Logging is controlled only by `AppConfig` in `src/selectspeak/config.py`. It is
-disabled by default, so SelectSpeak does not create or append to a log file
-during normal use.
+currently enabled while the Natural Voice integration is being diagnosed and
+writes to `selectspeak.log`.
 
-To temporarily enable the structured JSON Lines diagnostic log, change:
+The structured JSON Lines diagnostic switch is:
 
 ```python
 logging_enabled: bool = True
@@ -116,6 +152,8 @@ src/selectspeak/autohotkey.py
 src/selectspeak/clipboard.py
 src/selectspeak/hotkeys.py
 src/selectspeak/speaker.py
+src/selectspeak/natural_voice.py
 src/selectspeak/text_processing.py
 src/selectspeak/ui/         Player window and system tray
+native/natural_voice/       Small C ABI bridge to local Natural Voices
 ```

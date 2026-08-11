@@ -8,11 +8,17 @@ from .clipboard import ClipboardService
 from .config import DEFAULT_CONFIG, AppConfig
 from .hotkeys import HotkeyManager
 from .logging_setup import log_event, log_exception, text_preview
-from .speaker import SapiSpeaker
+from .speaker import create_speaker
 from .ui.player import PlayerWindow
 from .ui.tray import TrayController
 
 logger = logging.getLogger(__name__)
+
+
+def is_repeat_of_active_speech(
+    *, speaking: bool, active_text: str, captured_text: str
+) -> bool:
+    return speaking and bool(captured_text) and captured_text == active_text
 
 
 class SelectSpeakApp:
@@ -26,6 +32,7 @@ class SelectSpeakApp:
         self._is_speaking = False
         self._is_paused = False
         self._clipboard_mode = False
+        self._auto_hide = config.auto_hide
         self._last_hotkey_time = 0.0
         self._shutting_down = False
         log_event(
@@ -49,10 +56,12 @@ class SelectSpeakApp:
             on_resume=self.resume,
             on_stop=self.stop,
             on_toggle_clipboard=self.toggle_clipboard_mode,
+            on_toggle_auto_hide=self.toggle_auto_hide,
             on_capture_hotkey=self.start_hotkey_capture,
+            auto_hide=self._auto_hide,
         )
         self._clipboard = ClipboardService()
-        self._speaker = SapiSpeaker(self._config, self._on_word)
+        self._speaker = create_speaker(self._config, self._on_word)
         self._hotkeys = HotkeyManager(self._config.default_hotkey, self._on_hotkey)
         self._tray = TrayController(
             app_name=self._config.app_name,
@@ -159,6 +168,18 @@ class SelectSpeakApp:
             mode="clipboard" if enabled else "auto",
         )
 
+    def toggle_auto_hide(self) -> None:
+        with self._state_lock:
+            self._auto_hide = not self._auto_hide
+            enabled = self._auto_hide
+        self._player.set_auto_hide(enabled)
+        log_event(
+            logger,
+            logging.INFO,
+            "player.auto_hide.changed",
+            enabled=enabled,
+        )
+
     def start_hotkey_capture(self) -> None:
         log_event(logger, logging.INFO, "hotkey.capture.requested")
         with self._state_lock:
@@ -257,6 +278,26 @@ class SelectSpeakApp:
                 self.stop()
             else:
                 self._player.call_soon(self._player.show)
+            return
+        with self._state_lock:
+            stop_repeated_text = is_repeat_of_active_speech(
+                speaking=self._is_speaking,
+                active_text=self._last_text,
+                captured_text=capture.text,
+            )
+        if stop_repeated_text:
+            log_event(
+                logger,
+                logging.INFO,
+                "hotkey.repeated_active_text",
+                action="stop",
+                text_length=len(capture.text),
+            )
+            self.stop()
+            # The following press should replay immediately, even if it occurs
+            # within the ordinary hotkey debounce interval.
+            with self._state_lock:
+                self._last_hotkey_time = 0.0
             return
         self._begin_speech(capture.text)
 
@@ -387,8 +428,26 @@ class SelectSpeakApp:
         try:
             windows_libraries = getattr(ctypes, "windll", None)
             if windows_libraries is not None:
-                windows_libraries.shcore.SetProcessDpiAwareness(1)
-                log_event(logger, logging.DEBUG, "dpi_awareness.enabled")
+                # Per-monitor v2 keeps Tk's measured layout and the native window
+                # size in agreement when displays use different scale factors.
+                enabled = windows_libraries.user32.SetProcessDpiAwarenessContext(
+                    ctypes.c_void_p(-4)
+                )
+                if enabled:
+                    log_event(
+                        logger,
+                        logging.DEBUG,
+                        "dpi_awareness.enabled",
+                        mode="per_monitor_v2",
+                    )
+                else:
+                    windows_libraries.shcore.SetProcessDpiAwareness(1)
+                    log_event(
+                        logger,
+                        logging.DEBUG,
+                        "dpi_awareness.enabled",
+                        mode="system",
+                    )
             else:
                 log_event(logger, logging.DEBUG, "dpi_awareness.unavailable")
         except Exception:
