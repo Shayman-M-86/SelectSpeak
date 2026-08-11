@@ -7,6 +7,7 @@ class AppConfig:
     default_hotkey: str = "alt+s"
     preferred_voice_match: str = "natural"
     speech_backend: str = "auto"
+    native_input_dll: str = ""
     natural_voice_dll: str = ""
     natural_voice_path: str = ""
     natural_voice_credential: str = ""

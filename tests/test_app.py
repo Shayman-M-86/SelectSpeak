@@ -1,4 +1,11 @@
-from selectspeak.app import is_repeat_of_active_speech
+from collections.abc import Callable
+
+from selectspeak.app import (
+    SelectSpeakApp,
+    is_repeat_of_active_speech,
+    should_stop_clipboard_speech_immediately,
+    was_speaking_at,
+)
 
 
 def test_same_text_while_speaking_requests_stop() -> None:
@@ -23,3 +30,58 @@ def test_different_text_while_speaking_replaces_current_reading() -> None:
         active_text="Old selection",
         captured_text="New selection",
     )
+
+
+def test_hotkey_uses_speech_state_at_activation_before_capture_delay() -> None:
+    assert was_speaking_at(12.5, speech_started_at=10.0, speech_ended_at=13.0)
+    assert not was_speaking_at(13.5, speech_started_at=10.0, speech_ended_at=13.0)
+
+
+def test_clipboard_speech_stops_before_selection_capture() -> None:
+    assert should_stop_clipboard_speech_immediately(
+        speaking=True, source="clipboard_fallback"
+    )
+    assert not should_stop_clipboard_speech_immediately(
+        speaking=True, source="selection"
+    )
+
+
+def test_delayed_clipboard_fallback_stops_speech_active_at_keypress() -> None:
+    class Hotkeys:
+        hotkey = "alt+s"
+        capturing = False
+
+    class Clipboard:
+        @staticmethod
+        def read_text() -> str:
+            return "Clipboard fallback sentence."
+
+    class Speaker:
+        stop_count = 0
+
+        def stop(self) -> None:
+            self.stop_count += 1
+
+    class Player:
+        @staticmethod
+        def call_soon(callback: Callable[[], None]) -> None:
+            callback()
+
+        @staticmethod
+        def set_playback(**_values: object) -> None:
+            pass
+
+    app = SelectSpeakApp()
+    speaker = Speaker()
+    setattr(app, "_hotkeys", Hotkeys())
+    setattr(app, "_clipboard", Clipboard())
+    setattr(app, "_speaker", speaker)
+    setattr(app, "_player", Player())
+    app._last_text = "Clipboard fallback sentence."
+    app._is_speaking = False
+    app._speech_started_at = 10.0
+    app._speech_ended_at = 11.0
+
+    app._on_hotkey("", activated_at=10.5)
+
+    assert speaker.stop_count == 1

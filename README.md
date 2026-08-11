@@ -4,15 +4,15 @@ Select text anywhere in Windows, press `Alt+S`, and hear it read aloud
 using a locally installed Narrator Natural Voice when the optional native bridge
 is available, with the built-in SAPI voice as an automatic fallback. The tray app includes pause, resume, stop,
 replay, clipboard mode, word highlighting, and hotkey rebinding. Global
-shortcut suppression and selection copying are handled by a generated
-AutoHotkey v2 sidecar. `pynput` is used only while recording a new shortcut.
+shortcut registration, selection capture, and shortcut recording are handled
+by a small native Windows bridge.
 
 ## Requirements
 
 - Windows 10 or 11
 - [uv](https://docs.astral.sh/uv/)
 - Python 3.11 or newer
-- AutoHotkey v2, installed portably with the supplied bootstrap
+- Visual C++ Build Tools with CMake for the native bridges
 
 ## First-time setup
 
@@ -20,16 +20,17 @@ Run these commands once from PowerShell:
 
 ```powershell
 uv sync
-.\install_autohotkey.ps1
+.\native\input\build.ps1
 ```
 
-The bootstrap downloads the official AutoHotkey v2.0.26 portable archive,
-verifies its pinned SHA-256 hash, and copies only the 64-bit runtime and
-license into the ignored `.runtime/autohotkey` directory. It does not perform
-a machine-wide installation.
+The input bridge tries UI Automation first, then uses `SendInput`, clipboard
+change notifications, and an eager multi-format clipboard snapshot as its
+fallback. It uses `RegisterHotKey` during normal operation and installs a
+low-level keyboard hook only while recording a new shortcut. If the C++
+toolchain is missing, run
+`.\native\input\build.ps1 -InstallPrerequisites`.
 
-Set `SELECTSPEAK_AUTOHOTKEY` to an alternative `AutoHotkey64.exe` path if you
-prefer to manage the runtime yourself.
+Set `SELECTSPEAK_INPUT_DLL` to use a native input DLL at another location.
 
 ### Optional direct Natural Voice backend
 
@@ -148,7 +149,7 @@ uv build
 ```text
 main.py                     Root entry point
 src/selectspeak/app.py      Application lifecycle and state coordination
-src/selectspeak/autohotkey.py
+src/selectspeak/native_input.py
 src/selectspeak/clipboard.py
 src/selectspeak/hotkeys.py
 src/selectspeak/speaker.py
@@ -156,4 +157,5 @@ src/selectspeak/natural_voice.py
 src/selectspeak/text_processing.py
 src/selectspeak/ui/         Player window and system tray
 native/natural_voice/       Small C ABI bridge to local Natural Voices
+native/input/               Native hotkey and selected-text capture bridge
 ```

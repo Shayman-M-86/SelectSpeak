@@ -5,9 +5,9 @@ Set fso = CreateObject("Scripting.FileSystemObject")
 Set ws  = CreateObject("WScript.Shell")
 dir = fso.GetParentFolderName(WScript.ScriptFullName)
 ws.CurrentDirectory = dir
-If Not fso.FileExists(dir & "\.runtime\autohotkey\AutoHotkey64.exe") Then
-    MsgBox "AutoHotkey is not installed for SelectSpeak." & vbCrLf & vbCrLf & _
-        "Run install_autohotkey.ps1 from PowerShell first.", _
+If Not fso.FileExists(dir & "\.runtime\input\selectspeak_input.dll") Then
+    MsgBox "The native input bridge is not built for SelectSpeak." & vbCrLf & vbCrLf & _
+        "Run native\input\build.ps1 from PowerShell first.", _
         vbExclamation, "SelectSpeak setup required"
     WScript.Quit 1
 End If

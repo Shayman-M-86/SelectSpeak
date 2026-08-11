@@ -26,30 +26,31 @@ _MODIFIER_ALIASES = {
 }
 _MODIFIER_NAMES = {"ctrl", "shift", "alt", "windows"}
 _MODIFIER_ORDER = ("ctrl", "alt", "shift", "windows")
-_AUTOHOTKEY_MODIFIERS = {
-    "ctrl": "^",
-    "alt": "!",
-    "shift": "+",
-    "windows": "#",
+_WINDOWS_MODIFIERS = {
+    "alt": 0x0001,
+    "ctrl": 0x0002,
+    "shift": 0x0004,
+    "windows": 0x0008,
 }
-_AUTOHOTKEY_NAMED_KEYS = {
-    "backspace": "Backspace",
-    "tab": "Tab",
-    "enter": "Enter",
-    "esc": "Esc",
-    "space": "Space",
-    "page_up": "PgUp",
-    "page_down": "PgDn",
-    "end": "End",
-    "home": "Home",
-    "left": "Left",
-    "up": "Up",
-    "right": "Right",
-    "down": "Down",
-    "insert": "Insert",
-    "delete": "Delete",
+_WINDOWS_NAMED_KEYS = {
+    "backspace": 0x08,
+    "tab": 0x09,
+    "enter": 0x0D,
+    "esc": 0x1B,
+    "space": 0x20,
+    "page_up": 0x21,
+    "page_down": 0x22,
+    "end": 0x23,
+    "home": 0x24,
+    "left": 0x25,
+    "up": 0x26,
+    "right": 0x27,
+    "down": 0x28,
+    "insert": 0x2D,
+    "delete": 0x2E,
 }
-_AUTOHOTKEY_NAMED_KEYS.update({f"f{number}": f"F{number}" for number in range(1, 25)})
+_WINDOWS_NAMED_KEYS.update({f"f{number}": 0x6F + number for number in range(1, 25)})
+_WINDOWS_KEY_NAMES = {value: key for key, value in _WINDOWS_NAMED_KEYS.items()}
 
 
 def normalize_key(name: str) -> str:
@@ -91,8 +92,8 @@ def build_hotkey(keys: set[str]) -> str:
     return result
 
 
-def to_autohotkey_hotkey(hotkey: str) -> tuple[str, str]:
-    """Translate ``alt+s`` into a suppressing AutoHotkey v2 hook hotkey."""
+def to_windows_hotkey(hotkey: str) -> tuple[int, int]:
+    """Translate a user-facing shortcut into RegisterHotKey values."""
     parts = [normalize_key(part.strip()) for part in hotkey.split("+")]
     ordinary_keys = [part for part in parts if part not in _MODIFIER_NAMES]
     if len(ordinary_keys) != 1:
@@ -100,23 +101,32 @@ def to_autohotkey_hotkey(hotkey: str) -> tuple[str, str]:
 
     trigger = ordinary_keys[0]
     if len(trigger) == 1 and trigger.isalnum():
-        ahk_trigger = trigger
+        virtual_key = ord(trigger.upper())
     else:
         try:
-            ahk_trigger = _AUTOHOTKEY_NAMED_KEYS[trigger]
+            virtual_key = _WINDOWS_NAMED_KEYS[trigger]
         except KeyError as error:
-            raise ValueError(f"Unsupported AutoHotkey key: {trigger}") from error
+            raise ValueError(f"Unsupported Windows hotkey key: {trigger}") from error
 
-    modifiers = "".join(
-        _AUTOHOTKEY_MODIFIERS[part] for part in _MODIFIER_ORDER if part in parts
-    )
-    result = f"${modifiers}{ahk_trigger}"
+    modifiers = 0
+    for part in parts:
+        modifiers |= _WINDOWS_MODIFIERS.get(part, 0)
     log_event(
         logger,
         logging.DEBUG,
-        "hotkey.translated_for_autohotkey",
+        "hotkey.translated_for_windows",
         input=hotkey,
-        output=result,
-        trigger=ahk_trigger,
+        modifiers=modifiers,
+        virtual_key=virtual_key,
     )
-    return result, ahk_trigger
+    return modifiers, virtual_key
+
+
+def from_windows_hotkey(modifiers: int, virtual_key: int) -> str:
+    """Build the stable display name for a shortcut recorded by Windows."""
+    parts = [name for name in _MODIFIER_ORDER if modifiers & _WINDOWS_MODIFIERS[name]]
+    if ord("0") <= virtual_key <= ord("9") or ord("A") <= virtual_key <= ord("Z"):
+        trigger = chr(virtual_key).lower()
+    else:
+        trigger = _WINDOWS_KEY_NAMES.get(virtual_key, "")
+    return "+".join([*parts, trigger]) if trigger else ""

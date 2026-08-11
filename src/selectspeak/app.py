@@ -21,6 +21,16 @@ def is_repeat_of_active_speech(
     return speaking and bool(captured_text) and captured_text == active_text
 
 
+def was_speaking_at(
+    activated_at: float, speech_started_at: float, speech_ended_at: float
+) -> bool:
+    return speech_started_at <= activated_at < speech_ended_at
+
+
+def should_stop_clipboard_speech_immediately(*, speaking: bool, source: str) -> bool:
+    return speaking and source in {"clipboard", "clipboard_fallback"}
+
+
 class SelectSpeakApp:
     """Coordinate application state while delegating platform-specific work."""
 
@@ -30,6 +40,9 @@ class SelectSpeakApp:
         self._last_text = ""
         self._speech_generation: int | None = None
         self._is_speaking = False
+        self._speech_started_at = 0.0
+        self._speech_ended_at = 0.0
+        self._active_capture_source = ""
         self._is_paused = False
         self._clipboard_mode = False
         self._auto_hide = config.auto_hide
@@ -62,7 +75,12 @@ class SelectSpeakApp:
         )
         self._clipboard = ClipboardService()
         self._speaker = create_speaker(self._config, self._on_word)
-        self._hotkeys = HotkeyManager(self._config.default_hotkey, self._on_hotkey)
+        self._hotkeys = HotkeyManager(
+            self._config.default_hotkey,
+            self._on_hotkey,
+            self._on_hotkey_activation,
+            native_dll=self._config.native_input_dll,
+        )
         self._tray = TrayController(
             app_name=self._config.app_name,
             hotkey=self._config.default_hotkey,
@@ -89,6 +107,7 @@ class SelectSpeakApp:
         with self._state_lock:
             self._speech_generation = None
             self._is_speaking = False
+            self._speech_ended_at = time.monotonic()
             self._is_paused = False
             text = self._last_text
         self._update_player(speaking=False, text=text)
@@ -139,13 +158,14 @@ class SelectSpeakApp:
         log_event(logger, logging.INFO, "playback.replay.requested")
         with self._state_lock:
             text = self._last_text
+            source = self._active_capture_source or "replay"
         if text:
-            self._begin_speech(text)
+            self._begin_speech(text, source=source)
         else:
             log_event(logger, logging.DEBUG, "playback.replay.ignored_no_text")
 
     def read_current(self) -> None:
-        """Run the same sidecar capture used by the global hotkey."""
+        """Run the same native capture used by the global hotkey."""
         log_event(logger, logging.INFO, "capture.button.requested")
         self._trigger_button_capture()
 
@@ -214,12 +234,12 @@ class SelectSpeakApp:
         self._player.destroy()
         log_event(logger, logging.INFO, "app.shutdown.completed")
 
-    def _on_hotkey(self, selected_text: str) -> None:
+    def _on_hotkey(self, selected_text: str, activated_at: float) -> None:
         log_event(logger, logging.INFO, "hotkey.activated", hotkey=self._hotkeys.hotkey)
         if self._hotkeys.capturing:
             log_event(logger, logging.DEBUG, "hotkey.ignored_during_capture")
             return
-        now = time.monotonic()
+        now = activated_at
         with self._state_lock:
             elapsed = now - self._last_hotkey_time
             if elapsed < self._config.hotkey_debounce_seconds:
@@ -232,7 +252,12 @@ class SelectSpeakApp:
                 return
             self._last_hotkey_time = now
             clipboard_mode = self._clipboard_mode
-            speaking = self._is_speaking
+            speaking_now = self._is_speaking
+            speaking_at_activation = was_speaking_at(
+                activated_at,
+                self._speech_started_at,
+                self._speech_ended_at,
+            )
 
         requested_mode = "clipboard" if clipboard_mode else "auto"
         log_event(
@@ -240,7 +265,8 @@ class SelectSpeakApp:
             logging.INFO,
             "capture.started",
             mode=requested_mode,
-            already_speaking=speaking,
+            already_speaking=speaking_at_activation,
+            speaking_when_capture_completed=speaking_now,
         )
         capture = resolve_capture(
             selected_text,
@@ -272,16 +298,16 @@ class SelectSpeakApp:
                 logging.WARNING,
                 "capture.empty",
                 source=capture.source,
-                action="stop" if speaking else "show_player",
+                action="stop" if speaking_at_activation else "show_player",
             )
-            if speaking:
+            if speaking_at_activation:
                 self.stop()
             else:
                 self._player.call_soon(self._player.show)
             return
         with self._state_lock:
             stop_repeated_text = is_repeat_of_active_speech(
-                speaking=self._is_speaking,
+                speaking=speaking_at_activation,
                 active_text=self._last_text,
                 captured_text=capture.text,
             )
@@ -299,9 +325,36 @@ class SelectSpeakApp:
             with self._state_lock:
                 self._last_hotkey_time = 0.0
             return
-        self._begin_speech(capture.text)
+        self._begin_speech(capture.text, source=capture.source)
 
-    def _begin_speech(self, text: str) -> None:
+    def _on_hotkey_activation(self) -> bool:
+        with self._state_lock:
+            clipboard_mode = self._clipboard_mode
+            stop_clipboard_speech = should_stop_clipboard_speech_immediately(
+                speaking=self._is_speaking,
+                source=self._active_capture_source,
+            )
+        if stop_clipboard_speech:
+            log_event(
+                logger,
+                logging.INFO,
+                "hotkey.clipboard_speech.immediate_stop",
+            )
+            self.stop()
+            with self._state_lock:
+                self._last_hotkey_time = 0.0
+            return True
+        if clipboard_mode:
+            log_event(
+                logger,
+                logging.DEBUG,
+                "hotkey.clipboard_mode.direct_capture",
+            )
+            self._on_hotkey("", time.monotonic())
+            return True
+        return False
+
+    def _begin_speech(self, text: str, *, source: str = "replay") -> None:
         log_event(
             logger,
             logging.INFO,
@@ -327,6 +380,9 @@ class SelectSpeakApp:
             self._last_text = text
             self._speech_generation = generation
             self._is_speaking = True
+            self._speech_started_at = time.monotonic()
+            self._speech_ended_at = float("inf")
+            self._active_capture_source = source
             self._is_paused = False
         self._update_player(speaking=True, text=text)
         log_event(
@@ -370,6 +426,7 @@ class SelectSpeakApp:
                 return
             self._speech_generation = None
             self._is_speaking = False
+            self._speech_ended_at = time.monotonic()
             self._is_paused = False
         self._update_player(speaking=False, text=text)
         log_event(
