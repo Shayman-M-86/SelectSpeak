@@ -9,43 +9,46 @@ by a small native Windows bridge.
 
 ## Requirements
 
-- Windows 10 or 11
-- [uv](https://docs.astral.sh/uv/)
-- Python 3.11 or newer
-- Visual C++ Build Tools with CMake for the native bridges
+- 64-bit Windows 10 or 11
+- An internet connection for first-time setup
+- WinGet (included with Microsoft's App Installer on current Windows releases)
 
 ## First-time setup
 
-Run these commands once from PowerShell:
+Open PowerShell in the project folder and run:
 
 ```powershell
-uv sync
-.\native\input\build.ps1
+.\install.ps1
 ```
+
+The installer provisions `uv`, a managed Python 3.13 installation, all Python
+packages, Visual C++ Build Tools and CMake when needed, and both native
+bridges. It then verifies imports and runs the test, lint, and type-check suites.
+It is safe to run again when updating an existing installation.
+
+To install, start SelectSpeak, and add it to Windows startup in one command:
+
+```powershell
+.\install.ps1 -Launch -AddToStartup
+```
+
+Use `-SkipNaturalVoice` only if you want the SAPI fallback without the optional
+direct Natural Voice bridge. Use `-SkipChecks` to omit developer checks during
+installation.
 
 The input bridge tries UI Automation first, then uses `SendInput`, clipboard
 change notifications, and an eager multi-format clipboard snapshot as its
 fallback. It uses `RegisterHotKey` during normal operation and installs a
-low-level keyboard hook only while recording a new shortcut. If the C++
-toolchain is missing, run
-`.\native\input\build.ps1 -InstallPrerequisites`.
+low-level keyboard hook only while recording a new shortcut.
 
 Set `SELECTSPEAK_INPUT_DLL` to use a native input DLL at another location.
 
-### Optional direct Natural Voice backend
+### Direct Natural Voice backend
 
 The in-house bridge bypasses SAPI and streams PCM plus exact word-boundary
-events from Microsoft's embedded Speech SDK. Install Visual Studio 2022 Build
-Tools with the C++ and CMake components, install a Narrator Natural Voice in
-Windows Settings, then run:
-
-```powershell
-.\native\natural_voice\build.ps1
-```
-
-If the C++ toolchain is not installed yet, use
-`.\native\natural_voice\build.ps1 -InstallPrerequisites` to install the
-official Visual Studio Build Tools package through WinGet and continue.
+events from Microsoft's embedded Speech SDK. The root installer builds this
+bridge by default. Install a compatible Narrator Natural Voice from Windows
+Settings to use it; otherwise SelectSpeak automatically falls back to SAPI.
 
 `AppConfig.speech_backend` defaults to `"auto"`: SelectSpeak uses the bridge
 when it is present and usable, otherwise it retains the current SAPI backend.
@@ -64,18 +67,20 @@ source license. See `native/natural_voice/THIRD_PARTY_NOTICES.md`.
 
 ## Run
 
-```powershell
-uv run main.py
-```
+Double-click `run.vbs` to launch without a console window. It uses the
+project-local Python environment created by `install.ps1`, so `uv` does not
+need to be on the launcher's `PATH`.
 
-You can also double-click `run.vbs` to launch without a console window.
-The installed command `uv run selectspeak` reaches the same application entry
-point.
+Developers can also run `uv run main.py` or `uv run selectspeak`.
 
 ## Start automatically
 
-Run `install_startup.ps1` once from PowerShell. Run
-`uninstall_startup.ps1` to remove the startup shortcut.
+Pass `-AddToStartup` to the installer. To remove the startup shortcut later,
+run:
+
+```powershell
+.\install.ps1 -RemoveFromStartup
+```
 
 ## Controls
 
@@ -147,7 +152,9 @@ uv build
 ## Project structure
 
 ```text
+install.ps1                 Complete first-time setup and upgrade script
 main.py                     Root entry point
+run.vbs                     Console-free launcher using the local environment
 src/selectspeak/app.py      Application lifecycle and state coordination
 src/selectspeak/native_input.py
 src/selectspeak/clipboard.py
@@ -158,4 +165,5 @@ src/selectspeak/text_processing.py
 src/selectspeak/ui/         Player window and system tray
 native/natural_voice/       Small C ABI bridge to local Natural Voices
 native/input/               Native hotkey and selected-text capture bridge
+native/build_helpers.ps1    Shared C++ toolchain discovery and installation
 ```

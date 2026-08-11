@@ -11,15 +11,14 @@ pause and resume apply to already-buffered sound.
 
 ## Build
 
-Install Visual Studio 2022 Build Tools with **Desktop development with C++** and
-CMake, then run from the repository root:
+The recommended setup is the repository's complete installer, which provisions
+the toolchain and builds this bridge along with the rest of SelectSpeak:
 
 ```powershell
-.\native\natural_voice\build.ps1
+.\install.ps1
 ```
 
-If those prerequisites are not installed, the script can install the official
-Build Tools package through WinGet and then continue the build:
+For bridge-only development, run:
 
 ```powershell
 .\native\natural_voice\build.ps1 -InstallPrerequisites

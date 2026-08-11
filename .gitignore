@@ -17,6 +17,7 @@ dist/
 .coverage
 .pytest_cache/
 .ruff_cache/
+.cache/
 
 # Editors and operating systems
 .DS_Store
@@ -24,4 +25,3 @@ Thumbs.db
 .vscode/*.log
 selectspeak.log
 .runtime/
-native/natural_voice/packages/

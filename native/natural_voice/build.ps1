@@ -6,65 +6,21 @@ param(
 $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $runtimeRoot = Join-Path $projectRoot ".runtime"
-$toolsRoot = Join-Path $runtimeRoot "tools"
+$cacheRoot = Join-Path $projectRoot ".cache\natural_voice"
+$toolsRoot = Join-Path $cacheRoot "tools"
 $outputRoot = Join-Path $runtimeRoot "natural_voice"
-$packagesRoot = Join-Path $PSScriptRoot "packages"
+$packagesRoot = Join-Path $cacheRoot "packages"
 $buildRoot = Join-Path $PSScriptRoot "build"
 $nuget = Join-Path $toolsRoot "nuget.exe"
 $nugetSha256 = "0790BB7A0C898E44B70F2B65E3070B4DB8AF23897E38B8653D72D268B6E8BB11"
-
-function Find-CMake {
-    $pathCommand = Get-Command cmake -ErrorAction SilentlyContinue
-    if ($pathCommand -and $pathCommand.CommandType -eq "Application" -and
-        (Test-Path -LiteralPath $pathCommand.Source -PathType Leaf)) {
-        return [string]$pathCommand.Source
-    }
-
-    $vswhere = Join-Path ${env:ProgramFiles(x86)} `
-        "Microsoft Visual Studio\Installer\vswhere.exe"
-    if (Test-Path -LiteralPath $vswhere) {
-        $installation = & $vswhere -latest -products * `
-            -requires Microsoft.VisualStudio.Component.VC.CMake.Project `
-            -property installationPath
-        if ($installation) {
-            $bundled = Join-Path $installation `
-                "Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
-            if (Test-Path -LiteralPath $bundled) { return $bundled }
-        }
-    }
-    return $null
-}
-
-$cmake = Find-CMake | Select-Object -First 1
-if (-not $cmake -and $InstallPrerequisites) {
-    $winget = Get-Command winget -ErrorAction SilentlyContinue
-    if (-not $winget) {
-        throw "WinGet is required for automatic prerequisite installation."
-    }
-    Write-Host "Installing Visual Studio 2022 C++ Build Tools and CMake..."
-    & $winget.Source install --id Microsoft.VisualStudio.2022.BuildTools `
-        --exact --source winget --accept-package-agreements `
-        --accept-source-agreements --override `
-        "--wait --passive --norestart --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
-    if ($LASTEXITCODE) {
-        throw "Build Tools installation failed with exit code $LASTEXITCODE"
-    }
-    $cmake = Find-CMake | Select-Object -First 1
-}
-
-if (-not $cmake -or -not (Test-Path -LiteralPath $cmake -PathType Leaf)) {
-    throw @"
-CMake and the Visual C++ toolchain were not found.
-
-Run this script once with automatic prerequisite installation enabled:
-    .\native\natural_voice\build.ps1 -InstallPrerequisites
-
-This installs Visual Studio 2022 Build Tools with the C++ workload through WinGet.
-"@
-}
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "build_helpers.ps1")
+$cmake = Get-SelectSpeakCMake -InstallPrerequisites:$InstallPrerequisites
 
 New-Item -ItemType Directory -Force -Path $toolsRoot, $outputRoot | Out-Null
 if (-not (Test-Path -LiteralPath $nuget)) {
+    [Net.ServicePointManager]::SecurityProtocol = `
+        [Net.ServicePointManager]::SecurityProtocol -bor `
+        [Net.SecurityProtocolType]::Tls12
     Invoke-WebRequest -Uri "https://dist.nuget.org/win-x86-commandline/v6.12.1/nuget.exe" -OutFile $nuget
 }
 if ((Get-FileHash -Algorithm SHA256 -LiteralPath $nuget).Hash -ne $nugetSha256) {
@@ -75,7 +31,10 @@ if ((Get-FileHash -Algorithm SHA256 -LiteralPath $nuget).Hash -ne $nugetSha256) 
     -OutputDirectory $packagesRoot -NonInteractive
 if ($LASTEXITCODE) { throw "NuGet restore failed with exit code $LASTEXITCODE" }
 
-& $cmake -S $PSScriptRoot -B $buildRoot -A x64
+$speechSdkRoot = Join-Path $packagesRoot `
+    "Microsoft.CognitiveServices.Speech.1.41.1"
+& $cmake -S $PSScriptRoot -B $buildRoot -A x64 `
+    "-DSPEECHSDK_ROOT=$speechSdkRoot"
 if ($LASTEXITCODE) { throw "CMake configuration failed with exit code $LASTEXITCODE" }
 & $cmake --build $buildRoot --config Release
 if ($LASTEXITCODE) { throw "Native build failed with exit code $LASTEXITCODE" }

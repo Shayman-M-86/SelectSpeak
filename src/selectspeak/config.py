@@ -15,7 +15,7 @@ class AppConfig:
     speech_rate: int = 0
     speech_volume: int = 100
     structure_pause_seconds: float = 0.1
-    logging_enabled: bool = True
+    logging_enabled: bool = False
     log_file: str = "selectspeak.log"
     minimum_text_length: int = 3
     hotkey_debounce_seconds: float = 0.3

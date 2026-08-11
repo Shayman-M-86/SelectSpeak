@@ -7,53 +7,8 @@ $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $outputRoot = Join-Path $projectRoot ".runtime\input"
 $buildRoot = Join-Path $PSScriptRoot "build"
-
-function Find-CMake {
-    $pathCommand = Get-Command cmake -ErrorAction SilentlyContinue
-    if ($pathCommand -and $pathCommand.CommandType -eq "Application" -and
-        (Test-Path -LiteralPath $pathCommand.Source -PathType Leaf)) {
-        return [string]$pathCommand.Source
-    }
-
-    $vswhere = Join-Path ${env:ProgramFiles(x86)} `
-        "Microsoft Visual Studio\Installer\vswhere.exe"
-    if (Test-Path -LiteralPath $vswhere) {
-        $installation = & $vswhere -latest -products * `
-            -requires Microsoft.VisualStudio.Component.VC.CMake.Project `
-            -property installationPath
-        if ($installation) {
-            $bundled = Join-Path $installation `
-                "Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
-            if (Test-Path -LiteralPath $bundled) { return $bundled }
-        }
-    }
-    return $null
-}
-
-$cmake = Find-CMake | Select-Object -First 1
-if (-not $cmake -and $InstallPrerequisites) {
-    $winget = Get-Command winget -ErrorAction SilentlyContinue
-    if (-not $winget) {
-        throw "WinGet is required for automatic prerequisite installation."
-    }
-    & $winget.Source install --id Microsoft.VisualStudio.2022.BuildTools `
-        --exact --source winget --accept-package-agreements `
-        --accept-source-agreements --override `
-        "--wait --passive --norestart --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
-    if ($LASTEXITCODE) {
-        throw "Build Tools installation failed with exit code $LASTEXITCODE"
-    }
-    $cmake = Find-CMake | Select-Object -First 1
-}
-
-if (-not $cmake -or -not (Test-Path -LiteralPath $cmake -PathType Leaf)) {
-    throw @"
-CMake and the Visual C++ toolchain were not found.
-
-Run:
-    .\native\input\build.ps1 -InstallPrerequisites
-"@
-}
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "build_helpers.ps1")
+$cmake = Get-SelectSpeakCMake -InstallPrerequisites:$InstallPrerequisites
 
 New-Item -ItemType Directory -Force -Path $outputRoot | Out-Null
 & $cmake -S $PSScriptRoot -B $buildRoot -A x64
