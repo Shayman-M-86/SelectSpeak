@@ -2,13 +2,15 @@ import ctypes
 import logging
 import threading
 import time
+from dataclasses import replace
 
 from .capture import resolve_capture
 from .clipboard import ClipboardService
 from .config import DEFAULT_CONFIG, AppConfig
 from .hotkeys import HotkeyManager
 from .logging_setup import log_event, log_exception, text_preview
-from .speaker import create_speaker
+from .speaker import Speaker, create_speaker
+from .speech_debug import SpeechDebugEvent
 from .ui.player import PlayerWindow
 from .ui.tray import TrayController
 
@@ -39,6 +41,7 @@ class SelectSpeakApp:
         self._state_lock = threading.RLock()
         self._last_text = ""
         self._speech_generation: int | None = None
+        self._speech_speaker: Speaker | None = None
         self._is_speaking = False
         self._speech_started_at = 0.0
         self._speech_ended_at = 0.0
@@ -46,6 +49,18 @@ class SelectSpeakApp:
         self._is_paused = False
         self._clipboard_mode = False
         self._auto_hide = config.auto_hide
+        self._speech_debug_enabled = config.speech_debug_enabled
+        self._speech_backend = (
+            "supertonic"
+            if config.speech_backend.casefold() == "supertonic"
+            else "windows"
+        )
+        self._windows_speech_backend = (
+            config.speech_backend
+            if config.speech_backend.casefold() in {"auto", "natural", "sapi"}
+            else "auto"
+        )
+        self._backend_switching = False
         self._last_hotkey_time = 0.0
         self._shutting_down = False
         log_event(
@@ -68,13 +83,20 @@ class SelectSpeakApp:
             on_pause=self.pause,
             on_resume=self.resume,
             on_stop=self.stop,
+            on_toggle_speech_backend=self.toggle_speech_backend,
             on_toggle_clipboard=self.toggle_clipboard_mode,
             on_toggle_auto_hide=self.toggle_auto_hide,
+            on_toggle_debug=self.toggle_speech_debug,
             on_capture_hotkey=self.start_hotkey_capture,
             auto_hide=self._auto_hide,
+            speech_backend=self._speech_backend,
+            debug_enabled=self._speech_debug_enabled,
         )
         self._clipboard = ClipboardService()
-        self._speaker = create_speaker(self._config, self._on_word)
+        self._speaker = create_speaker(
+            self._config, self._on_word, self._on_speech_debug
+        )
+        self._speakers = {self._speech_backend: self._speaker}
         self._hotkeys = HotkeyManager(
             self._config.default_hotkey,
             self._on_hotkey,
@@ -103,9 +125,12 @@ class SelectSpeakApp:
 
     def stop(self) -> None:
         log_event(logger, logging.INFO, "playback.stop.requested")
-        self._speaker.stop()
+        with self._state_lock:
+            speaker = self._speech_speaker or self._speaker
+        speaker.stop()
         with self._state_lock:
             self._speech_generation = None
+            self._speech_speaker = None
             self._is_speaking = False
             self._speech_ended_at = time.monotonic()
             self._is_paused = False
@@ -132,7 +157,8 @@ class SelectSpeakApp:
                 return
             self._is_paused = True
             text = self._last_text
-        self._speaker.pause()
+            speaker = self._speech_speaker or self._speaker
+        speaker.pause()
         self._update_player(speaking=True, paused=True, text=text)
         log_event(logger, logging.INFO, "playback.paused")
 
@@ -150,7 +176,8 @@ class SelectSpeakApp:
                 return
             self._is_paused = False
             text = self._last_text
-        self._speaker.resume()
+            speaker = self._speech_speaker or self._speaker
+        speaker.resume()
         self._update_player(speaking=True, paused=False, text=text)
         log_event(logger, logging.INFO, "playback.resumed")
 
@@ -200,6 +227,70 @@ class SelectSpeakApp:
             enabled=enabled,
         )
 
+    def toggle_speech_debug(self) -> None:
+        with self._state_lock:
+            self._speech_debug_enabled = not self._speech_debug_enabled
+            enabled = self._speech_debug_enabled
+        self._player.set_debug_enabled(enabled)
+        log_event(logger, logging.INFO, "speech.debug.changed", enabled=enabled)
+
+    def toggle_speech_backend(self) -> None:
+        with self._state_lock:
+            if self._backend_switching:
+                return
+            self._backend_switching = True
+            current = self._speech_backend
+            target = "windows" if current == "supertonic" else "supertonic"
+        self.stop()
+        self._player.set_speech_backend(target, loading=True)
+        threading.Thread(
+            target=self._load_speech_backend,
+            args=(current, target),
+            daemon=True,
+            name=f"VoiceBackend-{target}",
+        ).start()
+
+    def _load_speech_backend(self, current: str, target: str) -> None:
+        try:
+            speaker = self._speakers.get(target)
+            if speaker is None:
+                backend = (
+                    "supertonic"
+                    if target == "supertonic"
+                    else self._windows_speech_backend
+                )
+                speaker = create_speaker(
+                    replace(self._config, speech_backend=backend),
+                    self._on_word,
+                    self._on_speech_debug,
+                )
+                self._speakers[target] = speaker
+            with self._state_lock:
+                if self._shutting_down:
+                    return
+                self._speaker = speaker
+                self._speech_backend = target
+            self._player.call_soon(
+                lambda: self._player.set_speech_backend(target)
+            )
+            log_event(
+                logger,
+                logging.INFO,
+                "speaker.backend.changed",
+                backend=target,
+            )
+        except Exception as error:
+            log_exception(logger, "speaker.backend.change_failed", backend=target)
+            self._player.call_soon(
+                lambda: self._player.set_speech_backend(current)
+            )
+            self._player.call_soon(
+                lambda message=str(error): self._player.show_backend_error(message)
+            )
+        finally:
+            with self._state_lock:
+                self._backend_switching = False
+
     def start_hotkey_capture(self) -> None:
         log_event(logger, logging.INFO, "hotkey.capture.requested")
         with self._state_lock:
@@ -228,7 +319,8 @@ class SelectSpeakApp:
             return
         log_event(logger, logging.INFO, "app.shutdown.started")
         self._shutting_down = True
-        self._speaker.stop()
+        for speaker in self._speakers.values():
+            speaker.stop()
         self._hotkeys.close()
         self._tray.stop()
         self._player.destroy()
@@ -329,11 +421,16 @@ class SelectSpeakApp:
 
     def _on_hotkey_activation(self) -> bool:
         with self._state_lock:
+            backend_switching = self._backend_switching
             clipboard_mode = self._clipboard_mode
             stop_clipboard_speech = should_stop_clipboard_speech_immediately(
                 speaking=self._is_speaking,
                 source=self._active_capture_source,
             )
+        if backend_switching:
+            log_event(logger, logging.INFO, "hotkey.ignored_backend_loading")
+            self._player.call_soon(self._player.show_backend_loading)
+            return True
         if stop_clipboard_speech:
             log_event(
                 logger,
@@ -355,6 +452,11 @@ class SelectSpeakApp:
         return False
 
     def _begin_speech(self, text: str, *, source: str = "replay") -> None:
+        with self._state_lock:
+            if self._backend_switching:
+                log_event(logger, logging.INFO, "speech.ignored_backend_loading")
+                self._player.call_soon(self._player.show_backend_loading)
+                return
         log_event(
             logger,
             logging.INFO,
@@ -362,8 +464,10 @@ class SelectSpeakApp:
             text_length=len(text),
             text_preview=text_preview(text),
         )
+        speaker = self._speaker
+        self._player.call_soon(self._player.reset_speech_debug)
         try:
-            generation = self._speaker.speak(text)
+            generation = speaker.speak(text)
         except RuntimeError:
             log_exception(logger, "speech.queue.failed")
             return
@@ -379,6 +483,7 @@ class SelectSpeakApp:
         with self._state_lock:
             self._last_text = text
             self._speech_generation = generation
+            self._speech_speaker = speaker
             self._is_speaking = True
             self._speech_started_at = time.monotonic()
             self._speech_ended_at = float("inf")
@@ -394,19 +499,21 @@ class SelectSpeakApp:
         )
         threading.Thread(
             target=self._wait_for_speech,
-            args=(generation, text),
+            args=(speaker, generation, text),
             daemon=True,
             name=f"SpeechWait-{generation}",
         ).start()
 
-    def _wait_for_speech(self, generation: int, text: str) -> None:
+    def _wait_for_speech(
+        self, speaker: Speaker, generation: int, text: str
+    ) -> None:
         log_event(
             logger,
             logging.DEBUG,
             "speech.wait.started",
             generation=generation,
         )
-        if not self._speaker.wait_until_done(generation):
+        if not speaker.wait_until_done(generation):
             log_event(
                 logger,
                 logging.INFO,
@@ -424,7 +531,16 @@ class SelectSpeakApp:
                     current_generation=self._speech_generation,
                 )
                 return
+            if self._speech_speaker is not speaker:
+                log_event(
+                    logger,
+                    logging.DEBUG,
+                    "speech.completion.stale_backend",
+                    generation=generation,
+                )
+                return
             self._speech_generation = None
+            self._speech_speaker = None
             self._is_speaking = False
             self._speech_ended_at = time.monotonic()
             self._is_paused = False
@@ -462,6 +578,11 @@ class SelectSpeakApp:
             length=length,
         )
         self._player.highlight_word(position, length)
+
+    def _on_speech_debug(self, event: SpeechDebugEvent) -> None:
+        self._player.call_soon(
+            lambda event=event: self._player.update_speech_debug(event)
+        )
 
     def _apply_hotkey(self, hotkey: str) -> None:
         log_event(logger, logging.INFO, "hotkey.rebind.requested", hotkey=hotkey)

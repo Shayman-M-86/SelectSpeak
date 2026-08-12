@@ -4,6 +4,7 @@ param(
     [switch]$RemoveFromStartup,
     [switch]$Launch,
     [switch]$SkipNaturalVoice,
+    [switch]$SkipSupertonicModel,
     [switch]$SkipChecks
 )
 
@@ -175,7 +176,13 @@ try {
 
     Invoke-Checked "Verifying application imports..." {
         & $venvPython -c `
-            "import PIL, pystray, win32api; import selectspeak; print('Imports OK')"
+            "import numpy, PIL, pystray, supertonic, win32api; import selectspeak; print('Imports OK')"
+    }
+    if (-not $SkipSupertonicModel) {
+        Invoke-Checked "Downloading and verifying the Supertonic voice model..." {
+            & $venvPython -c `
+                "from supertonic import TTS; model = TTS(auto_download=True); print(f'Supertonic ready: {model.model_dir}')"
+        }
     }
     if (-not $SkipChecks) {
         Invoke-Checked "Running tests..." {

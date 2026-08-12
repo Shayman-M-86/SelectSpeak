@@ -1,5 +1,4 @@
 import logging
-import re
 import threading
 import time
 from collections.abc import Callable
@@ -12,7 +11,8 @@ import win32com.client
 
 from .config import AppConfig
 from .logging_setup import log_event, log_exception, text_preview
-from .text_processing import strip_display_bullet_prefix
+from .speech_debug import SpeechDebugCallback
+from .text_processing import split_speech_segments
 
 logger = logging.getLogger(__name__)
 
@@ -32,17 +32,27 @@ class Speaker(Protocol):
 
 
 def create_speaker(
-    config: AppConfig, word_callback: WordCallback | None = None
+    config: AppConfig,
+    word_callback: WordCallback | None = None,
+    debug_callback: SpeechDebugCallback | None = None,
 ) -> Speaker:
-    """Prefer the direct Natural Voice bridge and retain SAPI as auto fallback."""
+    """Create the configured local speech backend."""
     backend = config.speech_backend.casefold()
-    if backend not in {"auto", "natural", "sapi"}:
+    if backend not in {"auto", "natural", "sapi", "supertonic"}:
         raise ValueError(f"Unknown speech backend: {config.speech_backend}")
+    if backend == "supertonic":
+        from .supertonic_voice import SupertonicSpeaker
+
+        speaker = SupertonicSpeaker(config, word_callback, debug_callback)
+        log_event(
+            logger, logging.INFO, "speaker.backend.selected", backend="supertonic"
+        )
+        return speaker
     if backend != "sapi":
         try:
             from .natural_voice import NaturalVoiceSpeaker
 
-            speaker = NaturalVoiceSpeaker(config, word_callback)
+            speaker = NaturalVoiceSpeaker(config, word_callback, debug_callback)
             log_event(
                 logger, logging.INFO, "speaker.backend.selected", backend="natural"
             )
@@ -322,15 +332,9 @@ class SapiSpeaker:
             text_preview=text_preview(request.text),
         )
         try:
-            segments = [
-                (match.start(), match.group())
-                for match in re.finditer(r"[^\n]+", request.text)
-            ]
-            for segment_index, (text_offset, segment) in enumerate(segments):
-                spoken_segment, display_prefix_length = strip_display_bullet_prefix(
-                    segment
-                )
-                voice.Speak(spoken_segment, async_flag)
+            segments = split_speech_segments(request.text)
+            for segment_index, segment in enumerate(segments):
+                voice.Speak(segment.text, async_flag)
                 log_event(
                     logger,
                     logging.DEBUG,
@@ -338,10 +342,9 @@ class SapiSpeaker:
                     generation=request.generation,
                     segment_index=segment_index,
                     segment_count=len(segments),
-                    segment_length=len(spoken_segment),
-                    display_prefix_length=display_prefix_length,
+                    segment_length=len(segment.text),
+                    display_offset=segment.offset,
                 )
-                time.sleep(0.1)
                 last_word_position = -1
                 while voice.Status.RunningState != 1:
                     if self._is_superseded(request.generation):
@@ -383,9 +386,7 @@ class SapiSpeaker:
                         length = voice.Status.InputWordLength
                         if length > 0 and position != last_word_position:
                             last_word_position = position
-                            absolute_position = (
-                                text_offset + display_prefix_length + position
-                            )
+                            absolute_position = segment.offset + position
                             log_event(
                                 logger,
                                 logging.DEBUG,
@@ -395,9 +396,16 @@ class SapiSpeaker:
                                 length=length,
                             )
                             self._word_callback(request.text, absolute_position, length)
-                    time.sleep(0.05)
+                    # Polling is required because the SAPI automation interface
+                    # does not expose its completion event through this adapter.
+                    # Ten milliseconds keeps stop/pause/highlights responsive
+                    # without imposing the former fixed 100 ms startup delay.
+                    time.sleep(0.01)
 
-                if segment_index < len(segments) - 1:
+                if (
+                    segment_index < len(segments) - 1
+                    and segment.pause_after
+                ):
                     if not self._wait_for_structure_pause(request.generation):
                         return
         except Exception:
@@ -469,7 +477,8 @@ class SapiSpeaker:
             if not self.paused:
                 remaining -= now - last_tick
             last_tick = now
-            time.sleep(0.05)
+            # This controls command responsiveness, not the intended pause.
+            time.sleep(min(0.01, max(0.0, remaining)))
 
         log_event(
             logger,

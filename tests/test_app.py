@@ -85,3 +85,54 @@ def test_delayed_clipboard_fallback_stops_speech_active_at_keypress() -> None:
     app._on_hotkey("", activated_at=10.5)
 
     assert speaker.stop_count == 1
+
+
+def test_hotkey_is_consumed_while_voice_backend_is_loading() -> None:
+    class Player:
+        loading_shown = False
+
+        @staticmethod
+        def call_soon(callback: Callable[[], None]) -> None:
+            callback()
+
+        @classmethod
+        def show_backend_loading(cls) -> None:
+            cls.loading_shown = True
+
+    app = SelectSpeakApp()
+    setattr(app, "_player", Player())
+    app._backend_switching = True
+
+    assert app._on_hotkey_activation()
+    assert Player.loading_shown
+
+
+def test_stop_targets_the_speaker_that_started_the_active_request() -> None:
+    class Speaker:
+        def __init__(self) -> None:
+            self.stop_count = 0
+
+        def stop(self) -> None:
+            self.stop_count += 1
+
+    class Player:
+        @staticmethod
+        def call_soon(callback: Callable[[], None]) -> None:
+            callback()
+
+        @staticmethod
+        def set_playback(**_values: object) -> None:
+            pass
+
+    app = SelectSpeakApp()
+    old_speaker = Speaker()
+    new_speaker = Speaker()
+    setattr(app, "_speaker", new_speaker)
+    setattr(app, "_speech_speaker", old_speaker)
+    setattr(app, "_player", Player())
+    app._is_speaking = True
+
+    app.stop()
+
+    assert old_speaker.stop_count == 1
+    assert new_speaker.stop_count == 0

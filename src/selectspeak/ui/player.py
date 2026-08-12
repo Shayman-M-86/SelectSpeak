@@ -6,6 +6,7 @@ from collections.abc import Callable
 from queue import Empty, SimpleQueue
 
 from ..logging_setup import log_event, log_exception
+from ..speech_debug import SpeechDebugEvent
 
 logger = logging.getLogger(__name__)
 
@@ -18,9 +19,11 @@ DIM_FOREGROUND = "#6c7086"
 GREEN = "#a6e3a1"
 RED = "#f38ba8"
 ACCENT = "#89b4fa"
-WINDOW_WIDTH = 440
+CHUNK_COLOURS = ("#89b4fa", "#a6e3a1", "#f9e2af", "#cba6f7")
+WINDOW_WIDTH = 680
 MIN_IDLE_HEIGHT = 92
 MIN_READING_HEIGHT = 250
+MIN_DEBUG_READING_HEIGHT = 300
 STATUS_WRAP_LENGTH = WINDOW_WIDTH - 22
 SPINNER = ("⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷")
 _GWL_EXSTYLE = -20
@@ -39,16 +42,25 @@ class PlayerWindow(tk.Tk):
         on_pause: Callable[[], None],
         on_resume: Callable[[], None],
         on_stop: Callable[[], None],
+        on_toggle_speech_backend: Callable[[], None],
         on_toggle_clipboard: Callable[[], None],
         on_toggle_auto_hide: Callable[[], None],
+        on_toggle_debug: Callable[[], None],
         on_capture_hotkey: Callable[[], None],
         auto_hide: bool = True,
+        speech_backend: str = "windows",
+        debug_enabled: bool = False,
     ) -> None:
         super().__init__()
         self._app_name = app_name
         self._hotkey = hotkey
         self._clipboard_mode = False
         self._auto_hide = auto_hide
+        self._speech_backend = speech_backend
+        self._debug_enabled = debug_enabled
+        self._debug_chunks: dict[int, SpeechDebugEvent] = {}
+        self._debug_delays: list[SpeechDebugEvent] = []
+        self._active_debug_chunk: SpeechDebugEvent | None = None
         self._on_play = on_play
         self._on_read = on_read
         self._on_pause = on_pause
@@ -85,6 +97,8 @@ class PlayerWindow(tk.Tk):
             self._content,
             on_toggle_clipboard=on_toggle_clipboard,
             on_toggle_auto_hide=on_toggle_auto_hide,
+            on_toggle_debug=on_toggle_debug,
+            on_toggle_speech_backend=on_toggle_speech_backend,
             on_capture_hotkey=on_capture_hotkey,
         )
         self.update_idletasks()
@@ -208,6 +222,81 @@ class PlayerWindow(tk.Tk):
             "player.auto_hide.updated",
             enabled=enabled,
         )
+
+    def set_debug_enabled(self, enabled: bool) -> None:
+        self._debug_enabled = enabled
+        self._debug_button.config(
+            text=f"Debug: {'On' if enabled else 'Off'}",
+            fg=ACCENT if enabled else DIM_FOREGROUND,
+            font=("Segoe UI", 7, "bold" if enabled else "normal"),
+        )
+        if enabled:
+            self._debug_frame.pack(fill="x", pady=(0, 5), before=self._control_row)
+            self._render_debug_metrics()
+            self._apply_chunk_tags()
+        else:
+            self._debug_frame.pack_forget()
+            self._clear_chunk_tags()
+        minimum = (
+            MIN_DEBUG_READING_HEIGHT
+            if enabled and self._reader_frame.winfo_ismapped()
+            else MIN_READING_HEIGHT
+            if self._reader_frame.winfo_ismapped()
+            else MIN_IDLE_HEIGHT
+        )
+        self._resize(minimum)
+        log_event(logger, logging.INFO, "player.speech_debug.updated", enabled=enabled)
+
+    def update_speech_debug(self, event: SpeechDebugEvent) -> None:
+        if event.chunk_index is not None:
+            self._debug_chunks[event.chunk_index] = event
+        if event.kind == "chunk_playing":
+            self._active_debug_chunk = event
+        if event.kind == "underrun":
+            self._debug_delays.append(event)
+        if not self._debug_enabled:
+            return
+        self._apply_chunk_tags(
+            event if event.kind == "chunk_playing" else None
+        )
+        self._render_debug_metrics(
+            event
+            if event.kind == "underrun"
+            else self._active_debug_chunk or event
+        )
+
+    def reset_speech_debug(self) -> None:
+        self._debug_chunks.clear()
+        self._debug_delays.clear()
+        self._active_debug_chunk = None
+        self._clear_chunk_tags()
+        if self._debug_enabled:
+            self._render_debug_metrics()
+
+    def set_speech_backend(self, backend: str, *, loading: bool = False) -> None:
+        self._speech_backend = backend
+        label = "Supertonic" if backend == "supertonic" else "Windows"
+        self._backend_button.config(
+            text="Voice: Loading…" if loading else f"Voice: {label}",
+            state="disabled" if loading else "normal",
+            fg=ACCENT if backend == "supertonic" else DIM_FOREGROUND,
+        )
+        self._resize(MIN_IDLE_HEIGHT)
+        log_event(
+            logger,
+            logging.INFO,
+            "player.speech_backend.updated",
+            backend=backend,
+            loading=loading,
+        )
+
+    def show_backend_error(self, message: str) -> None:
+        self._status.config(text=f"Voice engine unavailable: {message}", fg=RED)
+        self.show()
+
+    def show_backend_loading(self) -> None:
+        self._status.config(text="Voice engine is still loading…", fg=ACCENT)
+        self.show()
 
     def show_capture_started(self) -> None:
         log_event(logger, logging.INFO, "player.hotkey_capture.started")
@@ -409,6 +498,18 @@ class PlayerWindow(tk.Tk):
             foreground="#ffffff",
         )
         self._reader.pack(fill="both", expand=True)
+        self._debug_frame = tk.Frame(parent, bg=READER_BACKGROUND, padx=6, pady=4)
+        self._debug_metrics = tk.Label(
+            self._debug_frame,
+            text="Speech diagnostics waiting for chunks…",
+            height=2,
+            bg=READER_BACKGROUND,
+            fg=DIM_FOREGROUND,
+            font=("Consolas", 7),
+            justify="left",
+            anchor="w",
+        )
+        self._debug_metrics.pack(fill="x")
 
     def _build_controls(
         self,
@@ -416,10 +517,14 @@ class PlayerWindow(tk.Tk):
         *,
         on_toggle_clipboard: Callable[[], None],
         on_toggle_auto_hide: Callable[[], None],
+        on_toggle_debug: Callable[[], None],
+        on_toggle_speech_backend: Callable[[], None],
         on_capture_hotkey: Callable[[], None],
     ) -> None:
         self._control_row = tk.Frame(parent, bg=BACKGROUND)
-        self._control_row.pack(fill="x")
+        # Reserve the controls at the bottom so an expanding reader or debug
+        # panel can never push playback controls outside the client area.
+        self._control_row.pack(side="bottom", fill="x")
 
         read_wrapper = tk.Frame(self._control_row, bg=BUTTON_BORDER, padx=1, pady=1)
         read_wrapper.pack(side="left", padx=(0, 6))
@@ -450,6 +555,18 @@ class PlayerWindow(tk.Tk):
             self._control_row, "Mode: Auto", on_toggle_clipboard
         )
         self._clipboard_button.pack(side="right", padx=(0, 4))
+        backend_label = (
+            "Supertonic" if self._speech_backend == "supertonic" else "Windows"
+        )
+        self._backend_button = self._small_button(
+            self._control_row,
+            f"Voice: {backend_label}",
+            on_toggle_speech_backend,
+        )
+        self._backend_button.config(
+            fg=ACCENT if self._speech_backend == "supertonic" else DIM_FOREGROUND
+        )
+        self._backend_button.pack(side="right", padx=(0, 4))
         self._auto_hide_button = self._small_button(
             self._control_row,
             f"Auto hide: {'On' if self._auto_hide else 'Off'}",
@@ -460,6 +577,16 @@ class PlayerWindow(tk.Tk):
             font=("Segoe UI", 7, "bold" if self._auto_hide else "normal"),
         )
         self._auto_hide_button.pack(side="right", padx=(0, 4))
+        self._debug_button = self._small_button(
+            self._control_row,
+            f"Debug: {'On' if self._debug_enabled else 'Off'}",
+            on_toggle_debug,
+        )
+        self._debug_button.config(
+            fg=ACCENT if self._debug_enabled else DIM_FOREGROUND,
+            font=("Segoe UI", 7, "bold" if self._debug_enabled else "normal"),
+        )
+        self._debug_button.pack(side="right", padx=(0, 4))
 
     def _show_reader(self, text: str) -> None:
         log_event(
@@ -497,7 +624,99 @@ class PlayerWindow(tk.Tk):
                 pady=(3, 5),
                 before=self._control_row,
             )
-            self._resize(MIN_READING_HEIGHT)
+        if self._debug_enabled and not self._debug_frame.winfo_ismapped():
+            self._debug_frame.pack(fill="x", pady=(0, 5), before=self._control_row)
+        # Measure only after every speaking-mode panel has been inserted.
+        self._resize(
+            MIN_DEBUG_READING_HEIGHT
+            if self._debug_enabled
+            else MIN_READING_HEIGHT
+        )
+        self._control_row.lift()
+
+    def _clear_chunk_tags(self) -> None:
+        self._reader.config(state="normal")
+        self._reader.tag_remove("debug_active_chunk", "1.0", "end")
+        for index in self._debug_chunks:
+            self._reader.tag_remove(f"debug_chunk_{index}", "1.0", "end")
+        self._reader.config(state="disabled")
+
+    def _apply_chunk_tags(self, active: SpeechDebugEvent | None = None) -> None:
+        if not self._debug_enabled or not self._reader_text:
+            return
+        self._reader.config(state="normal")
+        self._reader.tag_remove("debug_active_chunk", "1.0", "end")
+        for index, event in self._debug_chunks.items():
+            tag = f"debug_chunk_{index}"
+            self._reader.tag_config(
+                tag,
+                underline=True,
+                foreground=CHUNK_COLOURS[index % len(CHUNK_COLOURS)],
+            )
+            self._reader.tag_add(
+                tag,
+                f"1.0+{event.text_offset}c",
+                f"1.0+{event.text_offset + event.text_length}c",
+            )
+        self._reader.tag_config(
+            "debug_active_chunk", background="#3b4261", foreground="#ffffff"
+        )
+        if active and active.chunk_index is not None:
+            self._reader.tag_add(
+                "debug_active_chunk",
+                f"1.0+{active.text_offset}c",
+                f"1.0+{active.text_offset + active.text_length}c",
+            )
+            self._reader.tag_raise("current")
+            self._reader.see(f"1.0+{active.text_offset}c")
+        self._reader.config(state="disabled")
+
+    def _render_debug_metrics(self, event: SpeechDebugEvent | None = None) -> None:
+        old_required_height = self._debug_frame.winfo_reqheight()
+        if event is None and self._debug_chunks:
+            event = self._debug_chunks[max(self._debug_chunks)]
+        if event is None:
+            text = "Speech diagnostics waiting for chunks…"
+        elif event.kind == "underrun":
+            text = (
+                f"⚠ UNDERRUN  delay={event.delay_ms or 0}ms  "
+                f"runway={event.runway_ms or 0}ms"
+            )
+        else:
+            chunk = (event.chunk_index or 0) + 1
+            state = "PLAY" if event.kind == "chunk_playing" else "READY"
+            prediction_error = (
+                (event.actual_synthesis_ms or 0)
+                - (event.predicted_synthesis_ms or 0)
+            )
+            ready_ahead = sum(
+                item.kind == "chunk_ready"
+                and item.chunk_index is not None
+                and item.chunk_index > (event.chunk_index or 0)
+                for item in self._debug_chunks.values()
+            )
+            text = (
+                f"{state} chunk={chunk}  chars={event.text_length}"
+                f"/{event.target_characters or 0}  boundary={event.boundary}\n"
+                f"synth est={event.predicted_synthesis_ms or 0}ms  "
+                f"actual={event.actual_synthesis_ms or 0}ms  "
+                f"error={prediction_error:+d}ms  "
+                f"audio={event.audio_ms or 0}ms  runway={event.runway_ms or 0}ms  "
+                f"queue={event.queue_delay_ms or 0}ms  "
+                f"ready={ready_ahead}  underruns={len(self._debug_delays)}"
+            )
+        self._debug_metrics.config(
+            text=text,
+            fg=RED if event and event.kind == "underrun" else DIM_FOREGROUND,
+        )
+        self.update_idletasks()
+        if (
+            self._debug_enabled
+            and self._reader_frame.winfo_ismapped()
+            and self._debug_frame.winfo_reqheight() != old_required_height
+        ):
+            self._resize(MIN_DEBUG_READING_HEIGHT)
+            self._control_row.lift()
 
     def _hide_reader(self, hint: str) -> None:
         log_event(
@@ -508,6 +727,7 @@ class PlayerWindow(tk.Tk):
         )
         self._reader_generation += 1
         self._reader_frame.pack_forget()
+        self._debug_frame.pack_forget()
         self._status.config(text=hint, fg=DIM_FOREGROUND)
         self._status.pack(fill="x", pady=(3, 5), before=self._control_row)
         self._resize(MIN_IDLE_HEIGHT)

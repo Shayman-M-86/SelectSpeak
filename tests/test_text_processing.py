@@ -1,4 +1,9 @@
-from selectspeak.text_processing import prepare_for_speech, strip_display_bullet_prefix
+from selectspeak.text_processing import (
+    AdaptiveSpeechChunker,
+    prepare_for_speech,
+    split_speech_segments,
+    strip_display_bullet_prefix,
+)
 
 
 def test_prepare_for_speech_turns_each_copied_line_into_a_pause() -> None:
@@ -168,3 +173,125 @@ def test_strip_display_bullet_prefix_preserves_highlight_offset() -> None:
         2,
     )
     assert strip_display_bullet_prefix("Validation.") == ("Validation.", 0)
+
+
+def test_prepare_for_speech_removes_rich_clipboard_object_markers() -> None:
+    assert prepare_for_speech("First point.\n\ufffc\nSecond point.") == (
+        "First point.\nSecond point."
+    )
+
+
+def test_speech_segments_split_sentences_and_preserve_display_offsets() -> None:
+    text = "First sentence. Second sentence!\n• Third point. Fourth sentence?"
+
+    segments = split_speech_segments(text)
+
+    assert [segment.text for segment in segments] == [
+        "First sentence.",
+        "Second sentence!",
+        "Third point.",
+        "Fourth sentence?",
+    ]
+    displayed_segments = [
+        text[segment.offset : segment.offset + len(segment.text)]
+        for segment in segments
+    ]
+    assert displayed_segments == [
+        "First sentence.",
+        "Second sentence!",
+        "Third point.",
+        "Fourth sentence?",
+    ]
+
+
+def test_speech_segments_do_not_split_common_abbreviations() -> None:
+    segments = split_speech_segments("Dr. Smith tested it. It worked.")
+
+    assert [segment.text for segment in segments] == [
+        "Dr. Smith tested it.",
+        "It worked.",
+    ]
+
+
+def test_speech_segments_bound_long_run_on_text() -> None:
+    text = "word " * 100
+
+    segments = split_speech_segments(text, max_characters=40)
+
+    assert len(segments) > 1
+    assert all(len(segment.text) <= 40 for segment in segments)
+    assert " ".join(segment.text for segment in segments) == text.strip()
+    assert all(not segment.pause_after for segment in segments[:-1])
+    assert segments[-1].pause_after
+
+
+def test_adaptive_chunker_takes_a_short_first_sentence_immediately() -> None:
+    chunker = AdaptiveSpeechChunker(
+        "Hi there. This next sentence is deliberately much longer than the first."
+    )
+
+    first = chunker.next_chunk(target_characters=100)
+    second = chunker.next_chunk(target_characters=300)
+
+    assert first is not None and first.text == "Hi there."
+    assert second is not None
+    assert second.text.startswith("This next sentence")
+
+
+def test_adaptive_chunker_uses_comma_only_under_pressure() -> None:
+    prefix = "Ready. "
+    text = prefix + (
+        "This next sentence is extremely long, containing several clauses, "
+        "multiple explanations, and enough text to require an early split"
+    )
+    pressured_chunker = AdaptiveSpeechChunker(text)
+    healthy_chunker = AdaptiveSpeechChunker(text)
+    pressured_chunker.next_chunk(target_characters=100)
+    healthy_chunker.next_chunk(target_characters=100)
+
+    pressured = pressured_chunker.next_chunk(
+        target_characters=45,
+        hard_max_characters=90,
+        allow_colon=True,
+        allow_comma=True,
+    )
+    healthy = healthy_chunker.next_chunk(
+        target_characters=45,
+        hard_max_characters=90,
+        allow_colon=False,
+        allow_comma=False,
+    )
+
+    assert pressured is not None and pressured.text.endswith(",")
+    assert healthy is not None and not healthy.text.endswith(",")
+
+
+def test_adaptive_chunker_groups_later_complete_sentences() -> None:
+    chunker = AdaptiveSpeechChunker(
+        "First sentence. Second sentence. Third sentence. Fourth sentence."
+    )
+
+    first = chunker.next_chunk(target_characters=100)
+    later = chunker.next_chunk(target_characters=25)
+
+    assert first is not None and first.text == "First sentence."
+    assert later is not None
+    assert later.text == "Second sentence. Third sentence."
+
+
+def test_adaptive_chunker_caps_later_chunks_at_two_sentences() -> None:
+    chunker = AdaptiveSpeechChunker(
+        "Opening sentence with enough words. Second sentence. Third sentence. "
+        "Fourth sentence. Fifth sentence."
+    )
+
+    first = chunker.next_chunk(target_characters=100, max_sentences=2)
+    second = chunker.next_chunk(target_characters=500, max_sentences=2)
+    third = chunker.next_chunk(target_characters=500, max_sentences=2)
+
+    assert first is not None
+    assert first.text == "Opening sentence with enough words."
+    assert second is not None
+    assert second.text == "Second sentence. Third sentence."
+    assert third is not None
+    assert third.text == "Fourth sentence. Fifth sentence."

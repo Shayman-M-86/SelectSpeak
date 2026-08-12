@@ -23,8 +23,9 @@ Open PowerShell in the project folder and run:
 
 The installer provisions `uv`, a managed Python 3.13 installation, all Python
 packages, Visual C++ Build Tools and CMake when needed, and both native
-bridges. It then verifies imports and runs the test, lint, and type-check suites.
-It is safe to run again when updating an existing installation.
+bridges. It also downloads the local Supertonic ONNX voice model, then verifies
+imports and runs the test, lint, and type-check suites. It is safe to run again
+when updating an existing installation.
 
 To install, start SelectSpeak, and add it to Windows startup in one command:
 
@@ -33,8 +34,9 @@ To install, start SelectSpeak, and add it to Windows startup in one command:
 ```
 
 Use `-SkipNaturalVoice` only if you want the SAPI fallback without the optional
-direct Natural Voice bridge. Use `-SkipChecks` to omit developer checks during
-installation.
+direct Natural Voice bridge. Use `-SkipSupertonicModel` to defer the model
+download until Supertonic is first selected. Use `-SkipChecks` to omit developer
+checks during installation.
 
 The input bridge tries UI Automation first, then uses `SendInput`, clipboard
 change notifications, and an eager multi-format clipboard snapshot as its
@@ -52,8 +54,14 @@ Settings to use it; otherwise SelectSpeak automatically falls back to SAPI.
 
 `AppConfig.speech_backend` defaults to `"auto"`: SelectSpeak uses the bridge
 when it is present and usable, otherwise it retains the current SAPI backend.
-Set it to `"natural"` to require the bridge or `"sapi"` to disable it. You may
-also set `SELECTSPEAK_NATURAL_VOICE_DLL` to an alternate DLL path.
+Set it to `"natural"` to require the bridge, `"sapi"` to disable it, or
+`"supertonic"` to start with the neural engine selected. You may also set
+`SELECTSPEAK_NATURAL_VOICE_DLL` to an alternate DLL path.
+
+Supertonic defaults to its `F4` voice at 8 inference steps. The voice,
+language, quality steps, and speed are configurable through the
+`supertonic_voice`, `supertonic_language`, `supertonic_steps`, and
+`supertonic_speed` fields in `AppConfig`.
 
 For a compatible voice package extracted to a local folder, set
 `AppConfig.natural_voice_path` to that folder. This bypasses installed-package
@@ -92,8 +100,15 @@ run:
   automatically falls back to the existing clipboard when nothing is selected.
 - Click **Mode: Auto** to switch to **Mode: Clipboard** when you want to force
   clipboard reading.
+- Click **Voice: Windows** to switch to the local Supertonic neural voice;
+  click **Voice: Supertonic** to return to Windows Natural Voice/SAPI. The first
+  switch can take a moment while the ONNX model loads into memory.
 - Click **Auto hide: On** to keep the player open after speech finishes, or
   click it again to restore automatic hiding. Auto hide is enabled by default.
+- Click **Debug: Off** to show adaptive chunk boundaries and live speech
+  diagnostics. The active chunk is highlighted when its PCM reaches the
+  playhead; the panel reports target/actual size, estimated and actual synthesis
+  time, generated audio duration, playback runway, queue delay, and underruns.
 - Click **Read** to perform the same capture and reading action as the global
   hotkey. The player remains visible without taking foreground focus from the
   source application.
@@ -106,9 +121,21 @@ their labels, shortens long filesystem paths to their filenames, separates
 bulleted and numbered points with sentence pauses, strengthens semicolon
 pauses, replaces underscores with spaces, strips Markdown heading markers,
 turns copied line breaks into sentence pauses, preserves paragraph boundaries,
-and collapses accidental whitespace. Structural lines are spoken separately
-with a 700 millisecond silent gap, rather than relying on voice-specific
-punctuation timing. The expanded reader preserves those interpreted lines
+and collapses accidental whitespace. A shared backend-independent segmenter
+then splits every engine's input at structural lines and sentence boundaries,
+with a 100-character safety limit for unusually long run-on sentences.
+Natural Voice and Supertonic feed one shared persistent PCM player for the
+entire request, so safety-limit chunks do not reopen the audio device or gain an
+artificial pause. Real sentence and structural boundaries receive the shared
+100 millisecond controlled pause. Both PCM backends use the same adaptive speech
+pipeline: the first complete sentence is generated immediately, then later
+chunks grow or shrink according to remaining playback runway and observed
+generation speed, but never combines more than two complete sentences in one
+chunk. The controller prefers sentence endings, permits semicolons and colons
+under pressure, and uses commas only when the buffer is at risk.
+Supertonic additionally trims model-generated edge silence. Lookahead is capped
+at 12 seconds of ready audio to keep cancellation responsive and memory bounded.
+The expanded reader preserves those interpreted lines
 visually, restores detected bullet markers with hanging indentation, and
 highlights the active word within the structured preview. Visual bullet markers
 are removed before each segment is sent to the speech engine. When Windows
@@ -118,7 +145,9 @@ inferred from their heading and sentence structure.
   current session.
 - Use the tray icon to show the player or quit.
 
-The rebound hotkey and clipboard mode are not persisted between launches.
+The rebound hotkey, clipboard mode, and UI voice selection are not persisted
+between launches. Set `AppConfig.speech_backend` to change the startup voice.
+Set `AppConfig.speech_debug_enabled=True` to start with speech diagnostics open.
 After updating the application, choose **Quit** from the tray icon before
 starting it again; closing the player window only hides the existing process.
 
@@ -166,4 +195,6 @@ src/selectspeak/ui/         Player window and system tray
 native/natural_voice/       Small C ABI bridge to local Natural Voices
 native/input/               Native hotkey and selected-text capture bridge
 native/build_helpers.ps1    Shared C++ toolchain discovery and installation
+src/selectspeak/supertonic_voice.py
+                            Local Supertonic synthesis/playback adapter
 ```
