@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from .config import AppConfig
+from .config import LoggingConfig
 
 _SESSION_ID = uuid4().hex
 
@@ -34,7 +34,7 @@ class JsonLineFormatter(logging.Formatter):
         return json.dumps(payload, ensure_ascii=False, default=str)
 
 
-def configure_logging(config: AppConfig) -> Path | None:
+def configure_logging(config: LoggingConfig) -> Path | None:
     """Configure diagnostics from the application configuration."""
     root_logger = logging.getLogger()
     root_logger.handlers.clear()

@@ -8,14 +8,15 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from queue import Empty, Queue
 from typing import Any, Protocol
 
-from .config import AppConfig
-from .logging_setup import log_event, log_exception
-from .pcm_player import WaveOutPlayer
-from .speech_debug import SpeechDebugCallback, SpeechDebugEvent
-from .speech_pipeline import AdaptiveSpeechPipeline, GenerationStatistics
+from ...config import SpeechConfig
+from ...logging_setup import log_event, log_exception, text_preview
+from ...runtime_paths import repository_runtime_path
+from ..debug import SpeechDebugCallback, SpeechDebugEvent
+from ..pipeline import AdaptiveSpeechPipeline, GenerationStatistics
+from ..playback import PlaybackController, SpeechRequest
+from ..waveout import WaveOutPlayer
 
 SAMPLE_RATE = 24_000
 
@@ -66,10 +67,9 @@ def find_natural_voice_dll(configured_path: str = "") -> Path:
         configured_path,
         os.environ.get("SELECTSPEAK_NATURAL_VOICE_DLL", ""),
         str(
-            Path(__file__).resolve().parents[2]
-            / ".runtime"
-            / "natural_voice"
-            / "selectspeak_natural_voice.dll"
+            repository_runtime_path(
+                "natural_voice", "selectspeak_natural_voice.dll"
+            )
         ),
         str(Path(__file__).with_name("selectspeak_natural_voice.dll")),
     ]
@@ -87,7 +87,7 @@ class NaturalVoiceEngine:
 
     def __init__(
         self,
-        config: AppConfig,
+        config: SpeechConfig,
         audio_callback: AudioCallback,
         boundary_callback: BoundaryCallback,
     ) -> None:
@@ -244,10 +244,7 @@ class NaturalVoiceEngine:
         ]
 
 
-@dataclass(frozen=True, slots=True)
-class _SpeechRequest:
-    generation: int
-    text: str
+_SpeechRequest = SpeechRequest
 
 
 class _Engine(Protocol):
@@ -261,20 +258,14 @@ class NaturalVoiceSpeaker:
 
     def __init__(
         self,
-        config: AppConfig,
+        config: SpeechConfig,
         word_callback: Callable[[str, int, int], None] | None,
         debug_callback: SpeechDebugCallback | None = None,
     ) -> None:
         self._config = config
         self._word_callback = word_callback
         self._debug_callback = debug_callback
-        self._condition = threading.Condition()
-        self._queue: Queue[_SpeechRequest] = Queue()
-        self._generation = 0
-        self._active_generation: int | None = None
-        self._completed_generation = 0
-        self._paused = False
-        self._failed = False
+        self._playback = PlaybackController()
         self._request_text = ""
         self._segment_text_offset = 0
         self._segment_audio_base = 0
@@ -294,75 +285,45 @@ class NaturalVoiceSpeaker:
 
     @property
     def active(self) -> bool:
-        with self._condition:
-            return self._active_generation is not None
+        return self._playback.active
 
     @property
     def paused(self) -> bool:
-        with self._condition:
-            return self._paused
+        return self._playback.paused
 
     def speak(self, text: str) -> int | None:
         if len(text) < self._config.minimum_text_length:
             return None
-        with self._condition:
-            if self._failed:
-                raise NaturalVoiceError("The Natural Voice worker has failed")
-            self._generation += 1
-            request = _SpeechRequest(self._generation, text)
-            self._drain_queue()
-            active = self._active_generation is not None
-            self._queue.put(request)
-            self._condition.notify_all()
+        try:
+            request, active = self._playback.submit(text)
+        except RuntimeError as error:
+            raise NaturalVoiceError("The Natural Voice worker has failed") from error
         if active:
             self._player.stop()
             self._engine.stop()
         return request.generation
 
     def stop(self) -> None:
-        with self._condition:
-            self._generation += 1
-            self._drain_queue()
-            active = self._active_generation is not None
-            self._paused = False
-            self._condition.notify_all()
+        _generation, active = self._playback.cancel()
         if active:
             self._player.stop()
             self._engine.stop()
 
     def pause(self) -> None:
-        with self._condition:
-            if self._active_generation is None or self._paused:
-                return
-            self._paused = True
-        self._player.pause()
+        if self._playback.pause_now():
+            self._player.pause()
 
     def resume(self) -> None:
-        with self._condition:
-            if not self._paused:
-                return
-            self._paused = False
-        self._player.resume()
+        if self._playback.resume_now():
+            self._player.resume()
 
     def wait_until_done(self, generation: int) -> bool:
-        with self._condition:
-            self._condition.wait_for(
-                lambda: (
-                    self._failed
-                    or self._generation != generation
-                    or self._completed_generation >= generation
-                )
-            )
-            return (
-                not self._failed
-                and self._generation == generation
-                and self._completed_generation >= generation
-            )
+        return self._playback.wait_until_done(generation)
 
     def _run(self) -> None:
         while True:
-            request = self._queue.get()
-            if self._is_superseded(request.generation):
+            request = self._playback.next_request()
+            if not self._playback.is_current(request.generation):
                 continue
             try:
                 self._speak_request(request)
@@ -374,17 +335,12 @@ class NaturalVoiceSpeaker:
                     "natural_voice.request.failed",
                     generation=request.generation,
                 )
-                with self._condition:
-                    self._failed = True
-                    self._active_generation = None
-                    self._paused = False
-                    self._condition.notify_all()
+                self._playback.fail(request.generation)
                 return
 
     def _speak_request(self, request: _SpeechRequest) -> None:
-        with self._condition:
-            self._active_generation = request.generation
-            self._paused = False
+        if not self._playback.begin(request.generation):
+            return
         player_started = False
         try:
             pipeline = AdaptiveSpeechPipeline(
@@ -398,7 +354,7 @@ class NaturalVoiceSpeaker:
             player_started = True
             index = 0
             while decision is not None:
-                if self._is_superseded(request.generation):
+                if not self._playback.is_current(request.generation):
                     return
                 segment = decision.segment
                 self._segment_text_offset = segment.offset
@@ -461,18 +417,13 @@ class NaturalVoiceSpeaker:
                         allow_colon=decision.allow_colon,
                         allow_comma=decision.allow_comma,
                         observations=pipeline.statistics.observations,
+                        text_preview=text_preview(decision.segment.text),
                     )
                 index += 1
         finally:
             if player_started:
                 self._player.finish()
-            with self._condition:
-                if self._active_generation == request.generation:
-                    self._active_generation = None
-                    self._paused = False
-                if self._generation == request.generation:
-                    self._completed_generation = request.generation
-                self._condition.notify_all()
+            self._playback.complete(request.generation)
 
     def _on_engine_audio(self, data: bytes) -> None:
         self._player.feed(data)
@@ -492,15 +443,7 @@ class NaturalVoiceSpeaker:
             self._word_callback(self._request_text, position, length)
 
     def _is_superseded(self, generation: int) -> bool:
-        with self._condition:
-            return self._generation != generation
-
-    def _drain_queue(self) -> None:
-        while True:
-            try:
-                self._queue.get_nowait()
-            except Empty:
-                return
+        return not self._playback.is_current(generation)
 
 
 def _boundary_name(pause_after: bool) -> str:

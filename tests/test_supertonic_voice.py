@@ -1,22 +1,21 @@
-import threading
 from typing import Any
 
 import numpy as np
 import pytest
 
 from selectspeak.config import AppConfig
-from selectspeak.speech_pipeline import (
-    MIN_CHUNK_CHARACTERS,
-    GenerationStatistics,
-)
-from selectspeak.supertonic_voice import (
+from selectspeak.speech.backends.supertonic import (
     SupertonicSpeaker,
     _PreparedSegment,
-    _SpeechRequest,
     estimate_word_boundaries,
     normalize_edge_silence,
 )
-from selectspeak.text_processing import SpeechSegment
+from selectspeak.speech.pipeline import (
+    MIN_CHUNK_CHARACTERS,
+    GenerationStatistics,
+)
+from selectspeak.speech.playback import PlaybackController
+from selectspeak.speech.segments import SpeechSegment
 
 
 def test_estimated_boundaries_follow_text_positions_and_audio_duration() -> None:
@@ -115,12 +114,9 @@ def test_supertonic_uses_one_stream_and_only_pauses_at_sentence_boundaries() -> 
         "also needs enough words to be divided at a technical chunk boundary."
     )
     speaker = object.__new__(SupertonicSpeaker)
-    speaker._config = AppConfig(structure_pause_seconds=0.1)
-    speaker._condition = threading.Condition()
-    speaker._generation = 1
-    speaker._active_generation = None
-    speaker._completed_generation = 0
-    speaker._paused = False
+    speaker._config = AppConfig(structure_pause_seconds=0.1).speech
+    speaker._playback = PlaybackController()
+    request, _active = speaker._playback.submit(text)
     speaker._word_callback = None
     speaker._request_text = ""
     speaker._generation_statistics = GenerationStatistics()
@@ -144,7 +140,7 @@ def test_supertonic_uses_one_stream_and_only_pauses_at_sentence_boundaries() -> 
 
     speaker._synthesize_segment = synthesize  # type: ignore[method-assign]
 
-    speaker._speak_request(_SpeechRequest(1, text))
+    speaker._speak_request(request)
 
     assert len(synthesis_events) > 2
     assert [event for event, _ in player.events].count("start") == 1

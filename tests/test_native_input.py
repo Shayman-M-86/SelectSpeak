@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from selectspeak.native_input import NativeInputError, find_native_input_dll
+from selectspeak.input.native import NativeInputError, find_native_input_dll
 
 
 def test_find_native_input_dll_accepts_an_explicit_path(tmp_path: Path) -> None:

@@ -1,6 +1,6 @@
 import logging
 
-from .logging_setup import log_event
+from ..logging_setup import log_event
 
 logger = logging.getLogger(__name__)
 

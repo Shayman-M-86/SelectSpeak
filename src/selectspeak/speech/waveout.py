@@ -8,8 +8,8 @@ from collections import deque
 from collections.abc import Callable
 from typing import Any
 
-from .logging_setup import log_event
-from .speech_debug import SpeechDebugCallback, SpeechDebugEvent, with_queue_delay
+from ..logging_setup import log_event
+from .debug import SpeechDebugCallback, SpeechDebugEvent, with_queue_delay
 
 BYTES_PER_SAMPLE = 2
 MAX_QUEUED_BUFFERS = 4

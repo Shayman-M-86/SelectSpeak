@@ -6,26 +6,29 @@ from collections.abc import Callable
 from queue import Empty, SimpleQueue
 
 from ..logging_setup import log_event, log_exception
-from ..speech_debug import SpeechDebugEvent
+from ..speech.debug import SpeechDebugEvent
+from .debug_panel import SpeechDebugPanelModel
+from .theme import (
+    ACCENT,
+    BACKGROUND,
+    BUTTON_BACKGROUND,
+    BUTTON_BORDER,
+    CHUNK_COLOURS,
+    DIM_FOREGROUND,
+    FOREGROUND,
+    GREEN,
+    MIN_DEBUG_READING_HEIGHT,
+    MIN_IDLE_HEIGHT,
+    MIN_READING_HEIGHT,
+    READER_BACKGROUND,
+    RED,
+    SPINNER,
+    STATUS_WRAP_LENGTH,
+    WINDOW_WIDTH,
+)
 
 logger = logging.getLogger(__name__)
 
-BACKGROUND = "#1e1e2e"
-READER_BACKGROUND = "#313244"
-BUTTON_BACKGROUND = "#45475a"
-BUTTON_BORDER = "#585b70"
-FOREGROUND = "#cdd6f4"
-DIM_FOREGROUND = "#6c7086"
-GREEN = "#a6e3a1"
-RED = "#f38ba8"
-ACCENT = "#89b4fa"
-CHUNK_COLOURS = ("#89b4fa", "#a6e3a1", "#f9e2af", "#cba6f7")
-WINDOW_WIDTH = 680
-MIN_IDLE_HEIGHT = 92
-MIN_READING_HEIGHT = 250
-MIN_DEBUG_READING_HEIGHT = 300
-STATUS_WRAP_LENGTH = WINDOW_WIDTH - 22
-SPINNER = ("⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷")
 _GWL_EXSTYLE = -20
 _WS_EX_NOACTIVATE = 0x08000000
 _SWP_REFRESH_FRAME_NO_ACTIVATE = 0x0037
@@ -37,6 +40,7 @@ class PlayerWindow(tk.Tk):
         *,
         app_name: str,
         hotkey: str,
+        ocr_hotkey: str = "alt+d",
         on_play: Callable[[], None],
         on_read: Callable[[], None],
         on_pause: Callable[[], None],
@@ -54,13 +58,12 @@ class PlayerWindow(tk.Tk):
         super().__init__()
         self._app_name = app_name
         self._hotkey = hotkey
+        self._ocr_hotkey = ocr_hotkey
         self._clipboard_mode = False
         self._auto_hide = auto_hide
         self._speech_backend = speech_backend
         self._debug_enabled = debug_enabled
-        self._debug_chunks: dict[int, SpeechDebugEvent] = {}
-        self._debug_delays: list[SpeechDebugEvent] = []
-        self._active_debug_chunk: SpeechDebugEvent | None = None
+        self._debug = SpeechDebugPanelModel()
         self._on_play = on_play
         self._on_read = on_read
         self._on_pause = on_pause
@@ -248,27 +251,16 @@ class PlayerWindow(tk.Tk):
         log_event(logger, logging.INFO, "player.speech_debug.updated", enabled=enabled)
 
     def update_speech_debug(self, event: SpeechDebugEvent) -> None:
-        if event.chunk_index is not None:
-            self._debug_chunks[event.chunk_index] = event
-        if event.kind == "chunk_playing":
-            self._active_debug_chunk = event
-        if event.kind == "underrun":
-            self._debug_delays.append(event)
+        display_event = self._debug.update(event)
         if not self._debug_enabled:
             return
         self._apply_chunk_tags(
             event if event.kind == "chunk_playing" else None
         )
-        self._render_debug_metrics(
-            event
-            if event.kind == "underrun"
-            else self._active_debug_chunk or event
-        )
+        self._render_debug_metrics(display_event)
 
     def reset_speech_debug(self) -> None:
-        self._debug_chunks.clear()
-        self._debug_delays.clear()
-        self._active_debug_chunk = None
+        self._debug.reset()
         self._clear_chunk_tags()
         if self._debug_enabled:
             self._render_debug_metrics()
@@ -637,7 +629,7 @@ class PlayerWindow(tk.Tk):
     def _clear_chunk_tags(self) -> None:
         self._reader.config(state="normal")
         self._reader.tag_remove("debug_active_chunk", "1.0", "end")
-        for index in self._debug_chunks:
+        for index in self._debug.chunks:
             self._reader.tag_remove(f"debug_chunk_{index}", "1.0", "end")
         self._reader.config(state="disabled")
 
@@ -646,7 +638,7 @@ class PlayerWindow(tk.Tk):
             return
         self._reader.config(state="normal")
         self._reader.tag_remove("debug_active_chunk", "1.0", "end")
-        for index, event in self._debug_chunks.items():
+        for index, event in self._debug.chunks.items():
             tag = f"debug_chunk_{index}"
             self._reader.tag_config(
                 tag,
@@ -673,41 +665,10 @@ class PlayerWindow(tk.Tk):
 
     def _render_debug_metrics(self, event: SpeechDebugEvent | None = None) -> None:
         old_required_height = self._debug_frame.winfo_reqheight()
-        if event is None and self._debug_chunks:
-            event = self._debug_chunks[max(self._debug_chunks)]
-        if event is None:
-            text = "Speech diagnostics waiting for chunks…"
-        elif event.kind == "underrun":
-            text = (
-                f"⚠ UNDERRUN  delay={event.delay_ms or 0}ms  "
-                f"runway={event.runway_ms or 0}ms"
-            )
-        else:
-            chunk = (event.chunk_index or 0) + 1
-            state = "PLAY" if event.kind == "chunk_playing" else "READY"
-            prediction_error = (
-                (event.actual_synthesis_ms or 0)
-                - (event.predicted_synthesis_ms or 0)
-            )
-            ready_ahead = sum(
-                item.kind == "chunk_ready"
-                and item.chunk_index is not None
-                and item.chunk_index > (event.chunk_index or 0)
-                for item in self._debug_chunks.values()
-            )
-            text = (
-                f"{state} chunk={chunk}  chars={event.text_length}"
-                f"/{event.target_characters or 0}  boundary={event.boundary}\n"
-                f"synth est={event.predicted_synthesis_ms or 0}ms  "
-                f"actual={event.actual_synthesis_ms or 0}ms  "
-                f"error={prediction_error:+d}ms  "
-                f"audio={event.audio_ms or 0}ms  runway={event.runway_ms or 0}ms  "
-                f"queue={event.queue_delay_ms or 0}ms  "
-                f"ready={ready_ahead}  underruns={len(self._debug_delays)}"
-            )
+        text, is_underrun = self._debug.metrics(event)
         self._debug_metrics.config(
             text=text,
-            fg=RED if event and event.kind == "underrun" else DIM_FOREGROUND,
+            fg=RED if is_underrun else DIM_FOREGROUND,
         )
         self.update_idletasks()
         if (
@@ -756,7 +717,10 @@ class PlayerWindow(tk.Tk):
 
     def _idle_hint(self) -> str:
         target = "clipboard" if self._clipboard_mode else "selection or clipboard"
-        return f"Press {self._hotkey.upper()} to read {target}"
+        return (
+            f"Press {self._hotkey.upper()} to read {target}"
+            f"  •  {self._ocr_hotkey.upper()} for OCR"
+        )
 
     def _drain_callbacks(self) -> None:
         drained = 0

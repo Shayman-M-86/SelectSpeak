@@ -2,7 +2,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
-from .text_processing import prepare_for_speech
+from ..speech.normalization import prepare_for_speech
 
 CaptureSource = Literal["selection", "clipboard", "clipboard_fallback"]
 

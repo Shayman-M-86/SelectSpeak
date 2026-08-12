@@ -59,8 +59,22 @@ def test_delayed_clipboard_fallback_stops_speech_active_at_keypress() -> None:
     class Speaker:
         stop_count = 0
 
+        def speak(self, text: str) -> int:
+            del text
+            return 1
+
         def stop(self) -> None:
             self.stop_count += 1
+
+        def pause(self) -> None:
+            pass
+
+        def resume(self) -> None:
+            pass
+
+        def wait_until_done(self, generation: int) -> bool:
+            del generation
+            return True
 
     class Player:
         @staticmethod
@@ -77,10 +91,14 @@ def test_delayed_clipboard_fallback_stops_speech_active_at_keypress() -> None:
     setattr(app, "_clipboard", Clipboard())
     setattr(app, "_speaker", speaker)
     setattr(app, "_player", Player())
-    app._last_text = "Clipboard fallback sentence."
-    app._is_speaking = False
-    app._speech_started_at = 10.0
-    app._speech_ended_at = 11.0
+    app._session.start(
+        speaker,
+        1,
+        "Clipboard fallback sentence.",
+        "clipboard_fallback",
+        10.0,
+    )
+    app._session.stop(speaker, 11.0)
 
     app._on_hotkey("", activated_at=10.5)
 
@@ -115,6 +133,20 @@ def test_stop_targets_the_speaker_that_started_the_active_request() -> None:
         def stop(self) -> None:
             self.stop_count += 1
 
+        def speak(self, text: str) -> int:
+            del text
+            return 1
+
+        def pause(self) -> None:
+            pass
+
+        def resume(self) -> None:
+            pass
+
+        def wait_until_done(self, generation: int) -> bool:
+            del generation
+            return True
+
     class Player:
         @staticmethod
         def call_soon(callback: Callable[[], None]) -> None:
@@ -128,9 +160,8 @@ def test_stop_targets_the_speaker_that_started_the_active_request() -> None:
     old_speaker = Speaker()
     new_speaker = Speaker()
     setattr(app, "_speaker", new_speaker)
-    setattr(app, "_speech_speaker", old_speaker)
     setattr(app, "_player", Player())
-    app._is_speaking = True
+    app._session.start(old_speaker, 1, "Active speech", "selection", 1.0)
 
     app.stop()
 

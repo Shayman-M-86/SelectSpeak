@@ -4,13 +4,16 @@ import threading
 import time
 from dataclasses import replace
 
-from .capture import resolve_capture
-from .clipboard import ClipboardService
 from .config import DEFAULT_CONFIG, AppConfig
-from .hotkeys import HotkeyManager
+from .input.capture import resolve_capture
+from .input.clipboard import ClipboardService
+from .input.hotkeys import HotkeyManager
+from .input.ocr_capture import OcrCaptureError, OcrCaptureHotkey
 from .logging_setup import log_event, log_exception, text_preview
-from .speaker import Speaker, create_speaker
-from .speech_debug import SpeechDebugEvent
+from .playback_session import PlaybackSession
+from .speech import Speaker, create_speaker
+from .speech.debug import SpeechDebugEvent
+from .speech.normalization import prepare_for_speech
 from .ui.player import PlayerWindow
 from .ui.tray import TrayController
 
@@ -39,14 +42,7 @@ class SelectSpeakApp:
     def __init__(self, config: AppConfig = DEFAULT_CONFIG) -> None:
         self._config = config
         self._state_lock = threading.RLock()
-        self._last_text = ""
-        self._speech_generation: int | None = None
-        self._speech_speaker: Speaker | None = None
-        self._is_speaking = False
-        self._speech_started_at = 0.0
-        self._speech_ended_at = 0.0
-        self._active_capture_source = ""
-        self._is_paused = False
+        self._session = PlaybackSession()
         self._clipboard_mode = False
         self._auto_hide = config.auto_hide
         self._speech_debug_enabled = config.speech_debug_enabled
@@ -78,6 +74,7 @@ class SelectSpeakApp:
         self._player = PlayerWindow(
             app_name=self._config.app_name,
             hotkey=self._config.default_hotkey,
+            ocr_hotkey=self._config.ocr_hotkey,
             on_play=self.replay,
             on_read=self.read_current,
             on_pause=self.pause,
@@ -93,6 +90,13 @@ class SelectSpeakApp:
             debug_enabled=self._speech_debug_enabled,
         )
         self._clipboard = ClipboardService()
+        self._ocr_capture = OcrCaptureHotkey(
+            self._config.ocr_hotkey,
+            self._config.ocr_trigger_hotkey,
+            self._clipboard.read_text,
+            self._on_ocr_text,
+            timeout_seconds=self._config.ocr_capture_timeout_seconds,
+        )
         self._speaker = create_speaker(
             self._config, self._on_word, self._on_speech_debug
         )
@@ -111,6 +115,14 @@ class SelectSpeakApp:
         )
 
         self._hotkeys.register()
+        try:
+            self._ocr_capture.start()
+        except OcrCaptureError:
+            log_exception(
+                logger,
+                "ocr_hotkey.registration_failed",
+                hotkey=self._config.ocr_hotkey,
+            )
         self._tray.start()
         log_event(
             logger,
@@ -125,16 +137,8 @@ class SelectSpeakApp:
 
     def stop(self) -> None:
         log_event(logger, logging.INFO, "playback.stop.requested")
-        with self._state_lock:
-            speaker = self._speech_speaker or self._speaker
+        speaker, text = self._session.stop(self._speaker, time.monotonic())
         speaker.stop()
-        with self._state_lock:
-            self._speech_generation = None
-            self._speech_speaker = None
-            self._is_speaking = False
-            self._speech_ended_at = time.monotonic()
-            self._is_paused = False
-            text = self._last_text
         self._update_player(speaking=False, text=text)
         log_event(
             logger,
@@ -145,47 +149,45 @@ class SelectSpeakApp:
 
     def pause(self) -> None:
         log_event(logger, logging.DEBUG, "playback.pause.requested")
-        with self._state_lock:
-            if not self._is_speaking or self._is_paused:
-                log_event(
-                    logger,
-                    logging.DEBUG,
-                    "playback.pause.ignored",
-                    speaking=self._is_speaking,
-                    paused=self._is_paused,
-                )
-                return
-            self._is_paused = True
-            text = self._last_text
-            speaker = self._speech_speaker or self._speaker
+        state = self._session.snapshot()
+        transition = self._session.pause(self._speaker)
+        if transition is None:
+            log_event(
+                logger,
+                logging.DEBUG,
+                "playback.pause.ignored",
+                speaking=state.speaking,
+                paused=state.paused,
+            )
+            return
+        speaker, text = transition
         speaker.pause()
         self._update_player(speaking=True, paused=True, text=text)
         log_event(logger, logging.INFO, "playback.paused")
 
     def resume(self) -> None:
         log_event(logger, logging.DEBUG, "playback.resume.requested")
-        with self._state_lock:
-            if not self._is_speaking or not self._is_paused:
-                log_event(
-                    logger,
-                    logging.DEBUG,
-                    "playback.resume.ignored",
-                    speaking=self._is_speaking,
-                    paused=self._is_paused,
-                )
-                return
-            self._is_paused = False
-            text = self._last_text
-            speaker = self._speech_speaker or self._speaker
+        state = self._session.snapshot()
+        transition = self._session.resume(self._speaker)
+        if transition is None:
+            log_event(
+                logger,
+                logging.DEBUG,
+                "playback.resume.ignored",
+                speaking=state.speaking,
+                paused=state.paused,
+            )
+            return
+        speaker, text = transition
         speaker.resume()
         self._update_player(speaking=True, paused=False, text=text)
         log_event(logger, logging.INFO, "playback.resumed")
 
     def replay(self) -> None:
         log_event(logger, logging.INFO, "playback.replay.requested")
-        with self._state_lock:
-            text = self._last_text
-            source = self._active_capture_source or "replay"
+        state = self._session.snapshot()
+        text = state.text
+        source = state.source or "replay"
         if text:
             self._begin_speech(text, source=source)
         else:
@@ -293,10 +295,9 @@ class SelectSpeakApp:
 
     def start_hotkey_capture(self) -> None:
         log_event(logger, logging.INFO, "hotkey.capture.requested")
-        with self._state_lock:
-            if self._is_speaking:
-                log_event(logger, logging.INFO, "hotkey.capture.ignored_while_speaking")
-                return
+        if self._session.snapshot().speaking:
+            log_event(logger, logging.INFO, "hotkey.capture.ignored_while_speaking")
+            return
         started = self._hotkeys.start_capture(
             timeout_seconds=self._config.capture_timeout_seconds,
             on_preview=lambda combo: self._player.call_soon(
@@ -322,6 +323,7 @@ class SelectSpeakApp:
         for speaker in self._speakers.values():
             speaker.stop()
         self._hotkeys.close()
+        self._ocr_capture.stop()
         self._tray.stop()
         self._player.destroy()
         log_event(logger, logging.INFO, "app.shutdown.completed")
@@ -344,11 +346,12 @@ class SelectSpeakApp:
                 return
             self._last_hotkey_time = now
             clipboard_mode = self._clipboard_mode
-            speaking_now = self._is_speaking
+            session = self._session.snapshot()
+            speaking_now = session.speaking
             speaking_at_activation = was_speaking_at(
                 activated_at,
-                self._speech_started_at,
-                self._speech_ended_at,
+                session.started_at,
+                session.ended_at,
             )
 
         requested_mode = "clipboard" if clipboard_mode else "auto"
@@ -397,12 +400,11 @@ class SelectSpeakApp:
             else:
                 self._player.call_soon(self._player.show)
             return
-        with self._state_lock:
-            stop_repeated_text = is_repeat_of_active_speech(
-                speaking=speaking_at_activation,
-                active_text=self._last_text,
-                captured_text=capture.text,
-            )
+        stop_repeated_text = is_repeat_of_active_speech(
+            speaking=speaking_at_activation,
+            active_text=self._session.snapshot().text,
+            captured_text=capture.text,
+        )
         if stop_repeated_text:
             log_event(
                 logger,
@@ -423,9 +425,10 @@ class SelectSpeakApp:
         with self._state_lock:
             backend_switching = self._backend_switching
             clipboard_mode = self._clipboard_mode
+            session = self._session.snapshot()
             stop_clipboard_speech = should_stop_clipboard_speech_immediately(
-                speaking=self._is_speaking,
-                source=self._active_capture_source,
+                speaking=session.speaking,
+                source=session.source,
             )
         if backend_switching:
             log_event(logger, logging.INFO, "hotkey.ignored_backend_loading")
@@ -480,15 +483,7 @@ class SelectSpeakApp:
                 minimum_length=self._config.minimum_text_length,
             )
             return
-        with self._state_lock:
-            self._last_text = text
-            self._speech_generation = generation
-            self._speech_speaker = speaker
-            self._is_speaking = True
-            self._speech_started_at = time.monotonic()
-            self._speech_ended_at = float("inf")
-            self._active_capture_source = source
-            self._is_paused = False
+        self._session.start(speaker, generation, text, source, time.monotonic())
         self._update_player(speaking=True, text=text)
         log_event(
             logger,
@@ -521,29 +516,14 @@ class SelectSpeakApp:
                 generation=generation,
             )
             return
-        with self._state_lock:
-            if self._speech_generation != generation:
-                log_event(
-                    logger,
-                    logging.DEBUG,
-                    "speech.completion.stale",
-                    generation=generation,
-                    current_generation=self._speech_generation,
-                )
-                return
-            if self._speech_speaker is not speaker:
-                log_event(
-                    logger,
-                    logging.DEBUG,
-                    "speech.completion.stale_backend",
-                    generation=generation,
-                )
-                return
-            self._speech_generation = None
-            self._speech_speaker = None
-            self._is_speaking = False
-            self._speech_ended_at = time.monotonic()
-            self._is_paused = False
+        if not self._session.complete(speaker, generation, time.monotonic()):
+            log_event(
+                logger,
+                logging.DEBUG,
+                "speech.completion.stale",
+                generation=generation,
+            )
+            return
         self._update_player(speaking=False, text=text)
         log_event(
             logger,
@@ -583,6 +563,19 @@ class SelectSpeakApp:
         self._player.call_soon(
             lambda event=event: self._player.update_speech_debug(event)
         )
+
+    def _on_ocr_text(self, clipboard_text: str) -> None:
+        text = prepare_for_speech(clipboard_text)
+        log_event(
+            logger,
+            logging.INFO,
+            "ocr_capture.text_prepared",
+            raw_length=len(clipboard_text),
+            cleaned_length=len(text),
+            cleaned_preview=text_preview(text),
+        )
+        if text:
+            self._begin_speech(text, source="ocr")
 
     def _apply_hotkey(self, hotkey: str) -> None:
         log_event(logger, logging.INFO, "hotkey.rebind.requested", hotkey=hotkey)

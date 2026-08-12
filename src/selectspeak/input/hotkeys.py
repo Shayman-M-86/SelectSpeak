@@ -2,8 +2,8 @@ import logging
 import threading
 from collections.abc import Callable
 
-from .logging_setup import log_event
-from .native_input import NativeInputAdapter
+from ..logging_setup import log_event
+from .native import NativeInputAdapter
 
 logger = logging.getLogger(__name__)
 

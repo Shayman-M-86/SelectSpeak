@@ -1,4 +1,4 @@
-from selectspeak.capture import resolve_capture
+from selectspeak.input.capture import resolve_capture
 
 
 def test_resolve_capture_prefers_selected_text() -> None:

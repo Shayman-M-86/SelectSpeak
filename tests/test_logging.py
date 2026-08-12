@@ -30,7 +30,7 @@ def test_json_line_formatter_emits_structured_event() -> None:
 
 def test_logging_is_disabled_by_app_config() -> None:
     try:
-        assert configure_logging(AppConfig(logging_enabled=False)) is None
+        assert configure_logging(AppConfig(logging_enabled=False).logging) is None
         assert logging.root.manager.disable == logging.CRITICAL
     finally:
         logging.disable(logging.NOTSET)

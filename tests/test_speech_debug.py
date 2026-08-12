@@ -1,4 +1,4 @@
-from selectspeak.speech_debug import SpeechDebugEvent, with_queue_delay
+from selectspeak.speech.debug import SpeechDebugEvent, with_queue_delay
 
 
 def test_playing_event_preserves_metrics_and_adds_queue_delay() -> None:

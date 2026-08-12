@@ -1,19 +1,18 @@
-import threading
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from selectspeak.config import AppConfig
-from selectspeak.natural_voice import (
+from selectspeak.speech.backends.natural import (
     NaturalVoice,
     NaturalVoiceEngine,
     NaturalVoiceError,
     NaturalVoiceSpeaker,
-    _SpeechRequest,
     find_natural_voice_dll,
 )
-from selectspeak.speech_pipeline import GenerationStatistics
+from selectspeak.speech.pipeline import GenerationStatistics
+from selectspeak.speech.playback import PlaybackController
 
 
 def test_choose_voice_matches_name_locale_display_name_or_path() -> None:
@@ -119,13 +118,10 @@ def test_natural_voice_uses_the_shared_persistent_stream() -> None:
         "The second sentence follows."
     )
     speaker = object.__new__(NaturalVoiceSpeaker)
-    speaker._config = AppConfig(structure_pause_seconds=0.1)
+    speaker._config = AppConfig(structure_pause_seconds=0.1).speech
     speaker._word_callback = None
-    speaker._condition = threading.Condition()
-    speaker._generation = 1
-    speaker._active_generation = None
-    speaker._completed_generation = 0
-    speaker._paused = False
+    speaker._playback = PlaybackController()
+    request, _active = speaker._playback.submit(text)
     speaker._request_text = ""
     speaker._segment_text_offset = 0
     speaker._segment_audio_base = 0
@@ -135,7 +131,7 @@ def test_natural_voice_uses_the_shared_persistent_stream() -> None:
     engine = _FakeEngine(speaker)
     speaker._engine = engine
 
-    speaker._speak_request(_SpeechRequest(1, text))
+    speaker._speak_request(request)
 
     assert len(engine.spoken) > 2
     assert [event for event, _ in player.events].count("start") == 1

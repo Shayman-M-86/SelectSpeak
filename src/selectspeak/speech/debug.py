@@ -1,3 +1,5 @@
+"""Structured diagnostics emitted by speech generation and playback."""
+
 from __future__ import annotations
 
 from collections.abc import Callable

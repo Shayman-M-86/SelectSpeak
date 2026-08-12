@@ -1,0 +1,16 @@
+from collections.abc import Callable
+from typing import Protocol
+
+WordCallback = Callable[[str, int, int], None]
+
+
+class Speaker(Protocol):
+    def speak(self, text: str) -> int | None: ...
+
+    def stop(self) -> None: ...
+
+    def pause(self) -> None: ...
+
+    def resume(self) -> None: ...
+
+    def wait_until_done(self, generation: int) -> bool: ...

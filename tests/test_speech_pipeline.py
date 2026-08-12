@@ -1,4 +1,4 @@
-from selectspeak.speech_pipeline import (
+from selectspeak.speech.pipeline import (
     MIN_CHUNK_CHARACTERS,
     AdaptiveSpeechPipeline,
     GenerationStatistics,

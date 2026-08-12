@@ -81,6 +81,11 @@ need to be on the launcher's `PATH`.
 
 Developers can also run `uv run main.py` or `uv run selectspeak`.
 
+Press `Alt+D` to open the configured OCR selector (`Win+Shift+T`). After you
+select a region, SelectSpeak waits for the OCR service to update the clipboard
+and immediately reads the recognized text. The shortcuts can be changed with
+`ocr_hotkey` and `ocr_trigger_hotkey` in `AppConfig`.
+
 ## Start automatically
 
 Pass `-AddToStartup` to the installer. To remove the startup shortcut later,
@@ -184,17 +189,13 @@ uv build
 install.ps1                 Complete first-time setup and upgrade script
 main.py                     Root entry point
 run.vbs                     Console-free launcher using the local environment
-src/selectspeak/app.py      Application lifecycle and state coordination
-src/selectspeak/native_input.py
-src/selectspeak/clipboard.py
-src/selectspeak/hotkeys.py
-src/selectspeak/speaker.py
-src/selectspeak/natural_voice.py
-src/selectspeak/text_processing.py
-src/selectspeak/ui/         Player window and system tray
+src/selectspeak/app.py      Application lifecycle and coordination
+src/selectspeak/input/      Capture, clipboard, hotkeys, and native input
+src/selectspeak/speech/     Speech contracts, processing, and playback
+src/selectspeak/speech/backends/
+                            SAPI, Natural Voice, and Supertonic adapters
+src/selectspeak/ui/         Player window, diagnostics, theme, and tray
 native/natural_voice/       Small C ABI bridge to local Natural Voices
 native/input/               Native hotkey and selected-text capture bridge
 native/build_helpers.ps1    Shared C++ toolchain discovery and installation
-src/selectspeak/supertonic_voice.py
-                            Local Supertonic synthesis/playback adapter
 ```

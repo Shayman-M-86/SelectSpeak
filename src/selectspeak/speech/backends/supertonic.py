@@ -5,18 +5,18 @@ import re
 import threading
 import time
 from dataclasses import dataclass
-from queue import Empty, Queue
 
 import numpy as np
 from supertonic import TTS
 
-from .config import AppConfig
-from .logging_setup import log_event, log_exception
-from .pcm_player import TICKS_PER_SECOND, WaveOutPlayer
-from .speaker import WordCallback
-from .speech_debug import SpeechDebugCallback, SpeechDebugEvent
-from .speech_pipeline import AdaptiveSpeechPipeline, GenerationStatistics
-from .text_processing import SpeechSegment
+from ...config import SpeechConfig
+from ...logging_setup import log_event, log_exception, text_preview
+from ..contracts import WordCallback
+from ..debug import SpeechDebugCallback, SpeechDebugEvent
+from ..pipeline import AdaptiveSpeechPipeline, GenerationStatistics
+from ..playback import PlaybackController, SpeechRequest
+from ..segments import SpeechSegment
+from ..waveout import TICKS_PER_SECOND, WaveOutPlayer
 
 logger = logging.getLogger(__name__)
 
@@ -35,10 +35,7 @@ class EstimatedBoundary:
     length: int
 
 
-@dataclass(frozen=True, slots=True)
-class _SpeechRequest:
-    generation: int
-    text: str
+_SpeechRequest = SpeechRequest
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,24 +147,18 @@ class SupertonicSpeaker:
 
     def __init__(
         self,
-        config: AppConfig,
+        config: SpeechConfig,
         word_callback: WordCallback | None = None,
         debug_callback: SpeechDebugCallback | None = None,
     ) -> None:
         self._config = config
         self._word_callback = word_callback
         self._debug_callback = debug_callback
-        self._condition = threading.Condition()
+        self._playback = PlaybackController()
         # A cancelled inference cannot be interrupted by the Supertonic API.
         # Serialize it with the next request so two ONNX runs cannot contend
         # for the CPU and turn a cancellation into a large startup outlier.
         self._synthesis_lock = threading.Lock()
-        self._queue: Queue[_SpeechRequest] = Queue()
-        self._generation = 0
-        self._active_generation: int | None = None
-        self._completed_generation = 0
-        self._paused = False
-        self._failed = False
         self._request_text = ""
         self._generation_statistics = GenerationStatistics()
         log_event(logger, logging.INFO, "supertonic.model.loading")
@@ -197,62 +188,31 @@ class SupertonicSpeaker:
     def speak(self, text: str) -> int | None:
         if len(text) < self._config.minimum_text_length:
             return None
-        with self._condition:
-            if self._failed:
-                raise RuntimeError("The Supertonic speech worker failed")
-            self._generation += 1
-            request = _SpeechRequest(self._generation, text)
-            self._drain_queue()
-            active = self._active_generation is not None
-            self._queue.put(request)
-            self._condition.notify_all()
+        request, active = self._playback.submit(text)
         if active:
             self._player.stop()
         return request.generation
 
     def stop(self) -> None:
-        with self._condition:
-            self._generation += 1
-            self._drain_queue()
-            active = self._active_generation is not None
-            self._paused = False
-            self._condition.notify_all()
+        _generation, active = self._playback.cancel()
         if active:
             self._player.stop()
 
     def pause(self) -> None:
-        with self._condition:
-            if self._active_generation is None or self._paused:
-                return
-            self._paused = True
-        self._player.pause()
+        if self._playback.pause_now():
+            self._player.pause()
 
     def resume(self) -> None:
-        with self._condition:
-            if not self._paused:
-                return
-            self._paused = False
-        self._player.resume()
+        if self._playback.resume_now():
+            self._player.resume()
 
     def wait_until_done(self, generation: int) -> bool:
-        with self._condition:
-            self._condition.wait_for(
-                lambda: (
-                    self._failed
-                    or self._generation != generation
-                    or self._completed_generation >= generation
-                )
-            )
-            return (
-                not self._failed
-                and self._generation == generation
-                and self._completed_generation >= generation
-            )
+        return self._playback.wait_until_done(generation)
 
     def _run(self) -> None:
         while True:
-            request = self._queue.get()
-            if self._is_superseded(request.generation):
+            request = self._playback.next_request()
+            if not self._playback.is_current(request.generation):
                 continue
             try:
                 self._speak_request(request)
@@ -262,17 +222,12 @@ class SupertonicSpeaker:
                     "supertonic.request.failed",
                     generation=request.generation,
                 )
-                with self._condition:
-                    self._failed = True
-                    self._active_generation = None
-                    self._paused = False
-                    self._condition.notify_all()
+                self._playback.fail(request.generation)
                 return
 
     def _speak_request(self, request: _SpeechRequest) -> None:
-        with self._condition:
-            self._active_generation = request.generation
-            self._paused = False
+        if not self._playback.begin(request.generation):
+            return
         player_started = False
         try:
             pipeline = AdaptiveSpeechPipeline(
@@ -370,6 +325,7 @@ class SupertonicSpeaker:
                     allow_colon=decision.allow_colon,
                     allow_comma=decision.allow_comma,
                     observations=pipeline.statistics.observations,
+                    text_preview=text_preview(decision.segment.text),
                 )
                 prepared = self._synthesize_segment(decision.segment)
                 pipeline.record_generation(
@@ -379,13 +335,7 @@ class SupertonicSpeaker:
         finally:
             if player_started:
                 self._player.finish()
-            with self._condition:
-                if self._active_generation == request.generation:
-                    self._active_generation = None
-                    self._paused = False
-                if self._generation == request.generation:
-                    self._completed_generation = request.generation
-                self._condition.notify_all()
+            self._playback.complete(request.generation)
 
     def _synthesize_segment(self, segment: SpeechSegment) -> _PreparedSegment:
         started_at = time.monotonic()
@@ -435,12 +385,4 @@ class SupertonicSpeaker:
         return True
 
     def _is_superseded(self, generation: int) -> bool:
-        with self._condition:
-            return self._generation != generation
-
-    def _drain_queue(self) -> None:
-        while True:
-            try:
-                self._queue.get_nowait()
-            except Empty:
-                return
+        return not self._playback.is_current(generation)

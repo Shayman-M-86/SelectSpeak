@@ -8,7 +8,7 @@ def main() -> None:
     from .config import DEFAULT_CONFIG
     from .logging_setup import configure_logging, log_event
 
-    log_path = configure_logging(DEFAULT_CONFIG)
+    log_path = configure_logging(DEFAULT_CONFIG.logging)
     if log_path is not None:
         log_event(
             logging.getLogger("selectspeak"),

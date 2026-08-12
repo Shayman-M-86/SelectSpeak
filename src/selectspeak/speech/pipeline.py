@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .text_processing import AdaptiveSpeechChunker, SpeechSegment
+from .segments import AdaptiveSpeechChunker, SpeechSegment
 
 FIRST_CHUNK_TARGET_CHARACTERS = 100
 MIN_CHUNK_CHARACTERS = 30

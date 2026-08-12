@@ -1,4 +1,4 @@
-from selectspeak.keymap import (
+from selectspeak.input.keymap import (
     build_hotkey,
     from_windows_hotkey,
     normalize_key,

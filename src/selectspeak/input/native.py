@@ -9,8 +9,9 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from ..logging_setup import log_event, log_exception, text_preview
+from ..runtime_paths import repository_runtime_path
 from .keymap import from_windows_hotkey, to_windows_hotkey
-from .logging_setup import log_event, log_exception, text_preview
 
 logger = logging.getLogger(__name__)
 
@@ -34,12 +35,7 @@ def find_native_input_dll(configured_path: str = "") -> Path:
     candidates = [
         configured_path,
         os.environ.get("SELECTSPEAK_INPUT_DLL", ""),
-        str(
-            Path(__file__).resolve().parents[2]
-            / ".runtime"
-            / "input"
-            / "selectspeak_input.dll"
-        ),
+        str(repository_runtime_path("input", "selectspeak_input.dll")),
         str(Path(__file__).with_name("selectspeak_input.dll")),
     ]
     for candidate in candidates:

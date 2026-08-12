@@ -1,9 +1,8 @@
-from selectspeak.text_processing import (
-    AdaptiveSpeechChunker,
+from selectspeak.speech.normalization import (
     prepare_for_speech,
-    split_speech_segments,
     strip_display_bullet_prefix,
 )
+from selectspeak.speech.segments import AdaptiveSpeechChunker, split_speech_segments
 
 
 def test_prepare_for_speech_turns_each_copied_line_into_a_pause() -> None:
@@ -295,3 +294,57 @@ def test_adaptive_chunker_caps_later_chunks_at_two_sentences() -> None:
     assert second.text == "Second sentence. Third sentence."
     assert third is not None
     assert third.text == "Fourth sentence. Fifth sentence."
+
+
+def test_adaptive_chunker_does_not_chase_a_distant_sentence_boundary() -> None:
+    chunker = AdaptiveSpeechChunker(
+        "Ready. "
+        "This sentence is intentionally very long and contains enough technical "
+        "detail to run far beyond a small adaptive synthesis target without any "
+        "sentence punctuation that would otherwise provide a convenient split "
+        "before this deliberately distant ending."
+    )
+    first = chunker.next_chunk(target_characters=100)
+    second = chunker.next_chunk(
+        target_characters=50,
+        hard_max_characters=500,
+        allow_colon=True,
+        allow_comma=False,
+    )
+
+    assert first is not None and first.text == "Ready."
+    assert second is not None
+    assert 50 <= len(second.text) <= 70
+    assert not second.pause_after
+
+
+def test_adaptive_chunker_keeps_logged_regression_chunks_near_target() -> None:
+    text = prepare_for_speech(
+        "I found the actual regression: moving the native adapters changed the "
+        "meaning of Path(__file__).parents[...]. Both DLL discovery functions "
+        "were still calculating paths from their old locations, so the launcher "
+        "could no longer find the runtime input DLL (and Natural Voice had the "
+        "same latent bug). I’m replacing those fragile parent counts with one "
+        "package-level runtime-path resolver."
+    )
+    chunker = AdaptiveSpeechChunker(text)
+
+    first = chunker.next_chunk(target_characters=100)
+    second = chunker.next_chunk(
+        target_characters=30,
+        hard_max_characters=60,
+        allow_colon=True,
+        allow_comma=True,
+    )
+    third = chunker.next_chunk(
+        target_characters=51,
+        hard_max_characters=500,
+        allow_colon=True,
+        allow_comma=False,
+    )
+
+    assert first is not None and len(first.text) == 30
+    assert second is not None and len(second.text) == 34
+    assert third is not None
+    assert 46 <= len(third.text) <= 70
+    assert not third.pause_after
