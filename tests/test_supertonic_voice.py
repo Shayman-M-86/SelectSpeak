@@ -142,7 +142,7 @@ def test_supertonic_uses_one_stream_and_only_pauses_at_sentence_boundaries() -> 
 
     speaker._speak_request(request)
 
-    assert len(synthesis_events) > 2
+    assert len(synthesis_events) == 2
     assert [event for event, _ in player.events].count("start") == 1
     assert [event for event, _ in player.events].count("finish") == 1
     assert [value for event, value in player.events if event == "silence"] == [

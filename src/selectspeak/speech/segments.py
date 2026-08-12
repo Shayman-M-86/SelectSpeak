@@ -1,17 +1,19 @@
+from __future__ import annotations
+
 import re
+from bisect import bisect_right
 from dataclasses import dataclass
 
 from .normalization import DISPLAY_BULLET_PREFIX, strip_display_bullet_prefix
 
 MAX_SPEECH_SEGMENT_CHARACTERS = 100
-TARGET_OVERSHOOT_RATIO = 0.35
-MIN_TARGET_OVERSHOOT_CHARACTERS = 15
-MAX_TARGET_OVERSHOOT_CHARACTERS = 40
+MAX_ADAPTIVE_CHUNK_CHARACTERS = 200
+MIN_STARTUP_CHUNK_CHARACTERS = 50
 _SENTENCE_END = re.compile(r"[.!?]+(?:[\"'”’)]*)\s+")
+_ADAPTIVE_BOUNDARY = re.compile(r"[.!?;:,]+(?:[\"'”’)]*)(?=\s|$)")
 _NON_TERMINAL_ABBREVIATIONS = frozenset(
     {"dr.", "e.g.", "i.e.", "mr.", "mrs.", "ms.", "prof.", "st.", "vs."}
 )
-
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,11 +25,33 @@ class SpeechSegment:
     pause_after: bool = True
 
 
+@dataclass(frozen=True, slots=True)
+class PunctuationMap:
+    """Punctuation offsets indexed once for adaptive chunk selection."""
+
+    boundaries: tuple[int, ...]
+    sentence_boundaries: frozenset[int]
+
+    @classmethod
+    def from_text(cls, text: str) -> PunctuationMap:
+        boundaries: list[int] = []
+        sentence_boundaries: set[int] = set()
+        for match in _ADAPTIVE_BOUNDARY.finditer(text):
+            boundaries.append(match.end())
+            if any(mark in match.group() for mark in ".!?"):
+                sentence_boundaries.add(match.end())
+        return cls(tuple(boundaries), frozenset(sentence_boundaries))
+
+    def punctuation_between(self, start: int, end: int) -> list[int]:
+        return _positions_between(self.boundaries, start, end)
+
+
 class AdaptiveSpeechChunker:
-    """Choose forward-oriented chunks while preserving display-text offsets."""
+    """Choose adaptive sizes using a punctuation map built once per text."""
 
     def __init__(self, text: str) -> None:
         self._text = text
+        self._punctuation = PunctuationMap.from_text(text)
         self._cursor = 0
         self._first = True
 
@@ -39,10 +63,7 @@ class AdaptiveSpeechChunker:
         self,
         *,
         target_characters: int = 100,
-        hard_max_characters: int = 500,
-        max_sentences: int | None = None,
-        allow_colon: bool = True,
-        allow_comma: bool = False,
+        hard_max_characters: int = MAX_ADAPTIVE_CHUNK_CHARACTERS,
     ) -> SpeechSegment | None:
         self._skip_structure_prefix()
         if self._cursor >= len(self._text):
@@ -50,78 +71,31 @@ class AdaptiveSpeechChunker:
 
         start = self._cursor
         line_end = self._text.find("\n", start)
-        forced_structure = line_end >= 0
-        end = line_end if forced_structure else len(self._text)
+        end = line_end if line_end >= 0 else len(self._text)
         target = min(end, start + max(1, target_characters))
         hard_end = min(end, start + max(1, hard_max_characters))
-        preferred_end = min(
-            hard_end,
-            start
-            + target_characters
-            + min(
-                MAX_TARGET_OVERSHOOT_CHARACTERS,
-                max(
-                    MIN_TARGET_OVERSHOOT_CHARACTERS,
-                    round(target_characters * TARGET_OVERSHOOT_RATIO),
-                ),
-            ),
-        )
-        strong = _boundary_positions(self._text, start, hard_end, ".!?")
-        sentence_limited = False
-        if max_sentences is not None and max_sentences > 0:
-            if len(strong) >= max_sentences:
-                sentence_end = strong[max_sentences - 1]
-                sentence_limited = sentence_end < end
-                hard_end = min(hard_end, sentence_end)
-                target = min(target, hard_end)
-                strong = [
-                    position for position in strong if position <= hard_end
-                ]
 
-        if not self._first and end <= target and not sentence_limited:
+        if not self._first and end <= target:
             split = end
-        elif self._first:
-            # Latency wins for the first chunk: take the first complete sentence,
-            # even when it is much shorter than the ordinary target.
-            early_strong = [position for position in strong if position <= target]
-            split = early_strong[0] if early_strong else self._fallback_boundary(
-                start,
-                target,
-                hard_end,
-                allow_colon=True,
-                allow_comma=True,
-            )
         else:
-            # Later chunks accumulate complete sentences until the target,
-            # without crossing the configured sentence ceiling. Prefer the
-            # first strong boundary after the target, within the hard maximum.
-            after_target = [position for position in strong if position >= target]
-            if after_target and after_target[0] <= preferred_end:
-                split = after_target[0]
-            elif after_target:
-                # A sentence boundary can be far beyond the synthesis budget.
-                # Do not turn a small adaptive target into one giant chunk just
-                # to preserve that boundary; choose a safe technical boundary.
-                split = self._fallback_boundary(
-                    start,
-                    target,
-                    preferred_end,
-                    allow_colon=allow_colon,
-                    allow_comma=allow_comma,
+            candidates = self._punctuation.punctuation_between(start, hard_end)
+            if self._first:
+                # A tiny opener such as "Yes." is not a useful startup chunk.
+                meaningful = [
+                    position
+                    for position in candidates
+                    if position - start >= MIN_STARTUP_CHUNK_CHARACTERS
+                ]
+                candidates = meaningful
+            if candidates:
+                split = min(
+                    candidates, key=lambda position: abs(position - target)
                 )
-            elif strong:
-                split = strong[-1]
+            elif end <= hard_end:
+                split = end
             else:
-                split = self._fallback_boundary(
-                    start,
-                    target,
-                    hard_end,
-                    allow_colon=allow_colon,
-                    allow_comma=allow_comma,
-                )
+                split = self._whitespace_boundary(start, target, hard_end)
 
-        if forced_structure and end <= hard_end and (not strong or split >= end):
-            split = end
         split = max(start + 1, min(split, hard_end))
         raw = self._text[start:split]
         trailing_end = len(raw.rstrip())
@@ -130,15 +104,11 @@ class AdaptiveSpeechChunker:
             return self.next_chunk(
                 target_characters=target_characters,
                 hard_max_characters=hard_max_characters,
-                max_sentences=max_sentences,
-                allow_colon=allow_colon,
-                allow_comma=allow_comma,
             )
         spoken = raw[:trailing_end]
         absolute_end = start + trailing_end
         pause_after = (
-            absolute_end == end
-            or spoken[-1:] in ".!?"
+            absolute_end == end or absolute_end in self._punctuation.sentence_boundaries
         )
         self._cursor = split
         self._first = False
@@ -150,33 +120,9 @@ class AdaptiveSpeechChunker:
         if self._text.startswith(DISPLAY_BULLET_PREFIX, self._cursor):
             self._cursor += len(DISPLAY_BULLET_PREFIX)
 
-    def _fallback_boundary(
-        self,
-        start: int,
-        target: int,
-        hard_end: int,
-        *,
-        allow_colon: bool,
-        allow_comma: bool,
-    ) -> int:
-        marks: list[str] = []
-        if allow_colon:
-            marks.extend((";", ":"))
-        if allow_comma:
-            marks.append(",")
-        for mark in marks:
-            candidates = _boundary_positions(
-                self._text, start, hard_end, mark
-            )
-            if candidates:
-                after_target = [
-                    position for position in candidates if position >= target
-                ]
-                return after_target[0] if after_target else candidates[-1]
-
+    def _whitespace_boundary(self, start: int, target: int, hard_end: int) -> int:
         spaces = [
-            match.end()
-            for match in re.finditer(r"\s+", self._text[start:hard_end])
+            match.end() for match in re.finditer(r"\s+", self._text[start:hard_end])
         ]
         if spaces:
             absolute = [start + position for position in spaces]
@@ -185,18 +131,10 @@ class AdaptiveSpeechChunker:
         return hard_end
 
 
-def _boundary_positions(
-    text: str, start: int, end: int, marks: str
-) -> list[int]:
-    if end <= start:
-        return []
-    escaped = re.escape(marks)
-    return [
-        start + match.end()
-        for match in re.finditer(
-            rf"[{escaped}]+(?:[\"'”’)]*)(?=\s|$)", text[start:end]
-        )
-    ]
+def _positions_between(positions: tuple[int, ...], start: int, end: int) -> list[int]:
+    first = bisect_right(positions, start)
+    last = bisect_right(positions, end)
+    return list(positions[first:last])
 
 
 def split_speech_segments(
@@ -249,8 +187,7 @@ def _bounded_spans(
     while end - cursor > max_characters:
         limit = cursor + max_characters
         candidates = [
-            match.end()
-            for match in re.finditer(r"[,;:]\s+|\s+", text[cursor:limit])
+            match.end() for match in re.finditer(r"[,;:]\s+|\s+", text[cursor:limit])
         ]
         split = cursor + (candidates[-1] if candidates else max_characters)
         if split <= cursor:

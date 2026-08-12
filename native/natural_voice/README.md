@@ -26,7 +26,18 @@ For bridge-only development, run:
 
 The script restores the pinned Speech SDK NuGet packages and creates the local,
 ignored `.runtime/natural_voice` directory. It does not bundle voice packages.
-Install a Narrator Natural Voice through Windows Settings before running the app.
+
+To prevent Windows from updating a known-compatible package underneath the
+bridge, keep the downloaded MSIX as an extracted, app-owned copy:
+
+```powershell
+.\native\natural_voice\pin_voice.ps1 -MsixPath "C:\Downloads\voice.msix"
+```
+
+Pinned packages are stored below `.runtime/natural_voice/voices` and are tried
+before Windows-installed packages. The root installer accepts the same package
+through `-NaturalVoiceMsix`. Neither command installs or downgrades the Windows
+package.
 
 The Narrator integration is unofficial and may break after Windows or voice
 package updates. See `THIRD_PARTY_NOTICES.md` before redistributing anything.

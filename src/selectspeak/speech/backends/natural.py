@@ -5,6 +5,7 @@ import logging
 import os
 import threading
 import time
+import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,6 +37,7 @@ class NaturalVoice:
     name: str
     locale: str
     display_name: str
+    source: str = "installed"
 
 
 _AUDIO_CALLBACK = ctypes.CFUNCTYPE(
@@ -82,6 +84,42 @@ def find_natural_voice_dll(configured_path: str = "") -> Path:
     )
 
 
+def find_pinned_natural_voices(root: Path | None = None) -> list[NaturalVoice]:
+    """Find extracted, app-owned voice packages that Windows cannot update."""
+    voice_root = root or repository_runtime_path("natural_voice", "voices")
+    if not voice_root.is_dir():
+        return []
+
+    package_paths = sorted(
+        {token_path.parent for token_path in voice_root.rglob("Tokens.xml")},
+        key=lambda path: str(path).casefold(),
+    )
+    return [_pinned_voice(path) for path in package_paths]
+
+
+def _pinned_voice(package_path: Path) -> NaturalVoice:
+    name = package_path.name
+    locale = ""
+    try:
+        token = ET.parse(package_path / "Tokens.xml").find(".//Token")
+        if token is not None:
+            display = token.find("./String[@name='']")
+            name_attribute = token.find("./Attribute[@name='Name']")
+            if display is not None and display.get("value"):
+                name = display.get("value", name)
+            elif name_attribute is not None and name_attribute.get("value"):
+                name = name_attribute.get("value", name)
+    except (ET.ParseError, OSError):
+        pass
+    return NaturalVoice(
+        package_path=str(package_path.resolve()),
+        name=name,
+        locale=locale,
+        display_name=name,
+        source="pinned",
+    )
+
+
 class NaturalVoiceEngine:
     """Thin ctypes owner for the process-wide native Natural Voice engine."""
 
@@ -105,33 +143,62 @@ class NaturalVoiceEngine:
 
         self._dll.nv_set_audio_callback(self._audio_callback, None)
         self._dll.nv_set_word_callback(self._word_callback, None)
-        if config.natural_voice_path:
-            package_path = str(Path(config.natural_voice_path).resolve())
-            voice = NaturalVoice(
-                package_path=package_path,
-                name=Path(package_path).name,
-                locale="",
-                display_name="",
-            )
-        else:
-            self._dll.nv_list_voices(self._voice_callback, None)
-            if not self._voices:
-                raise NaturalVoiceError(
-                    self._last_error()
-                    or "No installed Windows Natural Voices were found"
-                )
-            voice = self._choose_voice(self._voices, config.preferred_voice_match)
         credential = (
             config.natural_voice_credential.encode("utf-8")
             if config.natural_voice_credential
             else None
         )
-        candidates = (
-            [voice]
-            if config.natural_voice_path
-            else self._ordered_voices(self._voices, config.preferred_voice_match)
-        )
         failures: list[str] = []
+        if config.natural_voice_path:
+            package_path = str(Path(config.natural_voice_path).resolve())
+            candidates = [
+                NaturalVoice(
+                    package_path=package_path,
+                    name=Path(package_path).name,
+                    locale="",
+                    display_name="",
+                    source="configured",
+                )
+            ]
+            if self._initialize_first(candidates, credential, failures):
+                return
+            raise NaturalVoiceError(
+                "The configured Natural Voice package could not be initialized. "
+                + " | ".join(failures)
+            )
+
+        pinned = self._ordered_voices(
+            find_pinned_natural_voices(), config.preferred_voice_match
+        )
+        if self._initialize_first(pinned, credential, failures):
+            return
+
+        # Enumeration opens installed voice packages. Defer it until every
+        # app-owned package has failed so a Store update cannot influence a
+        # known-compatible pinned package.
+        self._dll.nv_list_voices(self._voice_callback, None)
+        installed = self._ordered_voices(
+            self._voices,
+            config.preferred_voice_match,
+        )
+        if self._initialize_first(installed, credential, failures):
+            return
+        if not pinned and not installed:
+            raise NaturalVoiceError(
+                self._last_error()
+                or "No pinned or installed Windows Natural Voices were found"
+            )
+        raise NaturalVoiceError(
+            "No compatible Natural Voice package could be initialized. "
+            + " | ".join(failures)
+        )
+
+    def _initialize_first(
+        self,
+        candidates: list[NaturalVoice],
+        credential: bytes | None,
+        failures: list[str],
+    ) -> bool:
         for candidate in candidates:
             log_event(
                 logger,
@@ -140,6 +207,7 @@ class NaturalVoiceEngine:
                 voice=candidate.name,
                 locale=candidate.locale,
                 package_path=candidate.package_path,
+                source=candidate.source,
             )
             if not self._dll.nv_initialize(candidate.package_path, credential):
                 self.voice = candidate
@@ -150,15 +218,12 @@ class NaturalVoiceEngine:
                     voice=candidate.name,
                     locale=candidate.locale,
                     package_path=candidate.package_path,
+                    source=candidate.source,
                     available_voice_count=len(candidates),
                 )
-                break
+                return True
             failures.append(f"{candidate.name}: {self._last_error()}")
-        else:
-            raise NaturalVoiceError(
-                "No compatible Natural Voice package could be initialized. "
-                + " | ".join(failures)
-            )
+        return False
 
     def speak(self, text: str) -> None:
         if self._dll.nv_speak(text):
@@ -242,7 +307,6 @@ class NaturalVoiceEngine:
         return [voice for voice in voices if matches(voice)] + [
             voice for voice in voices if not matches(voice)
         ]
-
 
 _SpeechRequest = SpeechRequest
 
@@ -414,8 +478,6 @@ class NaturalVoiceSpeaker:
                         target_characters=decision.target_characters,
                         actual_characters=len(decision.segment.text),
                         playback_runway=round(runway, 3),
-                        allow_colon=decision.allow_colon,
-                        allow_comma=decision.allow_comma,
                         observations=pipeline.statistics.observations,
                         text_preview=text_preview(decision.segment.text),
                     )

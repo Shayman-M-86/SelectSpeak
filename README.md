@@ -38,10 +38,18 @@ direct Natural Voice bridge. Use `-SkipSupertonicModel` to defer the model
 download until Supertonic is first selected. Use `-SkipChecks` to omit developer
 checks during installation.
 
+To keep a known-compatible Natural Voice version independent of Windows voice
+updates, pass its downloaded MSIX to the installer:
+
+```powershell
+.\install.ps1 -NaturalVoiceMsix "C:\Downloads\MicrosoftWindows.Voice.en-US.Aria.2_1.0.1.0_x64__cw5n1h2txyewy.Msix"
+```
+
 The input bridge tries UI Automation first, then uses `SendInput`, clipboard
 change notifications, and an eager multi-format clipboard snapshot as its
-fallback. It uses `RegisterHotKey` during normal operation and installs a
-low-level keyboard hook only while recording a new shortcut.
+fallback. It also owns the frozen-screen OCR selector and calls Windows' local
+OCR engine directly. It uses `RegisterHotKey` during normal operation and
+installs a low-level keyboard hook only while recording a new shortcut.
 
 Set `SELECTSPEAK_INPUT_DLL` to use a native input DLL at another location.
 
@@ -49,8 +57,9 @@ Set `SELECTSPEAK_INPUT_DLL` to use a native input DLL at another location.
 
 The in-house bridge bypasses SAPI and streams PCM plus exact word-boundary
 events from Microsoft's embedded Speech SDK. The root installer builds this
-bridge by default. Install a compatible Narrator Natural Voice from Windows
-Settings to use it; otherwise SelectSpeak automatically falls back to SAPI.
+bridge by default. A pinned compatible voice is preferred, followed by a
+compatible Narrator Natural Voice installed through Windows Settings; otherwise
+SelectSpeak automatically falls back to SAPI.
 
 `AppConfig.speech_backend` defaults to `"auto"`: SelectSpeak uses the bridge
 when it is present and usable, otherwise it retains the current SAPI backend.
@@ -63,10 +72,18 @@ language, quality steps, and speed are configurable through the
 `supertonic_voice`, `supertonic_language`, `supertonic_steps`, and
 `supertonic_speed` fields in `AppConfig`.
 
-For a compatible voice package extracted to a local folder, set
-`AppConfig.natural_voice_path` to that folder. This bypasses installed-package
-discovery and is useful with the last compatible package versions linked by the
-upstream adapter project.
+`-NaturalVoiceMsix` extracts the package into the ignored, app-owned
+`.runtime/natural_voice/voices` directory; it does not install or downgrade the
+Windows package. SelectSpeak discovers that copy first, so Microsoft Store
+updates cannot silently replace it. Rerunning the command with the same package
+is safe. If the bridge is already built, the package can also be pinned directly:
+
+```powershell
+.\native\natural_voice\pin_voice.ps1 -MsixPath "C:\Downloads\voice.msix"
+```
+
+For a voice already extracted elsewhere, set `AppConfig.natural_voice_path` to
+the folder containing `Tokens.xml`. That explicit path bypasses all discovery.
 
 This depends on an unofficial, version-sensitive interface to Microsoft's
 installed voice packages. The build pins Speech SDK 1.41.1 for compatibility;
@@ -81,10 +98,13 @@ need to be on the launcher's `PATH`.
 
 Developers can also run `uv run main.py` or `uv run selectspeak`.
 
-Press `Alt+D` to open the configured OCR selector (`Win+Shift+T`). After you
-select a region, SelectSpeak waits for the OCR service to update the clipboard
-and immediately reads the recognized text. The shortcuts can be changed with
-`ocr_hotkey` and `ocr_trigger_hotkey` in `AppConfig`.
+Press `Alt+D` to freeze the current desktop and drag around text. SelectSpeak
+recognizes the selected pixels locally with `Windows.Media.Ocr`, passes the text
+directly to Python, and immediately reads it without changing the clipboard or
+launching PowerToys. Press Escape or right-click to cancel. Change the shortcut
+with `ocr_hotkey`; optionally set `ocr_language` to a Windows language tag such
+as `"en-AU"`. When unset, SelectSpeak tries the foreground keyboard language,
+then English, then the Windows profile OCR languages.
 
 ## Start automatically
 
@@ -196,6 +216,6 @@ src/selectspeak/speech/backends/
                             SAPI, Natural Voice, and Supertonic adapters
 src/selectspeak/ui/         Player window, diagnostics, theme, and tray
 native/natural_voice/       Small C ABI bridge to local Natural Voices
-native/input/               Native hotkey and selected-text capture bridge
+native/input/               Native hotkeys, text capture, and Windows OCR overlay
 native/build_helpers.ps1    Shared C++ toolchain discovery and installation
 ```

@@ -5,11 +5,10 @@ from dataclasses import dataclass
 class InputConfig:
     default_hotkey: str
     ocr_hotkey: str
-    ocr_trigger_hotkey: str
+    ocr_language: str
     native_input_dll: str
     hotkey_debounce_seconds: float
     capture_timeout_seconds: float
-    ocr_capture_timeout_seconds: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,7 +46,7 @@ class AppConfig:
     app_name: str = "SelectSpeak"
     default_hotkey: str = "alt+s"
     ocr_hotkey: str = "alt+d"
-    ocr_trigger_hotkey: str = "windows+shift+t"
+    ocr_language: str = ""
     preferred_voice_match: str = "natural"
     speech_backend: str = "auto"
     native_input_dll: str = ""
@@ -68,18 +67,16 @@ class AppConfig:
     minimum_text_length: int = 3
     hotkey_debounce_seconds: float = 0.3
     capture_timeout_seconds: float = 15.0
-    ocr_capture_timeout_seconds: float = 30.0
 
     @property
     def input(self) -> InputConfig:
         return InputConfig(
             self.default_hotkey,
             self.ocr_hotkey,
-            self.ocr_trigger_hotkey,
+            self.ocr_language,
             self.native_input_dll,
             self.hotkey_debounce_seconds,
             self.capture_timeout_seconds,
-            self.ocr_capture_timeout_seconds,
         )
 
     @property

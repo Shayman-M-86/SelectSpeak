@@ -1,0 +1,351 @@
+[001]
+The deployment completed successfully, but the health monitor kept reporting an old revision for several minutes. After the cache expired, every instance converged on the expected build. The operator recorded the delay so the next rollout can distinguish stale metadata from a real failure.
+---
+[002]
+I traced the request from the keyboard hook through clipboard capture and into speech generation: each boundary is visible in the diagnostic log, each offset still matches the prepared text, and the final callback arrives only after queued audio has finished playing.
+---
+[003]
+The parser accepts a short configuration file, validates every known field, and preserves defaults for options that were omitted. Invalid values produce one direct error message instead of a stack of secondary failures, which makes setup much easier to diagnose.
+---
+[004]
+During startup the application checks the packaged runtime directory, the development output directory, and the explicit override supplied by the user. The first valid location wins, while every rejected candidate is logged with enough context to explain the choice.
+---
+[005]
+The audio queue looked healthy at first, yet a gap appeared whenever synthesis took longer than the buffered speech. We now measure the live runway before requesting another chunk, then choose a useful punctuation boundary inside the safe character window.
+---
+[006]
+This report compares three approaches to native integration: loading a small DLL directly, launching a helper process, or depending on a separate desktop utility. Direct loading has the fewest moving parts, although the helper remains useful when language boundaries are difficult.
+---
+[007]
+The test creates a temporary clipboard value, sends the capture shortcut, waits for a genuine sequence-number change, and reads the resulting text. If another application touches the clipboard first, the capture continues waiting until the timeout rather than speaking unrelated content.
+---
+[008]
+Natural Voice emits audio incrementally, so playback can begin before the complete request has been synthesized. The adapter forwards word boundaries with offsets relative to each segment, and the Python layer translates them back into positions within the full prepared selection.
+---
+[009]
+The most useful simplification was removing state that described the same fact in two places. A playback session now owns cancellation, the active generation number, and completion, leaving individual speech backends responsible only for producing audio.
+---
+[010]
+When a user changes voices, the application saves the selected backend and its specific voice identifier. On the next launch it restores that choice if the voice still exists, otherwise it selects a sensible default and records why recovery was necessary.
+---
+[011]
+Yes. I think this is a strong candidate for a direct implementation because the required capability is small, the operating system already exposes the underlying service, and removing the external dependency will make installation and troubleshooting considerably simpler.
+---
+[012]
+No. The first result is not evidence that the feature is broken; it only shows that the clipboard had not changed before the polling interval ended. A second observation with sequence numbers and timestamps is needed before we alter the capture path.
+---
+[013]
+Right. The tiny opening acknowledgement should stay attached to the meaningful explanation that follows, ideally ending near the first useful colon: that gives synthesis enough audio to establish runway without turning a four-character sentence into its own request.
+---
+[014]
+Exactly. We can preserve the public interface while replacing the implementation underneath it, which lets the tray menu, hotkey handler, and tests continue to use one stable contract. The migration should therefore be almost invisible to callers.
+---
+[015]
+Maybe. The log suggests a timing problem, but it does not yet prove whether the delay occurs during synthesis, queueing, or device playback. Adding one timestamp at each boundary will settle that question without introducing another layer of state.
+---
+[016]
+Good. The refactor now has a clear boundary: input code obtains prepared text, the speech pipeline decides how to divide it, a backend generates PCM data, and the player owns buffering plus device timing. Each part can be tested without constructing the others.
+---
+[017]
+Agreed. A startup chunk should be long enough to carry a complete thought, but still short enough to synthesize quickly. Later chunks can expand as buffered audio accumulates, provided that none crosses the fixed safety ceiling or discards punctuation.
+---
+[018]
+Understood. I will keep the diagnostic event compact and structured so it can feed both the ordinary log and the visual debug panel. That avoids formatting the same information twice and ensures every backend reports comparable measurements.
+---
+[019]
+Correct. The colon is much closer to the startup target than the period after the one-word response, so it is the natural place to split: the listener hears a coherent setup, and generation begins without waiting for the entire paragraph.
+---
+[020]
+Sure. We can test this against prose, dialogue, technical notes, copied lists, OCR output, and deliberately unpunctuated text. The important part is measuring the actual boundaries rather than trusting a few hand-picked examples that happen to look good.
+---
+[021]
+“Can the service start without the optional model?” the tester asked. “Yes, but only the system voice will be available until the model finishes downloading,” the developer replied. The application should explain that state instead of presenting an empty voice menu.
+---
+[022]
+The prompt said, “Select the region that contains the paragraph, then release the mouse button.” A moment later the clipboard changed, OCR returned the recognized text, and SelectSpeak began reading it without requiring another shortcut.
+---
+[023]
+Why did playback stop after the second segment? The cancellation token belonged to an earlier request, but a late callback was still allowed to close the shared stream. Moving stream ownership into the current session prevents that race.
+---
+[024]
+Is the chunk map calculated once or rebuilt for every synthesis call? It should be calculated once: punctuation positions are properties of the prepared text, while the desired size changes on demand with the amount of audio already buffered.
+---
+[025]
+“Do not split here,” the example warned, “because the comma belongs to a short quotation.” The next clause provides enough context to sound natural, and the following period remains comfortably inside the two-hundred-character safety window.
+---
+[026]
+What happens when there is no punctuation at all for a long stretch of copied text? The algorithm may use whitespace near the target in that one case, because waiting indefinitely for a sentence boundary would create an unreasonably large synthesis request.
+---
+[027]
+The reviewer asked whether the entry point was installed from the package metadata or invoked from a source checkout. Both paths should resolve the same runtime assets, even though their files live at different depths in the repository.
+---
+[028]
+“Try the exact paragraph from the log,” she suggested. The reproduced chunks immediately showed a comma being ignored under healthy runway, which exposed the real defect: buffer pressure was incorrectly deciding whether punctuation existed.
+---
+[029]
+Could OCR return the same text that was already on the clipboard? Yes, so content comparison alone is insufficient. The Windows clipboard sequence number lets the program detect a new write even when the recognized characters happen to be identical.
+---
+[030]
+The message ended with a practical question: “Can we make this smaller without losing the behavior people rely on?” The answer was to cache structural facts once, keep live timing decisions local, and remove flags that duplicated the same policy.
+---
+[031]
+There are three useful measurements: synthesis time, generated audio duration, and playback runway. Together they reveal whether the generator is keeping ahead of the device, whether chunks are too ambitious, and whether a pause came from document structure or starvation.
+---
+[032]
+The migration has one hard requirement: existing keyboard shortcuts must continue working. It also has two softer goals: reduce native packaging complexity, and make failures visible in ordinary logs without requiring a debugger.
+---
+[033]
+The cache contains immutable facts about the text: sentence marks, clause marks, commas, and their absolute offsets. The controller contributes one changing value: the target length derived from current playback runway.
+---
+[034]
+The release checklist is straightforward: build both native targets, run the Python suite, launch from the installed entry point, and verify a real capture. If all four steps pass, the artifact is ready for a longer listening test.
+---
+[035]
+The debug panel uses a compact sequence: captured, prepared, chunk ready, chunk playing, and completed. Each event carries only the fields it owns, which keeps producers independent and makes missing transitions immediately obvious.
+---
+[036]
+The fallback order is intentional: prefer punctuation nearest the requested size, accept the end of the current structural line, and use whitespace only when the safe window contains no usable punctuation. A hard character cut is the final emergency case.
+---
+[037]
+For OCR capture, the states are equally small: idle, waiting for selection, waiting for clipboard, and finished. Cancellation can return any active state to idle, while an unrelated clipboard update simply keeps the wait active.
+---
+[038]
+The configuration stores seconds as floating-point values: a short structural pause, a clipboard timeout, and an optional startup delay. Validation rejects negative values, because silently converting them would hide a typing error.
+---
+[039]
+The native adapter exports four operations: create, speak, cancel, and destroy. Python wraps those calls in one object, translates native failures into ordinary exceptions, and ensures destruction happens exactly once even during shutdown.
+---
+[040]
+One principle guides the package layout: modules that change for the same reason should live together. Input capture belongs under input, speech generation belongs under speech, and window or tray behavior belongs under the user-interface package.
+---
+[041]
+Version 2.3.1 fixed the queue race, reduced startup work by 18 percent, and added a 200-character chunk ceiling. Those numbers are useful in the release note, but the tests should assert behavior rather than depending on a particular benchmark machine.
+---
+[042]
+The sample path C:\Users\Example\Documents\SelectSpeak\settings.json should be spoken as settings.json after normalization. Likewise, /opt/selectspeak/runtime/models/voice.onnx should become voice.onnx instead of forcing the listener through every directory name.
+---
+[043]
+Dr. Rivera reviewed the trace at 9:30 a.m. and found that event 4 arrived before event 3. The identifiers were monotonically assigned, but callbacks from two generations had interleaved; filtering by active generation restored the expected order.
+---
+[044]
+The model produced 48,000 samples at 24,000 hertz, representing exactly two seconds of mono audio. Converting to the device format doubled the byte count but did not alter duration, which is why runway should be computed from frames rather than raw bytes.
+---
+[045]
+In build 1047, initialization took 0.42 seconds, first synthesis took 0.31 seconds, and playback began at 0.79 seconds. The next build should compare the same milestones so improvements are visible and regressions cannot hide in an overall average.
+---
+[046]
+The file adapter.py exposes VoiceAdapter, AdapterError, and find_runtime_library. Only VoiceAdapter belongs in the speech backend’s public surface; discovery and error translation are implementation details that tests can reach through observable behavior.
+---
+[047]
+At 15 percent buffer occupancy the controller requests a modest chunk, at 50 percent it can request more, and above 80 percent it should remain under the readability ceiling. Percentages alone are not enough unless the buffer duration is also known.
+---
+[048]
+The report referenced issue #318, pull request #327, and commit a91b7c2. Those identifiers help a developer locate history, but spoken output should still form a coherent explanation for someone who never sees the screen.
+---
+[049]
+The API returned HTTP 202 because processing continued asynchronously. A later status request returned HTTP 200 with the recognized text, while a malformed image correctly produced HTTP 400 and a short explanation of the invalid format.
+---
+[050]
+Python 3.13 loads the package from src/selectspeak, pytest discovers 81 checks, and Ruff validates imports plus style. The runtime result matters most: Alt+D opens the selection overlay, waits for OCR, and reads the newly captured text.
+---
+[051]
+This intentionally unpunctuated passage keeps adding ordinary words so the chunker has no grammatical boundary to select and must instead choose whitespace near each requested size while respecting the absolute safety limit throughout the entire generated selection
+---
+[052]
+Several independent observations appear in this block without commas periods colons or question marks and the only available divisions occur between words which makes it useful for checking that the emergency fallback neither loses characters nor creates oversized requests
+---
+[053]
+An OCR engine may flatten a table into one continuous stream of labels values headings and descriptions leaving no punctuation for a surprisingly long distance so a robust reader needs a predictable whitespace policy even when the source structure has disappeared
+---
+[054]
+The following words simulate a transcript produced by live captioning where speakers continue for a long time without terminal marks and the system receives a large clipboard update that still needs to begin playing promptly and preserve every recognized word
+---
+[055]
+Long product names serial identifiers timestamps and status labels can arrive as plain text with spaces but no useful grammar therefore this block verifies that target based splitting remains stable and that the last short tail is the only acceptable tiny remainder
+---
+[056]
+Sometimes copied source code comments lose their slashes and punctuation during cleanup leaving a sentence shaped sequence with only whitespace boundaries so the speech layer must stay bounded without pretending that an arbitrary word break represents a structural pause
+---
+[057]
+This sample repeats neither phrases nor tokens deliberately because realistic prose varies word length and a fallback that counts only words could drift far from its target when several unusually long technical identifiers appear close together in the same region
+---
+[058]
+Accessibility tools often receive text from applications with incomplete semantic markup and no sentence punctuation which means the safe fallback is part of normal operation rather than merely an obscure error path that can remain untested until a user encounters it
+---
+[059]
+The buffer controller requests changing character counts as playback continues and this unpunctuated material makes those requested sizes visible because no nearby comma or sentence ending can override them before the hard maximum is reached
+---
+[060]
+End to end preservation is important for every chunk even when there are no marks to guide selection since dropping one word or repeating a boundary word would change the meaning and might be difficult to notice during casual listening
+---
+[061]
+The first synthesis request should remain compact, because playback cannot begin until it finishes, but compact does not mean arbitrary: a colon near the target provides a coherent setup, followed by a larger explanation that can be generated while earlier audio is already playing.
+---
+[062]
+Moving the native components exposed a fragile assumption, namely that a fixed number of parent directories always reached the repository root, so the replacement uses one package-level resolver: installed layouts and source layouts now share a direct, testable rule.
+---
+[063]
+The clipboard watcher records the sequence before rebroadcasting the shortcut, ignores the synthetic key event when it returns through the hook, and waits for a later sequence: only then does it read, normalize, and submit the recognized selection for speech.
+---
+[064]
+A healthy queue permits a larger request, while an almost empty queue calls for less work, yet neither condition changes the grammar already present in the text: commas, colons, sentence endings, and line boundaries remain available under every timing state.
+---
+[065]
+The package has a deliberately narrow top level, containing application assembly, configuration, logging setup, and runtime paths, while concrete mechanisms live in focused categories: input owns capture, speech owns synthesis, and UI owns presentation.
+---
+[066]
+Testing only the final list of strings would miss an offset regression, so each example also checks reconstruction against the prepared source: every spoken character must appear once, in order, with only inter-chunk whitespace normalized for comparison.
+---
+[067]
+The controller predicts how much text can be synthesized before playback consumes the current buffer, applies a conservative safety factor, and then consults the cached map: timing proposes a size, but punctuation chooses the exact boundary.
+---
+[068]
+An early implementation rescanned the remaining paragraph for periods, then rescanned for colons, and sometimes scanned again for commas; the simpler implementation performs one pass up front: later requests use binary search over immutable offsets.
+---
+[069]
+When the safe window contains several choices, distance to the live target is the only ranking rule: a punctuation mark just before the target can beat one farther after it, and a nearby colon can beat a remote sentence ending without special-case flags.
+---
+[070]
+Whitespace is not grammar, so it should never win merely because buffer runway is comfortable or a comma flag happens to be disabled; it becomes eligible only when no usable punctuation exists inside the fixed window: this keeps audible phrasing consistent.
+---
+[071]
+One short sentence. Another short sentence. A third short sentence. The fourth one adds a little more context. The fifth completes the explanation. The sixth confirms that a cluster of periods does not force a tiny startup request.
+---
+[072]
+Ready. Set. Begin. The worker opens the stream. The adapter emits its first frame. Playback starts immediately. More audio arrives in the background. The final callback closes the active request without affecting the next one.
+---
+[073]
+First observation. Second observation. Third observation. Fourth observation. Fifth observation. Sixth observation. Seventh observation. Eighth observation. The accumulated text should still use chunks near the requested sizes.
+---
+[074]
+Input is captured. Text is normalized. Boundaries are indexed. A target is calculated. The nearest mark is selected. Audio is synthesized. Frames are buffered. Playback advances. Diagnostics preserve the complete sequence.
+---
+[075]
+The window opens. A region is selected. OCR starts. Text reaches the clipboard. The sequence number changes. The watcher reads it. Speech begins. The user can cancel at any point. Every transition remains independently testable.
+---
+[076]
+Small facts can accumulate quickly. Each one is valid. None should dominate the algorithm. The startup target still matters. The hard ceiling still applies. Punctuation remains cached. Whitespace remains a fallback. The result should sound steady.
+---
+[077]
+The build passed. The unit tests passed. The smoke test passed. The installed entry point launched. The hotkey registered. The OCR overlay appeared. Captured text was spoken. Shutdown released the hook. No background process remained.
+---
+[078]
+One service owns capture. One service owns playback. One object owns the active generation. One map owns punctuation offsets. One controller owns sizing. The boundaries are direct. The tests describe behavior. The logs show timing.
+---
+[079]
+This is the first note. This is the second note. This is the third note. This is the fourth note. This is the fifth note. This is the sixth note. This is the seventh note. Together they make a realistic paragraph of short statements.
+---
+[080]
+The queue starts empty. The first chunk is generated. Playback creates runway. The next chunk grows. More audio is buffered. A later chunk reaches the ceiling. The final tail may be shorter. Completion waits for the device to drain.
+---
+[081]
+## Validation summary
+- Native input bridge builds successfully
+- Natural Voice adapter resolves its packaged library
+- Supertonic streams through the shared player
+- OCR capture waits for a new clipboard sequence
+- The complete Python test suite passes
+---
+[082]
+Tasks:
+1. Capture the selected region
+2. Wait for optical character recognition
+3. Normalize copied structure and paths
+4. Cache every usable punctuation offset
+5. Generate chunks according to live runway
+6. Play all queued audio in order
+---
+[083]
+Release notes
+The startup path now uses the installed package location.
+The adaptive chunker no longer disables commas under healthy runway.
+The debug panel reports requested and actual character counts.
+The OCR shortcut can be cancelled safely.
+---
+[084]
+Observed behavior:
+First request starts quickly
+Second request uses available playback runway
+Later requests remain below the hard ceiling
+Punctuation wins over nearby whitespace
+The final tail is delivered without duplication
+---
+[085]
+- Open the application from run.vbs
+- Confirm the tray icon appears
+- Press the ordinary selection shortcut
+- Press Alt+D for OCR capture
+- Inspect chunk boundaries in the debug panel
+- Exit and confirm native hooks are released
+---
+[086]
+### Architecture
+Input capture converts external events into prepared text.
+Speech planning converts prepared text into bounded segments.
+Backends convert segments into audio frames.
+Playback converts queued frames into sound and word highlights.
+---
+[087]
+Diagnostics
+capture.source: clipboard
+speech.backend: natural
+chunk.target: 100
+chunk.actual: 97
+playback.runway: 4.8 seconds
+completion.status: drained
+The structured fields should remain understandable when read as prose.
+---
+[088]
+Checklist:
+- Text is preserved from start to finish
+- The first prose chunk is not a tiny acknowledgement
+- No chunk exceeds two hundred characters
+- Non-final chunks prefer punctuation
+- Whitespace is used only as a bounded fallback
+---
+[089]
+## Troubleshooting
+If the shortcut does not respond, verify that the native input DLL exists.
+If OCR returns nothing, check whether the clipboard sequence changed.
+If playback pauses, compare synthesis duration with buffered runway.
+If launch fails, inspect runtime path resolution.
+---
+[090]
+Results:
+Windows capture passed
+Clipboard polling passed
+Text normalization passed
+Chunk preservation passed
+Streaming playback passed
+Cancellation passed
+The remaining work is a subjective listening pass across varied voices and speaking rates.
+---
+[091]
+The OCR result contained “smart quotes,” an em dash—plus a parenthetical note (captured from the margin)—before returning to ordinary prose. Unicode punctuation should remain attached to spoken text, while recognized commas and periods still provide reliable chunk boundaries.
+---
+[092]
+Text Grab’s overlay recognized café, naïve, façade, and Löfgren correctly; a second engine returned cafe, naive, facade, and Lofgren. Both versions must chunk identically by position even though their byte representations and displayed accents differ.
+---
+[093]
+The copied paragraph included an ellipsis... then continued after several spaces. It also contained an exclamation! Could adjacent terminal marks confuse the map? They should be stored as one boundary at the end of the punctuation run.
+---
+[094]
+An OCR artifact inserted the replacement character � beside one word, embedded an object marker ￼ beside another, and split a sentence across irregular spacing. Preparation removes the markers, collapses excess whitespace, and keeps the remaining characters in order.
+---
+[095]
+The quotation ended with punctuation.” The next sentence began normally, although OCR had converted one apostrophe into a curly mark. Boundary detection must include the closing quote so the following chunk never starts with a stranded quotation character.
+---
+[096]
+Mixed language text can include español, français, Deutsch, and 日本語 in the same selection. The chunker counts Python characters rather than encoded bytes, so nearby punctuation remains stable and no multibyte character is cut in half.
+---
+[097]
+The source used dashes — like this — instead of commas for several asides, then finally reached a colon: because dashes are not cached boundaries, the colon should win if it lies inside the safety window; otherwise whitespace is the bounded fallback.
+---
+[098]
+OCR sometimes reads “1” as “l”, merges rn into m, or inserts | between nearby columns. Those recognition errors belong to the OCR layer, not chunk selection; the speech pipeline must preserve the received text and choose boundaries without attempting speculative correction.
+---
+[099]
+The final stress example combines a tiny opener. Yes. Then a quotation: “the cached map should remain immutable,” followed by a question? It continues with enough ordinary prose to require several requests, and concludes with a clear terminal sentence.
+---
+[100]
+This last block restates the contract in plain language: prepare the selection once, index its punctuation once, calculate each desired size from live playback runway, choose the closest cached boundary inside two hundred characters, and use whitespace only when no usable mark is available.

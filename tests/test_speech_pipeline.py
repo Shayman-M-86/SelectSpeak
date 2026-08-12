@@ -1,11 +1,7 @@
-from selectspeak.speech.pipeline import (
-    MIN_CHUNK_CHARACTERS,
-    AdaptiveSpeechPipeline,
-    GenerationStatistics,
-)
+from selectspeak.speech.pipeline import AdaptiveSpeechPipeline, GenerationStatistics
 
 
-def test_pipeline_uses_the_first_sentence_then_adapts_to_runway() -> None:
+def test_pipeline_uses_a_meaningful_first_phrase_then_adapts_to_runway() -> None:
     text = (
         "Hi there. This next sentence is extremely long, containing several "
         "clauses, multiple explanations, and enough material to exercise the "
@@ -16,16 +12,15 @@ def test_pipeline_uses_the_first_sentence_then_adapts_to_runway() -> None:
     first = pipeline.choose_next()
     pressured = pipeline.choose_next(playback_runway=0.5)
 
-    assert first is not None and first.segment.text == "Hi there."
+    assert first is not None
+    assert 80 <= len(first.segment.text) <= 135
     assert pressured is not None
-    assert pressured.allow_comma
+    assert pressured.segment.text[-1] in ".!?;:,"
     assert pressured.target_characters < 100
 
 
-def test_pipeline_ramps_after_a_very_short_first_sentence() -> None:
-    text = (
-        "First. Second sentence. Third sentence. Fourth sentence. Fifth sentence."
-    )
+def test_pipeline_combines_tiny_opening_sentences() -> None:
+    text = "First. Second sentence. Third sentence. Fourth sentence. Fifth sentence."
     statistics = GenerationStatistics(
         synthesis_fixed_seconds=0.1,
         synthesis_seconds_per_character=0.003,
@@ -36,13 +31,10 @@ def test_pipeline_ramps_after_a_very_short_first_sentence() -> None:
     second = pipeline.choose_next(playback_runway=5.0)
     later = pipeline.choose_next(playback_runway=5.0)
 
-    assert first is not None and first.segment.text == "First."
-    assert second is not None
-    assert len(second.segment.text) <= len(first.segment.text) * 2
-    assert later is not None
-    assert later.target_characters > MIN_CHUNK_CHARACTERS
-    assert later.segment.text.endswith(".")
-    assert later.segment.text == "sentence. Third sentence."
+    assert first is not None
+    assert first.segment.text == text
+    assert second is None
+    assert later is None
 
 
 def test_pipeline_shares_generation_observations_across_requests() -> None:
@@ -73,7 +65,7 @@ def test_chunk_decision_includes_the_predicted_synthesis_time() -> None:
     )
 
 
-def test_second_chunk_cannot_be_more_than_twice_the_first_chunk() -> None:
+def test_second_chunk_stays_within_readability_ceiling() -> None:
     text = (
         "The same underrun occurred between Löfgren pattern. "
         "and the second paragraph, creating approximately 2.3 seconds of audible "
@@ -86,17 +78,15 @@ def test_second_chunk_cannot_be_more_than_twice_the_first_chunk() -> None:
     third = pipeline.choose_next(playback_runway=5.0)
 
     assert first is not None
-    assert first.segment.text == (
-        "The same underrun occurred between Löfgren pattern."
-    )
+    assert first.segment.text.endswith("paragraph,")
     assert second is not None
-    assert second.segment.text.endswith("audible silence,")
-    assert len(second.segment.text) <= len(first.segment.text) * 2
+    assert len(second.segment.text) <= 200
+    assert second.segment.text.startswith("creating approximately 2.3")
     assert third is not None
-    assert third.segment.text.startswith("although you did not mark that")
+    assert third.segment.text.startswith("although you did not mark")
 
 
-def test_later_chunks_can_grow_beyond_the_startup_ratio() -> None:
+def test_later_chunks_follow_the_runway_model() -> None:
     text = (
         "A short opening sentence. "
         "A second sentence with enough words, and another clause to force an "
@@ -115,11 +105,28 @@ def test_later_chunks_can_grow_beyond_the_startup_ratio() -> None:
     third = pipeline.choose_next(playback_runway=8.0)
 
     assert first is not None and second is not None and third is not None
-    assert len(second.segment.text) <= len(first.segment.text) * 2
-    assert len(third.segment.text) > len(second.segment.text) * 2
+    assert len(second.segment.text) <= 200
+    assert third.target_characters >= second.target_characters
 
 
-def test_pipeline_never_groups_more_than_two_complete_sentences() -> None:
+def test_adaptive_chunks_have_a_readability_ceiling() -> None:
+    text = " ".join(["lengthy technical explanation"] * 40)
+    statistics = GenerationStatistics(
+        synthesis_fixed_seconds=0.0,
+        synthesis_seconds_per_character=0.001,
+        observations=10,
+    )
+    pipeline = AdaptiveSpeechPipeline(text, statistics)
+
+    chunks = []
+    while decision := pipeline.choose_next(playback_runway=30.0):
+        chunks.append(decision.segment.text)
+
+    assert chunks
+    assert max(map(len, chunks)) <= 200
+
+
+def test_pipeline_does_not_force_tiny_chunks_for_short_sentences() -> None:
     text = (
         "A sufficiently long opening sentence establishes initial runway. "
         "Second sentence is ready. Third sentence is ready. "
@@ -136,7 +143,34 @@ def test_pipeline_never_groups_more_than_two_complete_sentences() -> None:
         chunks.append(decision.segment.text)
 
     assert chunks[0] == (
-        "A sufficiently long opening sentence establishes initial runway."
+        "A sufficiently long opening sentence establishes initial runway. "
+        "Second sentence is ready."
     )
-    assert all(chunk.count(".") <= 2 for chunk in chunks)
-    assert chunks[1] == "Second sentence is ready. Third sentence is ready."
+
+
+def test_logged_growth_limiter_regression_uses_balanced_punctuation() -> None:
+    text = (
+        'The first-sentence rule accepts "Yes." unconditionally. Then the growth '
+        "limiter treats 4 characters as the baseline and constrains the next "
+        "request to 8, so the algorithm needs five synthesis calls to reach the "
+        "colon. I’m replacing that with one simpler startup rule: choose the "
+        "meaningful sentence/clause boundary closest to the startup target, "
+        "ignoring trivially short boundaries when more text follows."
+    )
+    pipeline = AdaptiveSpeechPipeline(text)
+    chunks: list[str] = []
+    targets: list[int] = []
+
+    for runway in (0.0, 2.0, 4.5, 8.0):
+        decision = pipeline.choose_next(runway)
+        assert decision is not None
+        chunks.append(decision.segment.text)
+        targets.append(decision.target_characters)
+        pipeline.record_generation(
+            decision.segment, 0.15 + len(decision.segment.text) * 0.0035
+        )
+
+    assert targets == [100, 120, 140, 140]
+    assert [len(chunk) for chunk in chunks] == [55, 97, 113, 137]
+    assert chunks[1].endswith(",")
+    assert chunks[2].endswith(":")

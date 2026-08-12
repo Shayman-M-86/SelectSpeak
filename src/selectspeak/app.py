@@ -92,10 +92,9 @@ class SelectSpeakApp:
         self._clipboard = ClipboardService()
         self._ocr_capture = OcrCaptureHotkey(
             self._config.ocr_hotkey,
-            self._config.ocr_trigger_hotkey,
-            self._clipboard.read_text,
             self._on_ocr_text,
-            timeout_seconds=self._config.ocr_capture_timeout_seconds,
+            dll_path=self._config.native_input_dll,
+            language=self._config.ocr_language,
         )
         self._speaker = create_speaker(
             self._config, self._on_word, self._on_speech_debug
@@ -564,13 +563,13 @@ class SelectSpeakApp:
             lambda event=event: self._player.update_speech_debug(event)
         )
 
-    def _on_ocr_text(self, clipboard_text: str) -> None:
-        text = prepare_for_speech(clipboard_text)
+    def _on_ocr_text(self, captured_text: str) -> None:
+        text = prepare_for_speech(captured_text)
         log_event(
             logger,
             logging.INFO,
             "ocr_capture.text_prepared",
-            raw_length=len(clipboard_text),
+            raw_length=len(captured_text),
             cleaned_length=len(text),
             cleaned_preview=text_preview(text),
         )

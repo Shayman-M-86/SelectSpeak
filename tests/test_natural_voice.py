@@ -4,12 +4,14 @@ from typing import Any
 import pytest
 
 from selectspeak.config import AppConfig
+from selectspeak.speech.backends import natural as natural_backend
 from selectspeak.speech.backends.natural import (
     NaturalVoice,
     NaturalVoiceEngine,
     NaturalVoiceError,
     NaturalVoiceSpeaker,
     find_natural_voice_dll,
+    find_pinned_natural_voices,
 )
 from selectspeak.speech.pipeline import GenerationStatistics
 from selectspeak.speech.playback import PlaybackController
@@ -38,6 +40,106 @@ def test_ordered_voices_keeps_fallbacks_after_preferred_matches() -> None:
         voices[0],
         voices[2],
     ]
+
+
+def test_find_pinned_natural_voices_reads_extracted_packages(
+    tmp_path: Path,
+) -> None:
+    package = (
+        tmp_path
+        / "versioned-packages"
+        / "MicrosoftWindows.Voice.en-US.Aria.2_1.0.1.0_x64"
+    )
+    package.mkdir(parents=True)
+    (package / "Tokens.xml").write_text(
+        """<?xml version="1.0"?>
+<Tokens><Category><Token name="Aria">
+<String name="" value="Microsoft Aria (Natural) - English (United States)" />
+</Token></Category></Tokens>
+""",
+        encoding="utf-8",
+    )
+    ignored = tmp_path / "not-a-voice"
+    ignored.mkdir()
+
+    voices = find_pinned_natural_voices(tmp_path)
+
+    assert len(voices) == 1
+    assert voices[0].package_path == str(package.resolve())
+    assert voices[0].name == (
+        "Microsoft Aria (Natural) - English (United States)"
+    )
+    assert voices[0].source == "pinned"
+
+
+def test_engine_uses_pinned_voice_without_opening_installed_packages(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    events: list[tuple[str, tuple[Any, ...]]] = []
+
+    class FakeFunction:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def __call__(self, *args: Any) -> int | None:
+            events.append((self.name, args))
+            if self.name == "nv_initialize":
+                return 0
+            if self.name == "nv_shutdown":
+                return None
+            return 0
+
+    class FakeDll:
+        def __init__(self) -> None:
+            for name in (
+                "nv_list_voices",
+                "nv_initialize",
+                "nv_set_audio_callback",
+                "nv_set_word_callback",
+                "nv_speak",
+                "nv_stop",
+                "nv_shutdown",
+                "nv_last_error",
+            ):
+                setattr(self, name, FakeFunction(name))
+
+    class FakeDirectory:
+        def close(self) -> None:
+            pass
+
+    pinned = NaturalVoice(
+        str(tmp_path / "Aria-1.0.1"),
+        "Microsoft Aria",
+        "en-US",
+        "Aria",
+        "pinned",
+    )
+    fake_dll = FakeDll()
+    monkeypatch.setattr(
+        natural_backend,
+        "find_natural_voice_dll",
+        lambda _configured: tmp_path / "bridge.dll",
+    )
+    monkeypatch.setattr(
+        natural_backend, "find_pinned_natural_voices", lambda: [pinned]
+    )
+    monkeypatch.setattr(natural_backend.ctypes, "CDLL", lambda _path: fake_dll)
+    monkeypatch.setattr(
+        natural_backend.os,
+        "add_dll_directory",
+        lambda _path: FakeDirectory(),
+        raising=False,
+    )
+
+    engine = NaturalVoiceEngine(AppConfig().speech, lambda _data: None, lambda *_: None)
+    engine.close()
+
+    assert engine.voice == pinned
+    assert [name for name, _args in events if name == "nv_initialize"] == [
+        "nv_initialize"
+    ]
+    assert not any(name == "nv_list_voices" for name, _args in events)
 
 
 def test_find_natural_voice_dll_accepts_an_explicit_path(tmp_path: Path) -> None:
@@ -133,7 +235,7 @@ def test_natural_voice_uses_the_shared_persistent_stream() -> None:
 
     speaker._speak_request(request)
 
-    assert len(engine.spoken) > 2
+    assert len(engine.spoken) == 2
     assert [event for event, _ in player.events].count("start") == 1
     assert [event for event, _ in player.events].count("finish") == 1
     assert [value for event, value in player.events if event == "silence"] == [

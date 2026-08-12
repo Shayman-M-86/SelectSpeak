@@ -3,21 +3,25 @@ from __future__ import annotations
 import ctypes
 import logging
 import threading
-import time
 from collections.abc import Callable
-from ctypes import wintypes
+from typing import Any
 
 from ..logging_setup import log_event, log_exception, text_preview
 from .keymap import to_windows_hotkey
+from .native import find_native_input_dll
 
 logger = logging.getLogger(__name__)
 
-WM_HOTKEY = 0x0312
-WM_QUIT = 0x0012
-MOD_NOREPEAT = 0x4000
-KEYEVENTF_KEYUP = 0x0002
-OCR_HOTKEY_ID = 0x5344
-VK_MENU = 0x12
+OCR_COMPLETED = 1
+OCR_CANCELLED = 2
+OCR_FAILED = 3
+
+_OCR_CALLBACK = ctypes.CFUNCTYPE(
+    None,
+    ctypes.c_wchar_p,
+    ctypes.c_uint,
+    ctypes.c_void_p,
+)
 
 
 class OcrCaptureError(RuntimeError):
@@ -25,189 +29,129 @@ class OcrCaptureError(RuntimeError):
 
 
 class OcrCaptureHotkey:
-    """Launch an OCR selector and read its next clipboard update aloud."""
+    """Own the native frozen-screen selector and local Windows OCR bridge."""
 
     def __init__(
         self,
         hotkey: str,
-        trigger_hotkey: str,
-        clipboard_reader: Callable[[], str | None],
         on_text: Callable[[str], None],
         *,
-        timeout_seconds: float = 30.0,
-        poll_seconds: float = 0.05,
+        dll_path: str = "",
+        language: str = "",
     ) -> None:
         self.hotkey = hotkey
-        self.trigger_hotkey = trigger_hotkey
-        self._clipboard_reader = clipboard_reader
+        self.language = language
         self._on_text = on_text
-        self._timeout_seconds = timeout_seconds
-        self._poll_seconds = poll_seconds
-        self._ready = threading.Event()
-        self._stop = threading.Event()
-        self._generation_lock = threading.Lock()
-        self._capture_generation = 0
-        self._thread_id = 0
-        self._startup_error: str | None = None
-        self._thread: threading.Thread | None = None
+        self._dll = ctypes.CDLL(str(find_native_input_dll(dll_path)))
+        self._configure_api()
+        self._callback = _OCR_CALLBACK(self._on_result)
+        self._started = False
+
+    @property
+    def active(self) -> bool:
+        return bool(self._dll.ocr_is_active()) if self._started else False
 
     def start(self) -> None:
-        if self._thread is not None:
+        if self._started:
             return
-        self._thread = threading.Thread(
-            target=self._run,
-            daemon=True,
-            name="OcrCaptureHotkey",
-        )
-        self._thread.start()
-        if not self._ready.wait(timeout=5.0):
-            raise OcrCaptureError("OCR hotkey listener did not start")
-        if self._startup_error:
-            raise OcrCaptureError(self._startup_error)
-
-    def stop(self) -> None:
-        self._stop.set()
-        if self._thread_id:
-            ctypes.windll.user32.PostThreadMessageW(
-                self._thread_id, WM_QUIT, 0, 0
-            )
-        if self._thread is not None:
-            self._thread.join(timeout=2.0)
-            self._thread = None
-
-    def _run(self) -> None:
-        user32 = ctypes.windll.user32
-        self._thread_id = ctypes.windll.kernel32.GetCurrentThreadId()
         modifiers, virtual_key = to_windows_hotkey(self.hotkey)
-        if not user32.RegisterHotKey(
-            None,
-            OCR_HOTKEY_ID,
-            modifiers | MOD_NOREPEAT,
+        if self._dll.ocr_start(
+            modifiers,
             virtual_key,
+            self.language or None,
+            self._callback,
+            None,
         ):
-            self._startup_error = (
-                f"Could not register OCR hotkey {self.hotkey.upper()} "
-                f"(Windows error {ctypes.get_last_error()})"
-            )
-            self._ready.set()
-            return
+            raise OcrCaptureError(self._last_error())
+        self._started = True
         log_event(
             logger,
             logging.INFO,
             "ocr_hotkey.registered",
             hotkey=self.hotkey,
-            trigger_hotkey=self.trigger_hotkey,
+            language=self.language or "automatic",
+            implementation="native_windows_ocr",
         )
-        self._ready.set()
-        message = wintypes.MSG()
-        try:
-            while not self._stop.is_set() and user32.GetMessageW(
-                ctypes.byref(message), None, 0, 0
-            ) > 0:
-                if message.message == WM_HOTKEY and message.wParam == OCR_HOTKEY_ID:
-                    with self._generation_lock:
-                        self._capture_generation += 1
-                        generation = self._capture_generation
-                    threading.Thread(
-                        target=self._capture,
-                        args=(generation,),
-                        daemon=True,
-                        name="OcrClipboardCapture",
-                    ).start()
-        finally:
-            user32.UnregisterHotKey(None, OCR_HOTKEY_ID)
+
+    def cancel(self) -> None:
+        if self._started:
+            self._dll.ocr_cancel()
+
+    def stop(self) -> None:
+        if self._started:
+            self._dll.ocr_stop()
+            self._started = False
             log_event(logger, logging.INFO, "ocr_hotkey.unregistered")
 
-    def _capture(self, generation: int) -> None:
-        try:
-            user32 = ctypes.windll.user32
-            sequence = int(user32.GetClipboardSequenceNumber())
-            self._wait_for_hotkey_release()
-            self._send_hotkey(self.trigger_hotkey)
+    def _configure_api(self) -> None:
+        self._dll.ocr_start.argtypes = [
+            ctypes.c_uint,
+            ctypes.c_uint,
+            ctypes.c_wchar_p,
+            _OCR_CALLBACK,
+            ctypes.c_void_p,
+        ]
+        self._dll.ocr_start.restype = ctypes.c_int
+        self._dll.ocr_cancel.argtypes = []
+        self._dll.ocr_cancel.restype = None
+        self._dll.ocr_is_active.argtypes = []
+        self._dll.ocr_is_active.restype = ctypes.c_int
+        self._dll.ocr_stop.argtypes = []
+        self._dll.ocr_stop.restype = None
+        self._dll.ocr_last_error.argtypes = [ctypes.c_char_p, ctypes.c_uint]
+        self._dll.ocr_last_error.restype = ctypes.c_uint
+
+    def _on_result(
+        self,
+        text: str | None,
+        status: int,
+        _context: Any,
+    ) -> None:
+        captured = text or ""
+        if status == OCR_CANCELLED:
+            log_event(logger, logging.INFO, "ocr_capture.cancelled")
+            return
+        if status == OCR_FAILED:
             log_event(
                 logger,
-                logging.INFO,
-                "ocr_capture.started",
-                clipboard_sequence=sequence,
-                trigger_hotkey=self.trigger_hotkey,
+                logging.ERROR,
+                "ocr_capture.failed",
+                error=self._last_error(),
             )
-            text = wait_for_clipboard_update(
-                sequence,
-                lambda: int(user32.GetClipboardSequenceNumber()),
-                self._clipboard_reader,
-                timeout_seconds=self._timeout_seconds,
-                poll_seconds=self._poll_seconds,
-                cancelled=lambda: (
-                    self._stop.is_set() or not self._is_current(generation)
-                ),
+            return
+        if status != OCR_COMPLETED:
+            log_event(
+                logger,
+                logging.ERROR,
+                "ocr_capture.failed",
+                error=f"Native OCR returned unknown status {status}",
             )
-            if text:
-                log_event(
-                    logger,
-                    logging.INFO,
-                    "ocr_capture.completed",
-                    text_length=len(text),
-                    text_preview=text_preview(text),
-                )
-                self._on_text(text)
-            elif not self._stop.is_set():
-                log_event(logger, logging.WARNING, "ocr_capture.timed_out")
+            return
+
+        log_event(
+            logger,
+            logging.INFO if captured.strip() else logging.WARNING,
+            "ocr_capture.completed",
+            text_length=len(captured),
+            text_preview=text_preview(captured),
+        )
+        if not captured.strip():
+            return
+        threading.Thread(
+            target=self._run_handler,
+            args=(captured,),
+            daemon=True,
+            name="NativeOcrResult",
+        ).start()
+
+    def _run_handler(self, text: str) -> None:
+        try:
+            self._on_text(text)
         except Exception:
-            log_exception(logger, "ocr_capture.failed")
+            log_exception(logger, "ocr_capture.handler.failed")
 
-    def _is_current(self, generation: int) -> bool:
-        with self._generation_lock:
-            return generation == self._capture_generation
-
-    def _wait_for_hotkey_release(self) -> None:
-        user32 = ctypes.windll.user32
-        _modifiers, virtual_key = to_windows_hotkey(self.hotkey)
-        deadline = time.monotonic() + 1.0
-        while time.monotonic() < deadline:
-            if not (
-                user32.GetAsyncKeyState(VK_MENU) & 0x8000
-                or user32.GetAsyncKeyState(virtual_key) & 0x8000
-            ):
-                return
-            time.sleep(0.01)
-
-    @staticmethod
-    def _send_hotkey(hotkey: str) -> None:
-        modifiers, virtual_key = to_windows_hotkey(hotkey)
-        keys: list[int] = []
-        if modifiers & 0x0008:
-            keys.append(0x5B)  # Left Windows key
-        if modifiers & 0x0002:
-            keys.append(0x11)  # Control
-        if modifiers & 0x0001:
-            keys.append(VK_MENU)
-        if modifiers & 0x0004:
-            keys.append(0x10)  # Shift
-        keys.append(virtual_key)
-        for key in keys:
-            ctypes.windll.user32.keybd_event(key, 0, 0, 0)
-        for key in reversed(keys):
-            ctypes.windll.user32.keybd_event(key, 0, KEYEVENTF_KEYUP, 0)
-
-
-def wait_for_clipboard_update(
-    initial_sequence: int,
-    sequence_reader: Callable[[], int],
-    text_reader: Callable[[], str | None],
-    *,
-    timeout_seconds: float,
-    poll_seconds: float,
-    cancelled: Callable[[], bool] = lambda: False,
-) -> str | None:
-    """Return text from the first usable clipboard update after activation."""
-    deadline = time.monotonic() + timeout_seconds
-    observed_sequence = initial_sequence
-    while time.monotonic() < deadline and not cancelled():
-        sequence = sequence_reader()
-        if sequence != observed_sequence:
-            observed_sequence = sequence
-            text = text_reader()
-            if text and text.strip():
-                return text
-        time.sleep(poll_seconds)
-    return None
+    def _last_error(self) -> str:
+        required = self._dll.ocr_last_error(None, 0)
+        buffer = ctypes.create_string_buffer(max(required, 1))
+        self._dll.ocr_last_error(buffer, len(buffer))
+        return buffer.value.decode("utf-8", errors="replace")

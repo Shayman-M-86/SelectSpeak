@@ -224,7 +224,7 @@ def test_speech_segments_bound_long_run_on_text() -> None:
     assert segments[-1].pause_after
 
 
-def test_adaptive_chunker_takes_a_short_first_sentence_immediately() -> None:
+def test_adaptive_chunker_combines_a_tiny_opener_with_the_next_thought() -> None:
     chunker = AdaptiveSpeechChunker(
         "Hi there. This next sentence is deliberately much longer than the first."
     )
@@ -232,37 +232,28 @@ def test_adaptive_chunker_takes_a_short_first_sentence_immediately() -> None:
     first = chunker.next_chunk(target_characters=100)
     second = chunker.next_chunk(target_characters=300)
 
-    assert first is not None and first.text == "Hi there."
-    assert second is not None
-    assert second.text.startswith("This next sentence")
+    assert first is not None
+    assert first.text == (
+        "Hi there. This next sentence is deliberately much longer than the first."
+    )
+    assert second is None
 
 
-def test_adaptive_chunker_uses_comma_only_under_pressure() -> None:
-    prefix = "Ready. "
+def test_adaptive_chunker_prefers_punctuation_regardless_of_runway() -> None:
+    prefix = "A sufficiently complete opening sentence establishes runway. "
     text = prefix + (
         "This next sentence is extremely long, containing several clauses, "
         "multiple explanations, and enough text to require an early split"
     )
-    pressured_chunker = AdaptiveSpeechChunker(text)
-    healthy_chunker = AdaptiveSpeechChunker(text)
-    pressured_chunker.next_chunk(target_characters=100)
-    healthy_chunker.next_chunk(target_characters=100)
+    chunker = AdaptiveSpeechChunker(text)
+    chunker.next_chunk(target_characters=100, hard_max_characters=200)
 
-    pressured = pressured_chunker.next_chunk(
+    chunk = chunker.next_chunk(
         target_characters=45,
         hard_max_characters=90,
-        allow_colon=True,
-        allow_comma=True,
-    )
-    healthy = healthy_chunker.next_chunk(
-        target_characters=45,
-        hard_max_characters=90,
-        allow_colon=False,
-        allow_comma=False,
     )
 
-    assert pressured is not None and pressured.text.endswith(",")
-    assert healthy is not None and not healthy.text.endswith(",")
+    assert chunk is not None and chunk.text.endswith(",")
 
 
 def test_adaptive_chunker_groups_later_complete_sentences() -> None:
@@ -273,30 +264,31 @@ def test_adaptive_chunker_groups_later_complete_sentences() -> None:
     first = chunker.next_chunk(target_characters=100)
     later = chunker.next_chunk(target_characters=25)
 
-    assert first is not None and first.text == "First sentence."
-    assert later is not None
-    assert later.text == "Second sentence. Third sentence."
+    assert first is not None
+    assert first.text == (
+        "First sentence. Second sentence. Third sentence. Fourth sentence."
+    )
+    assert later is None
 
 
-def test_adaptive_chunker_caps_later_chunks_at_two_sentences() -> None:
+def test_adaptive_chunker_does_not_force_a_tiny_two_sentence_start() -> None:
     chunker = AdaptiveSpeechChunker(
         "Opening sentence with enough words. Second sentence. Third sentence. "
         "Fourth sentence. Fifth sentence."
     )
 
-    first = chunker.next_chunk(target_characters=100, max_sentences=2)
-    second = chunker.next_chunk(target_characters=500, max_sentences=2)
-    third = chunker.next_chunk(target_characters=500, max_sentences=2)
+    first = chunker.next_chunk(target_characters=100, hard_max_characters=200)
+    second = chunker.next_chunk(target_characters=200, hard_max_characters=200)
 
     assert first is not None
-    assert first.text == "Opening sentence with enough words."
-    assert second is not None
-    assert second.text == "Second sentence. Third sentence."
-    assert third is not None
-    assert third.text == "Fourth sentence. Fifth sentence."
+    assert first.text == (
+        "Opening sentence with enough words. Second sentence. Third sentence. "
+        "Fourth sentence. Fifth sentence."
+    )
+    assert second is None
 
 
-def test_adaptive_chunker_does_not_chase_a_distant_sentence_boundary() -> None:
+def test_adaptive_chunker_uses_whitespace_without_safe_punctuation() -> None:
     chunker = AdaptiveSpeechChunker(
         "Ready. "
         "This sentence is intentionally very long and contains enough technical "
@@ -304,18 +296,18 @@ def test_adaptive_chunker_does_not_chase_a_distant_sentence_boundary() -> None:
         "sentence punctuation that would otherwise provide a convenient split "
         "before this deliberately distant ending."
     )
-    first = chunker.next_chunk(target_characters=100)
+    first = chunker.next_chunk(target_characters=100, hard_max_characters=200)
     second = chunker.next_chunk(
         target_characters=50,
-        hard_max_characters=500,
-        allow_colon=True,
-        allow_comma=False,
+        hard_max_characters=200,
     )
 
-    assert first is not None and first.text == "Ready."
+    assert first is not None
+    assert 90 <= len(first.text) <= 135
+    assert not first.pause_after
     assert second is not None
-    assert 50 <= len(second.text) <= 70
-    assert not second.pause_after
+    assert second.text.endswith(".")
+    assert second.pause_after
 
 
 def test_adaptive_chunker_keeps_logged_regression_chunks_near_target() -> None:
@@ -333,18 +325,63 @@ def test_adaptive_chunker_keeps_logged_regression_chunks_near_target() -> None:
     second = chunker.next_chunk(
         target_characters=30,
         hard_max_characters=60,
-        allow_colon=True,
-        allow_comma=True,
     )
     third = chunker.next_chunk(
         target_characters=51,
-        hard_max_characters=500,
-        allow_colon=True,
-        allow_comma=False,
+        hard_max_characters=200,
     )
 
-    assert first is not None and len(first.text) == 30
-    assert second is not None and len(second.text) == 34
+    assert first is not None and 90 <= len(first.text) <= 120
+    assert second is not None
     assert third is not None
     assert 46 <= len(third.text) <= 70
     assert not third.pause_after
+
+
+def test_first_chunk_stays_near_target_when_first_sentence_is_long() -> None:
+    text = prepare_for_speech(
+        "I’ll trace **Text Grab’s actual capture/OCR path** and compare it with "
+        "PowerToys Text Extractor, then I’ll reduce it to the smallest architecture "
+        "that makes sense for your Python TTS app. The main thing I want to "
+        "establish is whether you can call Windows’ OCR APIs directly, or whether "
+        "you’d be better off embedding a tiny native helper."
+    )
+    chunker = AdaptiveSpeechChunker(text)
+
+    first = chunker.next_chunk(target_characters=100, hard_max_characters=200)
+
+    assert first is not None
+    assert first.text.endswith("Extractor,")
+    assert 90 <= len(first.text) <= 135
+    assert not first.pause_after
+
+
+def test_first_chunk_prefers_nearby_colon_over_tiny_opening_sentence() -> None:
+    text = prepare_for_speech(
+        "Yes. I think this is a very good candidate for the same treatment as "
+        "AutoHotkey and the SAPI adapter: bring the small capability you need "
+        "directly into SelectSpeak."
+    )
+    chunker = AdaptiveSpeechChunker(text)
+
+    first = chunker.next_chunk(target_characters=100, hard_max_characters=200)
+
+    assert first is not None
+    assert first.text == (
+        "Yes. I think this is a very good candidate for the same treatment as "
+        "AutoHotkey and the SAPI adapter:"
+    )
+
+
+def test_adaptive_chunker_preserves_pause_after_quoted_sentence() -> None:
+    text = (
+        'The prompt said, "Select the paragraph and release the mouse button." '
+        "A second explanation follows with enough detail to form another chunk."
+    )
+    chunker = AdaptiveSpeechChunker(text)
+
+    first = chunker.next_chunk(target_characters=65, hard_max_characters=200)
+
+    assert first is not None
+    assert first.text.endswith('button."')
+    assert first.pause_after

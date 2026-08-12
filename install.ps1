@@ -4,6 +4,7 @@ param(
     [switch]$RemoveFromStartup,
     [switch]$Launch,
     [switch]$SkipNaturalVoice,
+    [string]$NaturalVoiceMsix = "",
     [switch]$SkipSupertonicModel,
     [switch]$SkipChecks
 )
@@ -108,6 +109,9 @@ if (-not [Environment]::Is64BitOperatingSystem) {
 if ($AddToStartup -and $RemoveFromStartup) {
     throw "Use either -AddToStartup or -RemoveFromStartup, not both."
 }
+if ($SkipNaturalVoice -and $NaturalVoiceMsix) {
+    throw "-NaturalVoiceMsix cannot be combined with -SkipNaturalVoice."
+}
 if ($RemoveFromStartup) {
     Remove-SelectSpeakFromStartup
     return
@@ -118,16 +122,19 @@ try {
     Set-Location -LiteralPath $projectRoot
 
     $venvPython = Join-Path $projectRoot ".venv\Scripts\python.exe"
-    $running = @()
+    $mainScript = Join-Path $projectRoot "main.py"
+    $running = @(
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.CommandLine -and $_.CommandLine.IndexOf(
+                    $mainScript,
+                    [StringComparison]::OrdinalIgnoreCase
+                ) -ge 0
+            }
+    )
     if (Test-Path -LiteralPath $venvPython -PathType Leaf) {
-        $running = @(Get-Process -Name python, pythonw `
-            -ErrorAction SilentlyContinue | Where-Object {
-                $_.Path -eq $venvPython -or
-                $_.Path -eq (Join-Path $projectRoot `
-                    ".venv\Scripts\pythonw.exe")
-            })
         foreach ($process in $running) {
-            Stop-Process -Id $process.Id -Force
+            Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
         }
         if ($running.Count) {
             Write-Host "Stopped the running SelectSpeak instance for upgrade."
@@ -157,6 +164,12 @@ try {
         Write-Host "Building the optional Natural Voice bridge..." -ForegroundColor Cyan
         & (Join-Path $projectRoot "native\natural_voice\build.ps1") `
             -InstallPrerequisites
+        if ($NaturalVoiceMsix) {
+            Write-Host "Pinning the compatible Natural Voice package..." `
+                -ForegroundColor Cyan
+            & (Join-Path $projectRoot "native\natural_voice\pin_voice.ps1") `
+                -MsixPath $NaturalVoiceMsix | Out-Host
+        }
     }
 
     $requiredFiles = @(
@@ -214,7 +227,11 @@ try {
         Write-Host "Double-click run.vbs to start it."
     }
     if (-not $SkipNaturalVoice) {
-        Write-Host "Natural Voice requires a compatible Narrator voice installed in Windows."
+        if ($NaturalVoiceMsix) {
+            Write-Host "Natural Voice is pinned locally and will not be replaced by Windows voice updates."
+        } else {
+            Write-Host "Natural Voice uses a pinned package when available, then compatible Narrator voices installed in Windows."
+        }
     }
 } finally {
     Set-Location -LiteralPath $previousLocation

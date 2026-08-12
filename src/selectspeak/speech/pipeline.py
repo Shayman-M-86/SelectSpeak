@@ -2,14 +2,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .segments import AdaptiveSpeechChunker, SpeechSegment
+from .segments import (
+    MAX_ADAPTIVE_CHUNK_CHARACTERS,
+    AdaptiveSpeechChunker,
+    SpeechSegment,
+)
 
 FIRST_CHUNK_TARGET_CHARACTERS = 100
 MIN_CHUNK_CHARACTERS = 30
-HEALTHY_CHUNK_CHARACTERS = 300
-HARD_MAX_CHUNK_CHARACTERS = 500
-MAX_SENTENCES_PER_CHUNK = 2
-STARTUP_CHUNK_GROWTH_LIMIT = 2.0
+LOW_RUNWAY_CHUNK_CHARACTERS = 90
+MEDIUM_RUNWAY_CHUNK_CHARACTERS = 120
+MAX_TARGET_CHUNK_CHARACTERS = 140
+HARD_MAX_CHUNK_CHARACTERS = MAX_ADAPTIVE_CHUNK_CHARACTERS
 RUNWAY_SAFETY_FACTOR = 0.68
 DEFAULT_SYNTHESIS_FIXED_SECONDS = 0.35
 DEFAULT_SYNTHESIS_SECONDS_PER_CHARACTER = 0.025
@@ -50,11 +54,11 @@ class GenerationStatistics:
             variable_budget / max(0.001, self.synthesis_seconds_per_character)
         )
         if playback_runway < 1.0:
-            ceiling = 90
+            ceiling = LOW_RUNWAY_CHUNK_CHARACTERS
         elif playback_runway < 4.0:
-            ceiling = HEALTHY_CHUNK_CHARACTERS
+            ceiling = MEDIUM_RUNWAY_CHUNK_CHARACTERS
         else:
-            ceiling = HARD_MAX_CHUNK_CHARACTERS
+            ceiling = MAX_TARGET_CHUNK_CHARACTERS
         return max(MIN_CHUNK_CHARACTERS, min(ceiling, predicted))
 
     def estimate_synthesis_seconds(self, text_length: int) -> float:
@@ -68,8 +72,6 @@ class ChunkDecision:
     segment: SpeechSegment
     target_characters: int
     playback_runway: float
-    allow_colon: bool
-    allow_comma: bool
     predicted_synthesis_seconds: float
 
 
@@ -84,8 +86,6 @@ class AdaptiveSpeechPipeline:
         self._chunker = AdaptiveSpeechChunker(text)
         self.statistics = statistics or GenerationStatistics()
         self._first = True
-        self._chunk_index = 0
-        self._previous_chunk_characters = 0
 
     @property
     def remaining_characters(self) -> int:
@@ -94,48 +94,20 @@ class AdaptiveSpeechPipeline:
     def choose_next(self, playback_runway: float = 0.0) -> ChunkDecision | None:
         if self._first:
             target = FIRST_CHUNK_TARGET_CHARACTERS
-            allow_colon = True
-            allow_comma = True
-            hard_max = HARD_MAX_CHUNK_CHARACTERS
         else:
             target = self.statistics.choose_target_characters(playback_runway)
-            allow_colon = playback_runway < 4.0
-            allow_comma = playback_runway < 1.5
-            hard_max = HARD_MAX_CHUNK_CHARACTERS
-            if self._chunk_index == 1:
-                # The first chunk is deliberately latency-oriented. Do not let
-                # the immediately following synthesis call dwarf the amount of
-                # audio it has available as runway.
-                startup_cap = max(
-                    1,
-                    round(
-                        self._previous_chunk_characters
-                        * STARTUP_CHUNK_GROWTH_LIMIT
-                    ),
-                )
-                hard_max = min(hard_max, startup_cap)
-                target = min(target, hard_max)
-                allow_colon = True
-                allow_comma = True
 
         segment = self._chunker.next_chunk(
             target_characters=target,
-            hard_max_characters=hard_max,
-            max_sentences=MAX_SENTENCES_PER_CHUNK,
-            allow_colon=allow_colon,
-            allow_comma=allow_comma,
+            hard_max_characters=HARD_MAX_CHUNK_CHARACTERS,
         )
         if segment is None:
             return None
         self._first = False
-        self._previous_chunk_characters = len(segment.text)
-        self._chunk_index += 1
         return ChunkDecision(
             segment=segment,
             target_characters=target,
             playback_runway=playback_runway,
-            allow_colon=allow_colon,
-            allow_comma=allow_comma,
             predicted_synthesis_seconds=self.statistics.estimate_synthesis_seconds(
                 len(segment.text)
             ),

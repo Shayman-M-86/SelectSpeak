@@ -322,8 +322,6 @@ class SupertonicSpeaker:
                     target_characters=decision.target_characters,
                     actual_characters=len(decision.segment.text),
                     playback_runway=round(runway, 3),
-                    allow_colon=decision.allow_colon,
-                    allow_comma=decision.allow_comma,
                     observations=pipeline.statistics.observations,
                     text_preview=text_preview(decision.segment.text),
                 )
