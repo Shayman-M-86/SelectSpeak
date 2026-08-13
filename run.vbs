@@ -12,8 +12,8 @@ If Not fso.FileExists(pythonw) Then
         vbExclamation, "SelectSpeak setup required"
     WScript.Quit 1
 End If
-If Not fso.FileExists(dir & "\.runtime\input\selectspeak_input.dll") Then
-    MsgBox "The native input bridge is not built for SelectSpeak." & vbCrLf & vbCrLf & _
+If Not fso.FileExists(dir & "\.runtime\native\selectspeak_native.dll") Then
+    MsgBox "The SelectSpeak native bridge is not built." & vbCrLf & vbCrLf & _
         "Open PowerShell in this folder and run .\install.ps1.", _
         vbExclamation, "SelectSpeak setup required"
     WScript.Quit 1

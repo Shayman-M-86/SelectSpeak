@@ -21,15 +21,7 @@
 #include <utility>
 
 #include "ocr_layout.h"
-
-#ifdef SELECTSPEAK_INPUT_EXPORTS
-#define INPUT_API extern "C" __declspec(dllexport)
-#else
-#define INPUT_API extern "C" __declspec(dllimport)
-#endif
-
-using ocr_callback_t =
-    void(__cdecl*)(const wchar_t*, unsigned int, void*);
+#include "../api.h"
 
 namespace {
 constexpr int kOcrHotkeyId = 2;
@@ -136,7 +128,7 @@ struct OcrState {
     unsigned int modifiers = 0;
     unsigned int virtual_key = 0;
     std::wstring language;
-    ocr_callback_t callback = nullptr;
+    ss_ocr_callback_t callback = nullptr;
     void* callback_context = nullptr;
 
     std::mutex ready_mutex;
@@ -774,8 +766,8 @@ void OcrThread() {
 }
 }  // namespace
 
-INPUT_API int ocr_start(unsigned int modifiers, unsigned int virtual_key,
-                        const wchar_t* language, ocr_callback_t callback,
+int ss_ocr_start(unsigned int modifiers, unsigned int virtual_key,
+                        const wchar_t* language, ss_ocr_callback_t callback,
                         void* context) {
     std::lock_guard lifecycle_lock(g_ocr.lifecycle_mutex);
     if (g_ocr.running.load()) {
@@ -814,22 +806,22 @@ INPUT_API int ocr_start(unsigned int modifiers, unsigned int virtual_key,
     return 0;
 }
 
-INPUT_API void ocr_cancel() {
+void ss_ocr_cancel() {
     HWND overlay = g_ocr.overlay.load();
     if (overlay != nullptr) {
         PostMessageW(overlay, WM_CLOSE, 0, 0);
     }
 }
 
-INPUT_API int ocr_is_active() { return g_ocr.active.load() ? 1 : 0; }
+int ss_ocr_is_active() { return g_ocr.active.load() ? 1 : 0; }
 
-INPUT_API void ocr_stop() {
+void ss_ocr_stop() {
     std::lock_guard lifecycle_lock(g_ocr.lifecycle_mutex);
     if (!g_ocr.running.load() && !g_ocr.thread.joinable()) {
         return;
     }
     g_ocr.stopping.store(true);
-    ocr_cancel();
+    ss_ocr_cancel();
     if (g_ocr.thread_id != 0) {
         PostThreadMessageW(g_ocr.thread_id, WM_QUIT, 0, 0);
     }
@@ -841,7 +833,7 @@ INPUT_API void ocr_stop() {
     g_ocr.running.store(false);
 }
 
-INPUT_API unsigned int ocr_last_error(char* buffer, unsigned int length) {
+unsigned int ss_ocr_last_error(char* buffer, unsigned int length) {
     std::lock_guard lock(g_ocr.error_mutex);
     const unsigned int required =
         static_cast<unsigned int>(g_ocr.last_error.size() + 1);
@@ -853,10 +845,10 @@ INPUT_API unsigned int ocr_last_error(char* buffer, unsigned int length) {
     return required;
 }
 
-INPUT_API int ocr_recognize_bgra(const unsigned char* pixels,
+int ss_ocr_recognize_bgra(const unsigned char* pixels,
                                  unsigned int width, unsigned int height,
                                  unsigned int stride, const wchar_t* language,
-                                 ocr_callback_t callback, void* context) {
+                                 ss_ocr_callback_t callback, void* context) {
     if (pixels == nullptr || width == 0 || height == 0 || stride < width * 4 ||
         callback == nullptr) {
         SetOcrError("Valid BGRA pixels, dimensions, stride, and callback are required");

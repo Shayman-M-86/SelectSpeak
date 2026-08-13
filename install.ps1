@@ -18,10 +18,10 @@ function Add-SelectSpeakToStartup {
     $shortcutPath = Join-Path $startupFolder "SelectSpeak.lnk"
     $runScript = Join-Path $projectRoot "run.vbs"
     $pythonw = Join-Path $projectRoot ".venv\Scripts\pythonw.exe"
-    $inputBridge = Join-Path $projectRoot `
-        ".runtime\input\selectspeak_input.dll"
+    $nativeBridge = Join-Path $projectRoot `
+        ".runtime\native\selectspeak_native.dll"
 
-    foreach ($requiredFile in @($runScript, $pythonw, $inputBridge)) {
+    foreach ($requiredFile in @($runScript, $pythonw, $nativeBridge)) {
         if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
             throw "SelectSpeak is not fully installed. Missing: $requiredFile"
         }
@@ -157,13 +157,11 @@ try {
         & $uv sync --frozen --python $pythonVersion
     }
 
-    Write-Host "Building the native input bridge..." -ForegroundColor Cyan
-    & (Join-Path $projectRoot "native\input\build.ps1") -InstallPrerequisites
+    Write-Host "Building the SelectSpeak native bridge..." -ForegroundColor Cyan
+    & (Join-Path $projectRoot "native\build.ps1") `
+        -InstallPrerequisites -SkipNaturalVoice:$SkipNaturalVoice
 
     if (-not $SkipNaturalVoice) {
-        Write-Host "Building the optional Natural Voice bridge..." -ForegroundColor Cyan
-        & (Join-Path $projectRoot "native\natural_voice\build.ps1") `
-            -InstallPrerequisites
         if ($NaturalVoiceMsix) {
             Write-Host "Pinning the compatible Natural Voice package..." `
                 -ForegroundColor Cyan
@@ -175,12 +173,8 @@ try {
     $requiredFiles = @(
         $venvPython,
         (Join-Path $projectRoot ".venv\Scripts\pythonw.exe"),
-        (Join-Path $projectRoot ".runtime\input\selectspeak_input.dll")
+        (Join-Path $projectRoot ".runtime\native\selectspeak_native.dll")
     )
-    if (-not $SkipNaturalVoice) {
-        $requiredFiles += (Join-Path $projectRoot `
-            ".runtime\natural_voice\selectspeak_natural_voice.dll")
-    }
     foreach ($file in $requiredFiles) {
         if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
             throw "Installation did not produce required file: $file"

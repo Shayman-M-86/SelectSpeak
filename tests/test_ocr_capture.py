@@ -2,6 +2,7 @@ import ctypes
 import sys
 from pathlib import Path
 from threading import Event
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -9,12 +10,10 @@ from PIL import Image, ImageDraw, ImageFont
 
 from selectspeak.input import ocr_capture
 from selectspeak.input.ocr_capture import OcrCaptureHotkey
+from selectspeak.native import get_native_bridge
 
 RUNTIME_OCR_DLL = (
-    Path(__file__).parents[1]
-    / ".runtime"
-    / "input"
-    / "selectspeak_input.dll"
+    Path(__file__).parents[1] / ".runtime" / "native" / "selectspeak_native.dll"
 )
 _OCR_TEST_CALLBACK = ctypes.CFUNCTYPE(
     None,
@@ -29,8 +28,8 @@ def _recognize_image(image: Image.Image) -> tuple[int, list[tuple[int, str]]]:
     callback = _OCR_TEST_CALLBACK(
         lambda text, status, _context: results.append((status, text or ""))
     )
-    dll = ctypes.CDLL(str(RUNTIME_OCR_DLL))
-    dll.ocr_recognize_bgra.argtypes = [
+    dll = get_native_bridge(str(RUNTIME_OCR_DLL)).library
+    dll.ss_ocr_recognize_bgra.argtypes = [
         ctypes.POINTER(ctypes.c_ubyte),
         ctypes.c_uint,
         ctypes.c_uint,
@@ -39,10 +38,10 @@ def _recognize_image(image: Image.Image) -> tuple[int, list[tuple[int, str]]]:
         _OCR_TEST_CALLBACK,
         ctypes.c_void_p,
     ]
-    dll.ocr_recognize_bgra.restype = ctypes.c_int
+    dll.ss_ocr_recognize_bgra.restype = ctypes.c_int
     bgra = image.tobytes("raw", "BGRA")
     pixels = (ctypes.c_ubyte * len(bgra)).from_buffer_copy(bgra)
-    return_code = dll.ocr_recognize_bgra(
+    return_code = dll.ss_ocr_recognize_bgra(
         pixels,
         image.width,
         image.height,
@@ -67,11 +66,11 @@ class _FakeOcrDll:
         self.callback: Any = None
         self.start_args: tuple[Any, ...] = ()
         self.stopped = False
-        self.ocr_start = _FakeFunction(self._start)
-        self.ocr_cancel = _FakeFunction(lambda: None)
-        self.ocr_is_active = _FakeFunction(lambda: 1)
-        self.ocr_stop = _FakeFunction(self._stop)
-        self.ocr_last_error = _FakeFunction(lambda _buffer, _length: 1)
+        self.ss_ocr_start = _FakeFunction(self._start)
+        self.ss_ocr_cancel = _FakeFunction(lambda: None)
+        self.ss_ocr_is_active = _FakeFunction(lambda: 1)
+        self.ss_ocr_stop = _FakeFunction(self._stop)
+        self.ss_ocr_last_error = _FakeFunction(lambda _buffer, _length: 1)
 
     def _start(self, *args: Any) -> int:
         self.start_args = args
@@ -90,10 +89,9 @@ def _adapter(
     dll = _FakeOcrDll()
     monkeypatch.setattr(
         ocr_capture,
-        "find_native_input_dll",
-        lambda _configured: tmp_path / "selectspeak_input.dll",
+        "get_native_bridge",
+        lambda _configured: SimpleNamespace(library=dll),
     )
-    monkeypatch.setattr(ocr_capture.ctypes, "CDLL", lambda _path: dll)
     return OcrCaptureHotkey("alt+d", on_text, language="en-AU"), dll
 
 

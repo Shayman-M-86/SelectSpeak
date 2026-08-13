@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import ctypes
 import logging
-import os
 import threading
 import time
 import xml.etree.ElementTree as ET
@@ -13,6 +12,7 @@ from typing import Any, Protocol
 
 from ...config import SpeechConfig
 from ...logging_setup import log_event, log_exception, text_preview
+from ...native import get_native_bridge
 from ...runtime_paths import repository_runtime_path
 from ..debug import SpeechDebugCallback, SpeechDebugEvent
 from ..pipeline import AdaptiveSpeechPipeline, GenerationStatistics
@@ -64,34 +64,25 @@ def _decode(value: bytes | None) -> str:
     return value.decode("utf-8", errors="replace") if value else ""
 
 
-def find_natural_voice_dll(configured_path: str = "") -> Path:
-    candidates = [
-        configured_path,
-        os.environ.get("SELECTSPEAK_NATURAL_VOICE_DLL", ""),
-        str(
-            repository_runtime_path(
-                "natural_voice", "selectspeak_natural_voice.dll"
-            )
-        ),
-        str(Path(__file__).with_name("selectspeak_natural_voice.dll")),
-    ]
-    for candidate in candidates:
-        if candidate and Path(candidate).is_file():
-            return Path(candidate).resolve()
-    raise NaturalVoiceError(
-        "Natural Voice bridge not found; build native/natural_voice or set "
-        "SELECTSPEAK_NATURAL_VOICE_DLL"
-    )
-
-
 def find_pinned_natural_voices(root: Path | None = None) -> list[NaturalVoice]:
     """Find extracted, app-owned voice packages that Windows cannot update."""
-    voice_root = root or repository_runtime_path("natural_voice", "voices")
-    if not voice_root.is_dir():
-        return []
-
+    voice_roots = (
+        (root,)
+        if root is not None
+        else (
+            repository_runtime_path("native", "voices"),
+            repository_runtime_path("natural_voice", "voices"),
+        )
+    )
+    packages_by_identity: dict[str, Path] = {}
+    for voice_root in voice_roots:
+        if not voice_root.is_dir():
+            continue
+        for token_path in voice_root.rglob("Tokens.xml"):
+            package_path = token_path.parent
+            packages_by_identity.setdefault(package_path.name.casefold(), package_path)
     package_paths = sorted(
-        {token_path.parent for token_path in voice_root.rglob("Tokens.xml")},
+        packages_by_identity.values(),
         key=lambda path: str(path).casefold(),
     )
     return [_pinned_voice(path) for path in package_paths]
@@ -111,38 +102,30 @@ def discover_natural_voices(config: SpeechConfig) -> list[NaturalVoice]:
             )
         ]
 
-    dll_path = find_natural_voice_dll(config.natural_voice_dll)
-    dll_directory = None
-    if hasattr(os, "add_dll_directory"):
-        dll_directory = os.add_dll_directory(str(dll_path.parent))
-    try:
-        dll = ctypes.CDLL(str(dll_path))
-        voices: list[NaturalVoice] = []
+    dll = get_native_bridge(config.native_dll).library
+    voices: list[NaturalVoice] = []
 
-        @_VOICE_CALLBACK
-        def collect_voice(
-            package_path: str,
-            name: bytes,
-            locale: bytes,
-            display_name: bytes,
-            _context: int,
-        ) -> None:
-            voices.append(
-                NaturalVoice(
-                    package_path,
-                    _decode(name),
-                    _decode(locale),
-                    _decode(display_name),
-                )
+    @_VOICE_CALLBACK
+    def collect_voice(
+        package_path: str,
+        name: bytes,
+        locale: bytes,
+        display_name: bytes,
+        _context: int,
+    ) -> None:
+        voices.append(
+            NaturalVoice(
+                package_path,
+                _decode(name),
+                _decode(locale),
+                _decode(display_name),
             )
+        )
 
-        dll.nv_list_voices.argtypes = [_VOICE_CALLBACK, ctypes.c_void_p]
-        dll.nv_list_voices.restype = ctypes.c_uint32
-        dll.nv_list_voices(collect_voice, None)
-        return [*voices, *find_pinned_natural_voices()]
-    finally:
-        if dll_directory is not None:
-            dll_directory.close()
+    dll.ss_voice_list.argtypes = [_VOICE_CALLBACK, ctypes.c_void_p]
+    dll.ss_voice_list.restype = ctypes.c_uint32
+    dll.ss_voice_list(collect_voice, None)
+    return [*voices, *find_pinned_natural_voices()]
 
 
 def _pinned_voice(package_path: Path) -> NaturalVoice:
@@ -177,10 +160,8 @@ class NaturalVoiceEngine:
         audio_callback: AudioCallback,
         boundary_callback: BoundaryCallback,
     ) -> None:
-        dll_path = find_natural_voice_dll(config.natural_voice_dll)
-        if hasattr(os, "add_dll_directory"):
-            self._dll_directory = os.add_dll_directory(str(dll_path.parent))
-        self._dll = ctypes.CDLL(str(dll_path))
+        self._bridge = get_native_bridge(config.native_dll)
+        self._dll = self._bridge.library
         self._configure_api()
         self._audio_callback = _AUDIO_CALLBACK(self._on_audio)
         self._word_callback = _WORD_CALLBACK(self._on_word)
@@ -189,8 +170,8 @@ class NaturalVoiceEngine:
         self._boundary_consumer = boundary_callback
         self._voices: list[NaturalVoice] = []
 
-        self._dll.nv_set_audio_callback(self._audio_callback, None)
-        self._dll.nv_set_word_callback(self._word_callback, None)
+        self._dll.ss_voice_set_audio_callback(self._audio_callback, None)
+        self._dll.ss_voice_set_word_callback(self._word_callback, None)
         self._credential = (
             config.natural_voice_credential.encode("utf-8")
             if config.natural_voice_credential
@@ -217,8 +198,7 @@ class NaturalVoiceEngine:
             )
 
         pinned = find_pinned_natural_voices()
-        self._dll.nv_list_voices(self._voice_callback, None)
-        installed = list(self._voices)
+        installed = self._enumerate_installed_voices()
         candidates = self._ordered_voices(
             [*installed, *pinned],
             config.preferred_voice_match,
@@ -240,7 +220,23 @@ class NaturalVoiceEngine:
     def available_voices(self) -> tuple[NaturalVoice, ...]:
         return self._available_voices
 
+    def refresh_voices(self) -> tuple[NaturalVoice, ...]:
+        """Refresh installed and pinned packages without recreating the engine."""
+        voices = [
+            *self._enumerate_installed_voices(),
+            *find_pinned_natural_voices(),
+        ]
+        active_voice = getattr(self, "voice", None)
+        if active_voice is not None and not any(
+            voice.package_path.casefold() == active_voice.package_path.casefold()
+            for voice in voices
+        ):
+            voices.append(active_voice)
+        self._available_voices = tuple(voices)
+        return self._available_voices
+
     def select_voice(self, package_path: str) -> NaturalVoice:
+        self.refresh_voices()
         selected = next(
             (
                 voice
@@ -265,6 +261,11 @@ class NaturalVoiceEngine:
             + " | ".join(failures)
         )
 
+    def _enumerate_installed_voices(self) -> list[NaturalVoice]:
+        self._voices.clear()
+        self._dll.ss_voice_list(self._voice_callback, None)
+        return list(self._voices)
+
     def _initialize_first(
         self,
         candidates: list[NaturalVoice],
@@ -281,7 +282,7 @@ class NaturalVoiceEngine:
                 package_path=candidate.package_path,
                 source=candidate.source,
             )
-            if not self._dll.nv_initialize(candidate.package_path, credential):
+            if not self._dll.ss_voice_initialize(candidate.package_path, credential):
                 self.voice = candidate
                 log_event(
                     logger,
@@ -298,32 +299,41 @@ class NaturalVoiceEngine:
         return False
 
     def speak(self, text: str) -> None:
-        if self._dll.nv_speak(text):
+        if self._dll.ss_voice_speak(text):
             raise NaturalVoiceError(self._last_error())
 
     def stop(self) -> None:
-        if self._dll.nv_stop():
+        if self._dll.ss_voice_stop():
             raise NaturalVoiceError(self._last_error())
 
     def close(self) -> None:
-        self._dll.nv_shutdown()
-        directory = getattr(self, "_dll_directory", None)
-        if directory is not None:
-            directory.close()
+        self._dll.ss_voice_shutdown()
 
     def _configure_api(self) -> None:
-        self._dll.nv_list_voices.argtypes = [_VOICE_CALLBACK, ctypes.c_void_p]
-        self._dll.nv_list_voices.restype = ctypes.c_uint32
-        self._dll.nv_initialize.argtypes = [ctypes.c_wchar_p, ctypes.c_char_p]
-        self._dll.nv_initialize.restype = ctypes.c_int
-        self._dll.nv_set_audio_callback.argtypes = [_AUDIO_CALLBACK, ctypes.c_void_p]
-        self._dll.nv_set_word_callback.argtypes = [_WORD_CALLBACK, ctypes.c_void_p]
-        self._dll.nv_speak.argtypes = [ctypes.c_wchar_p]
-        self._dll.nv_speak.restype = ctypes.c_int
-        self._dll.nv_stop.restype = ctypes.c_int
-        self._dll.nv_shutdown.restype = None
-        self._dll.nv_last_error.argtypes = [ctypes.c_char_p, ctypes.c_uint32]
-        self._dll.nv_last_error.restype = ctypes.c_uint32
+        self._dll.ss_voice_list.argtypes = [_VOICE_CALLBACK, ctypes.c_void_p]
+        self._dll.ss_voice_list.restype = ctypes.c_uint32
+        self._dll.ss_voice_initialize.argtypes = [
+            ctypes.c_wchar_p,
+            ctypes.c_char_p,
+        ]
+        self._dll.ss_voice_initialize.restype = ctypes.c_int
+        self._dll.ss_voice_set_audio_callback.argtypes = [
+            _AUDIO_CALLBACK,
+            ctypes.c_void_p,
+        ]
+        self._dll.ss_voice_set_word_callback.argtypes = [
+            _WORD_CALLBACK,
+            ctypes.c_void_p,
+        ]
+        self._dll.ss_voice_speak.argtypes = [ctypes.c_wchar_p]
+        self._dll.ss_voice_speak.restype = ctypes.c_int
+        self._dll.ss_voice_stop.restype = ctypes.c_int
+        self._dll.ss_voice_shutdown.restype = None
+        self._dll.ss_voice_last_error.argtypes = [
+            ctypes.c_char_p,
+            ctypes.c_uint32,
+        ]
+        self._dll.ss_voice_last_error.restype = ctypes.c_uint32
 
     def _on_audio(
         self,
@@ -353,9 +363,9 @@ class NaturalVoiceEngine:
         )
 
     def _last_error(self) -> str:
-        required = self._dll.nv_last_error(None, 0)
+        required = self._dll.ss_voice_last_error(None, 0)
         buffer = ctypes.create_string_buffer(max(required, 1))
-        self._dll.nv_last_error(buffer, len(buffer))
+        self._dll.ss_voice_last_error(buffer, len(buffer))
         return buffer.value.decode("utf-8", errors="replace")
 
     @staticmethod
@@ -380,6 +390,7 @@ class NaturalVoiceEngine:
             voice for voice in voices if not matches(voice)
         ]
 
+
 _SpeechRequest = SpeechRequest
 
 
@@ -393,6 +404,7 @@ class _Engine(Protocol):
     def speak(self, text: str) -> None: ...
     def stop(self) -> None: ...
     def close(self) -> None: ...
+    def refresh_voices(self) -> tuple[NaturalVoice, ...]: ...
     def select_voice(self, package_path: str) -> NaturalVoice: ...
 
 
@@ -441,6 +453,9 @@ class NaturalVoiceSpeaker:
     @property
     def available_voices(self) -> tuple[NaturalVoice, ...]:
         return self._engine.available_voices
+
+    def refresh_voices(self) -> tuple[NaturalVoice, ...]:
+        return self._engine.refresh_voices()
 
     def select_voice(self, package_path: str) -> NaturalVoice:
         self.stop()
@@ -507,9 +522,7 @@ class NaturalVoiceSpeaker:
             return
         player_started = False
         try:
-            pipeline = AdaptiveSpeechPipeline(
-                request.text, self._generation_statistics
-            )
+            pipeline = AdaptiveSpeechPipeline(request.text, self._generation_statistics)
             decision = pipeline.choose_next()
             if decision is None:
                 return
@@ -527,24 +540,22 @@ class NaturalVoiceSpeaker:
                 self._engine.speak(segment.text)
                 synthesis_seconds = time.monotonic() - started_at
                 generated_bytes = self._player.fed_bytes - self._segment_audio_base
-                pipeline.record_generation(
-                    segment, synthesis_seconds
-                )
+                pipeline.record_generation(segment, synthesis_seconds)
                 debug_event = SpeechDebugEvent(
-                        kind="chunk_ready",
-                        backend="natural",
-                        chunk_index=index,
-                        text_offset=segment.offset,
-                        text_length=len(segment.text),
-                        target_characters=decision.target_characters,
-                        predicted_synthesis_ms=round(
-                            decision.predicted_synthesis_seconds * 1000
-                        ),
-                        actual_synthesis_ms=round(synthesis_seconds * 1000),
-                        audio_ms=round(generated_bytes / (SAMPLE_RATE * 2) * 1000),
-                        runway_ms=round(decision.playback_runway * 1000),
-                        boundary=_boundary_name(segment.pause_after),
-                    )
+                    kind="chunk_ready",
+                    backend="natural",
+                    chunk_index=index,
+                    text_offset=segment.offset,
+                    text_length=len(segment.text),
+                    target_characters=decision.target_characters,
+                    predicted_synthesis_ms=round(
+                        decision.predicted_synthesis_seconds * 1000
+                    ),
+                    actual_synthesis_ms=round(synthesis_seconds * 1000),
+                    audio_ms=round(generated_bytes / (SAMPLE_RATE * 2) * 1000),
+                    runway_ms=round(decision.playback_runway * 1000),
+                    boundary=_boundary_name(segment.pause_after),
+                )
                 debug_callback = getattr(self, "_debug_callback", None)
                 if debug_callback:
                     debug_callback(debug_event)
@@ -554,9 +565,7 @@ class NaturalVoiceSpeaker:
                 if not pipeline.remaining_characters:
                     break
                 if segment.pause_after:
-                    self._player.feed_silence(
-                        self._config.structure_pause_seconds
-                    )
+                    self._player.feed_silence(self._config.structure_pause_seconds)
                     log_event(
                         logger,
                         logging.DEBUG,

@@ -1,6 +1,7 @@
 # SelectSpeak Natural Voice bridge
 
-This optional 64-bit DLL talks directly to Microsoft's embedded Speech SDK and
+This optional module in SelectSpeak's unified 64-bit DLL talks directly to
+Microsoft's embedded Speech SDK and
 installed `MicrosoftWindows.Voice.*` packages. It contains no SAPI, COM voice
 registration, Azure/Edge networking, WebSockets, proxy support, or MP3 decoder.
 
@@ -21,14 +22,14 @@ the toolchain and builds this bridge along with the rest of SelectSpeak:
 .\install.ps1
 ```
 
-For bridge-only development, run:
+For native-only development, run:
 
 ```powershell
-.\native\natural_voice\build.ps1 -InstallPrerequisites
+.\native\build.ps1 -InstallPrerequisites
 ```
 
 The script restores the pinned Speech SDK NuGet packages and creates the local,
-ignored `.runtime/natural_voice` directory. It does not bundle voice packages.
+ignored `.runtime/native` directory. It does not bundle voice packages.
 
 An older package can still be kept as an extracted, app-owned fallback:
 
@@ -36,7 +37,7 @@ An older package can still be kept as an extracted, app-owned fallback:
 .\native\natural_voice\pin_voice.ps1 -MsixPath "C:\Downloads\voice.msix"
 ```
 
-Pinned packages are stored below `.runtime/natural_voice/voices`. Current
+Pinned packages are stored below `.runtime/native/voices`. Current
 Windows-installed voices are discovered first, and a specifically preferred
 voice is tried before the remaining installed and pinned fallbacks. The root
 installer accepts the same package through `-NaturalVoiceMsix`. Neither command

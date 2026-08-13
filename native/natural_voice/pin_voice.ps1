@@ -18,7 +18,7 @@ if ($extension -notin @(".msix", ".appx")) {
     throw "Natural Voice package must be an .msix or .appx file: $sourcePath"
 }
 if (-not $DestinationRoot) {
-    $DestinationRoot = Join-Path $projectRoot ".runtime\natural_voice\voices"
+    $DestinationRoot = Join-Path $projectRoot ".runtime\native\voices"
 }
 $voiceRoot = [IO.Path]::GetFullPath($DestinationRoot)
 New-Item -ItemType Directory -Path $voiceRoot -Force | Out-Null

@@ -2,15 +2,13 @@ from __future__ import annotations
 
 import ctypes
 import logging
-import os
 import threading
 import time
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
 from ..logging_setup import log_event, log_exception, text_preview
-from ..runtime_paths import repository_runtime_path
+from ..native import get_native_bridge
 from .keymap import from_windows_hotkey, to_windows_hotkey
 
 logger = logging.getLogger(__name__)
@@ -31,21 +29,6 @@ _RECORD_CALLBACK = ctypes.CFUNCTYPE(
 )
 
 
-def find_native_input_dll(configured_path: str = "") -> Path:
-    candidates = [
-        configured_path,
-        os.environ.get("SELECTSPEAK_INPUT_DLL", ""),
-        str(repository_runtime_path("input", "selectspeak_input.dll")),
-        str(Path(__file__).with_name("selectspeak_input.dll")),
-    ]
-    for candidate in candidates:
-        if candidate and Path(candidate).is_file():
-            return Path(candidate).resolve()
-    raise NativeInputError(
-        "Native input bridge not found; build native/input or set SELECTSPEAK_INPUT_DLL"
-    )
-
-
 class NativeInputAdapter:
     """Own the native global-hotkey and selected-text capture bridge."""
 
@@ -59,8 +42,8 @@ class NativeInputAdapter:
         self.hotkey = hotkey
         self._handler = handler
         self._activation_handler = activation_handler
-        path = find_native_input_dll(dll_path)
-        self._dll = ctypes.CDLL(str(path))
+        self._bridge = get_native_bridge(dll_path)
+        self._dll = self._bridge.library
         self._configure_api()
         self._callback = _CAPTURE_CALLBACK(self._on_capture)
         self._activation_callback = _ACTIVATION_CALLBACK(self._on_activation)
@@ -71,7 +54,7 @@ class NativeInputAdapter:
         if self._started:
             return
         modifiers, virtual_key = to_windows_hotkey(self.hotkey)
-        if self._dll.input_start(
+        if self._dll.ss_input_start(
             modifiers,
             virtual_key,
             self._callback,
@@ -89,13 +72,13 @@ class NativeInputAdapter:
 
     def rebind(self, hotkey: str) -> None:
         modifiers, virtual_key = to_windows_hotkey(hotkey)
-        if self._dll.input_rebind(modifiers, virtual_key):
+        if self._dll.ss_input_rebind(modifiers, virtual_key):
             raise NativeInputError(self._last_error())
         self.hotkey = hotkey
         log_event(logger, logging.INFO, "native_input.rebound", hotkey=hotkey)
 
     def trigger(self) -> None:
-        if self._dll.input_capture_now():
+        if self._dll.ss_input_capture_now():
             raise NativeInputError(self._last_error())
         log_event(
             logger,
@@ -106,7 +89,7 @@ class NativeInputAdapter:
 
     def stop(self) -> None:
         if self._started:
-            self._dll.input_stop()
+            self._dll.ss_input_stop()
             self._started = False
         log_event(logger, logging.INFO, "native_input.stopped", hotkey=self.hotkey)
 
@@ -128,52 +111,52 @@ class NativeInputAdapter:
                 on_cancel()
 
         callback = _RECORD_CALLBACK(handle_recording)
-        if self._dll.input_record_start(callback, None):
+        if self._dll.ss_input_record_start(callback, None):
             raise NativeInputError(self._last_error())
         self._record_callback = callback
         log_event(logger, logging.INFO, "native_input.recording.started")
 
     def stop_recording(self) -> None:
-        self._dll.input_record_stop()
+        self._dll.ss_input_record_stop()
         log_event(logger, logging.INFO, "native_input.recording.stopped")
 
     def _configure_api(self) -> None:
-        self._dll.input_start.argtypes = [
+        self._dll.ss_input_start.argtypes = [
             ctypes.c_uint,
             ctypes.c_uint,
             _CAPTURE_CALLBACK,
             _ACTIVATION_CALLBACK,
             ctypes.c_void_p,
         ]
-        self._dll.input_start.restype = ctypes.c_int
-        self._dll.input_rebind.argtypes = [ctypes.c_uint, ctypes.c_uint]
-        self._dll.input_rebind.restype = ctypes.c_int
-        self._dll.input_capture_now.argtypes = []
-        self._dll.input_capture_now.restype = ctypes.c_int
-        self._dll.input_record_start.argtypes = [
+        self._dll.ss_input_start.restype = ctypes.c_int
+        self._dll.ss_input_rebind.argtypes = [ctypes.c_uint, ctypes.c_uint]
+        self._dll.ss_input_rebind.restype = ctypes.c_int
+        self._dll.ss_input_capture_now.argtypes = []
+        self._dll.ss_input_capture_now.restype = ctypes.c_int
+        self._dll.ss_input_record_start.argtypes = [
             _RECORD_CALLBACK,
             ctypes.c_void_p,
         ]
-        self._dll.input_record_start.restype = ctypes.c_int
-        self._dll.input_record_stop.argtypes = []
-        self._dll.input_record_stop.restype = None
-        self._dll.input_stop.argtypes = []
-        self._dll.input_stop.restype = None
-        self._dll.input_last_capture_source.argtypes = []
-        self._dll.input_last_capture_source.restype = ctypes.c_uint
-        self._dll.input_last_activation_time_ms.argtypes = []
-        self._dll.input_last_activation_time_ms.restype = ctypes.c_ulonglong
-        self._dll.input_last_error.argtypes = [ctypes.c_char_p, ctypes.c_uint]
-        self._dll.input_last_error.restype = ctypes.c_uint
+        self._dll.ss_input_record_start.restype = ctypes.c_int
+        self._dll.ss_input_record_stop.argtypes = []
+        self._dll.ss_input_record_stop.restype = None
+        self._dll.ss_input_stop.argtypes = []
+        self._dll.ss_input_stop.restype = None
+        self._dll.ss_input_last_capture_source.argtypes = []
+        self._dll.ss_input_last_capture_source.restype = ctypes.c_uint
+        self._dll.ss_input_last_activation_time_ms.argtypes = []
+        self._dll.ss_input_last_activation_time_ms.restype = ctypes.c_ulonglong
+        self._dll.ss_input_last_error.argtypes = [ctypes.c_char_p, ctypes.c_uint]
+        self._dll.ss_input_last_error.restype = ctypes.c_uint
 
     def _on_capture(self, text: str | None, _context: Any) -> None:
         captured = text or ""
-        activated_ms = self._dll.input_last_activation_time_ms()
+        activated_ms = self._dll.ss_input_last_activation_time_ms()
         kernel = ctypes.windll.kernel32
         kernel.GetTickCount64.restype = ctypes.c_ulonglong
         capture_latency_ms = max(0, kernel.GetTickCount64() - activated_ms)
         activated_at = time.monotonic() - capture_latency_ms / 1000
-        source_id = self._dll.input_last_capture_source()
+        source_id = self._dll.ss_input_last_capture_source()
         source = {1: "ui_automation", 2: "clipboard"}.get(source_id, "empty")
         log_event(
             logger,
@@ -206,7 +189,7 @@ class NativeInputAdapter:
             log_exception(logger, "native_input.handler.failed")
 
     def _last_error(self) -> str:
-        required = self._dll.input_last_error(None, 0)
+        required = self._dll.ss_input_last_error(None, 0)
         buffer = ctypes.create_string_buffer(max(required, 1))
-        self._dll.input_last_error(buffer, len(buffer))
+        self._dll.ss_input_last_error(buffer, len(buffer))
         return buffer.value.decode("utf-8", errors="replace")

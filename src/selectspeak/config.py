@@ -6,7 +6,7 @@ class InputConfig:
     default_hotkey: str
     ocr_hotkey: str
     ocr_language: str
-    native_input_dll: str
+    native_dll: str
     hotkey_debounce_seconds: float
     capture_timeout_seconds: float
 
@@ -15,7 +15,7 @@ class InputConfig:
 class SpeechConfig:
     preferred_voice_match: str
     speech_backend: str
-    natural_voice_dll: str
+    native_dll: str
     natural_voice_path: str
     natural_voice_credential: str
     supertonic_voice: str
@@ -49,8 +49,7 @@ class AppConfig:
     ocr_language: str = ""
     preferred_voice_match: str = "natural"
     speech_backend: str = "auto"
-    native_input_dll: str = ""
-    natural_voice_dll: str = ""
+    native_dll: str = ""
     natural_voice_path: str = ""
     natural_voice_credential: str = ""
     supertonic_voice: str = "F4"
@@ -74,7 +73,7 @@ class AppConfig:
             self.default_hotkey,
             self.ocr_hotkey,
             self.ocr_language,
-            self.native_input_dll,
+            self.native_dll,
             self.hotkey_debounce_seconds,
             self.capture_timeout_seconds,
         )
@@ -84,7 +83,7 @@ class AppConfig:
         return SpeechConfig(
             self.preferred_voice_match,
             self.speech_backend,
-            self.natural_voice_dll,
+            self.native_dll,
             self.natural_voice_path,
             self.natural_voice_credential,
             self.supertonic_voice,

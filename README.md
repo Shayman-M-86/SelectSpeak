@@ -1,7 +1,7 @@
 # SelectSpeak
 
 Select text anywhere in Windows, press `Alt+S`, and hear it read aloud
-using a locally installed Narrator Natural Voice when the optional native bridge
+using a locally installed Narrator Natural Voice when native voice support
 is available, with the built-in SAPI voice as an automatic fallback. The tray app includes pause, resume, stop,
 replay, clipboard mode, word highlighting, and hotkey rebinding. Global
 shortcut registration, selection capture, and shortcut recording are handled
@@ -22,8 +22,8 @@ Open PowerShell in the project folder and run:
 ```
 
 The installer provisions `uv`, a managed Python 3.13 installation, all Python
-packages, Visual C++ Build Tools and CMake when needed, and both native
-bridges. It also downloads the local Supertonic ONNX voice model, then verifies
+packages, Visual C++ Build Tools and CMake when needed, and the single native
+bridge. It also downloads the local Supertonic ONNX voice model, then verifies
 imports and runs the test, lint, and type-check suites. It is safe to run again
 when updating an existing installation.
 
@@ -51,7 +51,7 @@ fallback. It also owns the frozen-screen OCR selector and calls Windows' local
 OCR engine directly. It uses `RegisterHotKey` during normal operation and
 installs a low-level keyboard hook only while recording a new shortcut.
 
-Set `SELECTSPEAK_INPUT_DLL` to use a native input DLL at another location.
+Set `SELECTSPEAK_NATIVE_DLL` to use the unified native DLL at another location.
 
 ### Direct Natural Voice backend
 
@@ -68,7 +68,7 @@ and probed without hard-coding that credential in SelectSpeak.
 when it is present and usable, otherwise it retains the current SAPI backend.
 Set it to `"natural"` to require the bridge, `"sapi"` to disable it, or
 `"supertonic"` to start with the neural engine selected. You may also set
-`SELECTSPEAK_NATURAL_VOICE_DLL` to an alternate DLL path.
+`AppConfig.native_dll` can also point to an alternate unified DLL path.
 
 Supertonic defaults to its `F4` voice at 8 inference steps. The voice,
 language, quality steps, and speed are configurable through the
@@ -77,7 +77,7 @@ language, quality steps, and speed are configurable through the
 
 `-NaturalVoiceMsix` remains an optional compatibility fallback. It extracts the
 package into the ignored, app-owned
-`.runtime/natural_voice/voices` directory; it does not install or downgrade the
+`.runtime/native/voices` directory; it does not install or downgrade the
 Windows package. SelectSpeak discovers and probes voices installed through
 Windows first, then tries pinned packages. Rerunning the command with the same
 package is safe. If the bridge is already built, the package can also be pinned
@@ -137,8 +137,10 @@ run:
   clipboard reading.
 - Click **Voice: … ▾** to choose any discovered Windows Natural Voice, the
   configured local Supertonic model, or the Windows SAPI fallback. Installed
-  and pinned copies with the same name are labelled separately. The first
-  switch to Supertonic can take a moment while its ONNX model loads into memory.
+  and pinned copies with the same name are labelled separately. Voice packages
+  are scanned again whenever the menu opens, so newly downloaded Windows voices
+  appear without restarting SelectSpeak. The first switch to Supertonic can
+  take a moment while its ONNX model loads into memory.
 - Click **Auto hide: On** to keep the player open after speech finishes, or
   click it again to restore automatic hiding. Auto hide is enabled by default.
 - Click **Debug: Off** to show adaptive chunk boundaries and live speech
@@ -223,12 +225,15 @@ install.ps1                 Complete first-time setup and upgrade script
 main.py                     Root entry point
 run.vbs                     Console-free launcher using the local environment
 src/selectspeak/app.py      Application lifecycle and coordination
+src/selectspeak/native.py   Versioned owner for the single native DLL
 src/selectspeak/input/      Capture, clipboard, hotkeys, and native input
 src/selectspeak/speech/     Speech contracts, processing, and playback
 src/selectspeak/speech/backends/
                             SAPI, Natural Voice, and Supertonic adapters
 src/selectspeak/ui/         Player window, diagnostics, theme, and tray
-native/natural_voice/       Small C ABI bridge to local Natural Voices
-native/input/               Native hotkeys, text capture, and Windows OCR overlay
+native/CMakeLists.txt       One DLL target with a small namespaced C ABI
+native/build.ps1            One native build and runtime deployment path
+native/natural_voice/       Natural Voice implementation module
+native/input/               Hotkey, capture, and Windows OCR implementation module
 native/build_helpers.ps1    Shared C++ toolchain discovery and installation
 ```

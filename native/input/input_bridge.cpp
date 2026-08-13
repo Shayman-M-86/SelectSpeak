@@ -12,16 +12,7 @@
 #include <thread>
 #include <vector>
 
-#ifdef SELECTSPEAK_INPUT_EXPORTS
-#define INPUT_API extern "C" __declspec(dllexport)
-#else
-#define INPUT_API extern "C" __declspec(dllimport)
-#endif
-
-using capture_callback_t = void(__cdecl*)(const wchar_t*, void*);
-using activation_callback_t = int(__cdecl*)(void*);
-using record_callback_t =
-    void(__cdecl*)(unsigned int, unsigned int, unsigned int, void*);
+#include "../api.h"
 
 namespace {
 constexpr int kHotkeyId = 1;
@@ -54,11 +45,11 @@ struct State {
     std::atomic<ULONGLONG> completed_capture_requested_at{0};
     HWND window = nullptr;
     HANDLE clipboard_changed = nullptr;
-    capture_callback_t callback = nullptr;
-    activation_callback_t activation_callback = nullptr;
+    ss_capture_callback_t callback = nullptr;
+    ss_activation_callback_t activation_callback = nullptr;
     void* callback_context = nullptr;
     HHOOK recording_hook = nullptr;
-    record_callback_t recording_callback = nullptr;
+    ss_record_callback_t recording_callback = nullptr;
     void* recording_context = nullptr;
     std::atomic<bool> recording{false};
     std::atomic<bool> recording_finishing{false};
@@ -822,7 +813,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wparam,
                 GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
             reinterpret_cast<LPCWSTR>(&RecordingHook), &module);
         g_state.recording_callback =
-            reinterpret_cast<record_callback_t>(wparam);
+            reinterpret_cast<ss_record_callback_t>(wparam);
         g_state.recording_context = reinterpret_cast<void*>(lparam);
         g_state.recorded_modifiers.store(0);
         g_state.recorded_chord_modifiers.store(0);
@@ -914,9 +905,9 @@ void MessageLoop() {
 }
 }  // namespace
 
-INPUT_API int input_start(unsigned int modifiers, unsigned int virtual_key,
-                          capture_callback_t callback,
-                          activation_callback_t activation_callback,
+int ss_input_start(unsigned int modifiers, unsigned int virtual_key,
+                          ss_capture_callback_t callback,
+                          ss_activation_callback_t activation_callback,
                           void* context) {
     std::lock_guard lifecycle_lock(g_state.lifecycle_mutex);
     if (g_state.running.load()) {
@@ -965,7 +956,7 @@ INPUT_API int input_start(unsigned int modifiers, unsigned int virtual_key,
     return 0;
 }
 
-INPUT_API int input_rebind(unsigned int modifiers, unsigned int virtual_key) {
+int ss_input_rebind(unsigned int modifiers, unsigned int virtual_key) {
     if (!g_state.running.load() || g_state.window == nullptr || virtual_key == 0) {
         SetError("The native input adapter is not running");
         return 1;
@@ -978,7 +969,7 @@ INPUT_API int input_rebind(unsigned int modifiers, unsigned int virtual_key) {
     return 0;
 }
 
-INPUT_API int input_capture_now() {
+int ss_input_capture_now() {
     if (!g_state.running.load()) {
         SetError("The native input adapter is not running");
         return 1;
@@ -987,7 +978,7 @@ INPUT_API int input_capture_now() {
     return 0;
 }
 
-INPUT_API int input_record_start(record_callback_t callback, void* context) {
+int ss_input_record_start(ss_record_callback_t callback, void* context) {
     if (!g_state.running.load() || g_state.window == nullptr || callback == nullptr) {
         SetError("The native input adapter is not ready to record a shortcut");
         return 1;
@@ -1000,13 +991,13 @@ INPUT_API int input_record_start(record_callback_t callback, void* context) {
     return 0;
 }
 
-INPUT_API void input_record_stop() {
+void ss_input_record_stop() {
     if (g_state.running.load() && g_state.window != nullptr) {
         SendMessageW(g_state.window, kStopRecordingMessage, 0, 0);
     }
 }
 
-INPUT_API void input_stop() {
+void ss_input_stop() {
     std::lock_guard lifecycle_lock(g_state.lifecycle_mutex);
     if (!g_state.running.exchange(false)) {
         return;
@@ -1032,15 +1023,15 @@ INPUT_API void input_stop() {
     g_state.callback_context = nullptr;
 }
 
-INPUT_API unsigned int input_last_capture_source() {
+unsigned int ss_input_last_capture_source() {
     return g_state.capture_source.load();
 }
 
-INPUT_API unsigned long long input_last_activation_time_ms() {
+unsigned long long ss_input_last_activation_time_ms() {
     return g_state.completed_capture_requested_at.load();
 }
 
-INPUT_API unsigned int input_last_error(char* buffer, unsigned int length) {
+unsigned int ss_input_last_error(char* buffer, unsigned int length) {
     std::lock_guard lock(g_state.error_mutex);
     const unsigned int required =
         static_cast<unsigned int>(g_state.last_error.size() + 1);

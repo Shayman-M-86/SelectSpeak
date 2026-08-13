@@ -1,4 +1,4 @@
-#include "natural_voice.h"
+#include "../api.h"
 
 #include "credential_provider.h"
 
@@ -33,11 +33,11 @@ bool synthesis_started = false;
 bool stop_requested = false;
 std::string last_error;
 
-nv_audio_callback_t audio_callback = nullptr;
+ss_audio_callback_t audio_callback = nullptr;
 void* audio_context = nullptr;
-nv_word_callback_t word_callback = nullptr;
+ss_word_callback_t word_callback = nullptr;
 void* word_context = nullptr;
-nv_finished_callback_t finished_callback = nullptr;
+ss_finished_callback_t finished_callback = nullptr;
 void* finished_context = nullptr;
 
 class ApartmentScope {
@@ -99,7 +99,7 @@ std::vector<std::string> installed_voice_paths()
 }
 }  // namespace
 
-std::uint32_t nv_list_voices(nv_voice_callback_t callback, void* context)
+std::uint32_t ss_voice_list(ss_voice_callback_t callback, void* context)
 {
     std::uint32_t count = 0;
     const auto status = guarded([&] {
@@ -124,14 +124,14 @@ std::uint32_t nv_list_voices(nv_voice_callback_t callback, void* context)
     return status == 0 ? count : 0;
 }
 
-int nv_initialize(const wchar_t* voice_path, const char* credential)
+int ss_voice_initialize(const wchar_t* voice_path, const char* credential)
 {
     return guarded([&] {
         if (!voice_path || !*voice_path) {
             throw std::invalid_argument("A Natural Voice package path is required");
         }
 
-        nv_shutdown();
+        ss_voice_shutdown();
         const auto path = winrt::to_string(voice_path);
         const auto create_config = [&] {
             auto config = EmbeddedSpeechConfig::FromPath(path);
@@ -198,7 +198,7 @@ int nv_initialize(const wchar_t* voice_path, const char* credential)
 
         auto stream = AudioOutputStream::CreatePushStream(
             [](std::uint8_t* data, std::uint32_t length) -> int {
-                nv_audio_callback_t callback;
+                ss_audio_callback_t callback;
                 void* context;
                 {
                     std::lock_guard lock(state_mutex);
@@ -225,7 +225,7 @@ int nv_initialize(const wchar_t* voice_path, const char* credential)
             if (event.BoundaryType == SpeechSynthesisBoundaryType::Punctuation) {
                 return;
             }
-            nv_word_callback_t callback;
+            ss_word_callback_t callback;
             void* context;
             {
                 std::lock_guard lock(state_mutex);
@@ -244,28 +244,28 @@ int nv_initialize(const wchar_t* voice_path, const char* credential)
     });
 }
 
-void nv_set_audio_callback(nv_audio_callback_t callback, void* context)
+void ss_voice_set_audio_callback(ss_audio_callback_t callback, void* context)
 {
     std::lock_guard lock(state_mutex);
     audio_callback = callback;
     audio_context = context;
 }
 
-void nv_set_word_callback(nv_word_callback_t callback, void* context)
+void ss_voice_set_word_callback(ss_word_callback_t callback, void* context)
 {
     std::lock_guard lock(state_mutex);
     word_callback = callback;
     word_context = context;
 }
 
-void nv_set_finished_callback(nv_finished_callback_t callback, void* context)
+void ss_voice_set_finished_callback(ss_finished_callback_t callback, void* context)
 {
     std::lock_guard lock(state_mutex);
     finished_callback = callback;
     finished_context = context;
 }
 
-int nv_speak(const wchar_t* text)
+int ss_voice_speak(const wchar_t* text)
 {
     if (!text) {
         set_error("Speech text must not be null");
@@ -303,7 +303,7 @@ int nv_speak(const wchar_t* text)
         }
     });
 
-    nv_finished_callback_t callback;
+    ss_finished_callback_t callback;
     void* context;
     {
         std::lock_guard lock(state_mutex);
@@ -318,7 +318,7 @@ int nv_speak(const wchar_t* text)
     return status;
 }
 
-int nv_stop()
+int ss_voice_stop()
 {
     std::shared_ptr<SpeechSynthesizer> active;
     {
@@ -341,9 +341,9 @@ int nv_stop()
     return guarded([&] { active->StopSpeakingAsync().wait(); });
 }
 
-void nv_shutdown()
+void ss_voice_shutdown()
 {
-    nv_stop();
+    ss_voice_stop();
     std::lock_guard lock(state_mutex);
     synthesizer.reset();
     speaking = false;
@@ -351,7 +351,7 @@ void nv_shutdown()
     stop_requested = false;
 }
 
-std::uint32_t nv_last_error(char* buffer, std::uint32_t capacity)
+std::uint32_t ss_voice_last_error(char* buffer, std::uint32_t capacity)
 {
     std::lock_guard lock(state_mutex);
     const auto required = static_cast<std::uint32_t>(last_error.size() + 1);

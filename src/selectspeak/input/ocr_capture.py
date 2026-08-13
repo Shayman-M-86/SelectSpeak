@@ -7,8 +7,8 @@ from collections.abc import Callable
 from typing import Any
 
 from ..logging_setup import log_event, log_exception, text_preview
+from ..native import get_native_bridge
 from .keymap import to_windows_hotkey
-from .native import find_native_input_dll
 
 logger = logging.getLogger(__name__)
 
@@ -42,20 +42,21 @@ class OcrCaptureHotkey:
         self.hotkey = hotkey
         self.language = language
         self._on_text = on_text
-        self._dll = ctypes.CDLL(str(find_native_input_dll(dll_path)))
+        self._bridge = get_native_bridge(dll_path)
+        self._dll = self._bridge.library
         self._configure_api()
         self._callback = _OCR_CALLBACK(self._on_result)
         self._started = False
 
     @property
     def active(self) -> bool:
-        return bool(self._dll.ocr_is_active()) if self._started else False
+        return bool(self._dll.ss_ocr_is_active()) if self._started else False
 
     def start(self) -> None:
         if self._started:
             return
         modifiers, virtual_key = to_windows_hotkey(self.hotkey)
-        if self._dll.ocr_start(
+        if self._dll.ss_ocr_start(
             modifiers,
             virtual_key,
             self.language or None,
@@ -75,31 +76,31 @@ class OcrCaptureHotkey:
 
     def cancel(self) -> None:
         if self._started:
-            self._dll.ocr_cancel()
+            self._dll.ss_ocr_cancel()
 
     def stop(self) -> None:
         if self._started:
-            self._dll.ocr_stop()
+            self._dll.ss_ocr_stop()
             self._started = False
             log_event(logger, logging.INFO, "ocr_hotkey.unregistered")
 
     def _configure_api(self) -> None:
-        self._dll.ocr_start.argtypes = [
+        self._dll.ss_ocr_start.argtypes = [
             ctypes.c_uint,
             ctypes.c_uint,
             ctypes.c_wchar_p,
             _OCR_CALLBACK,
             ctypes.c_void_p,
         ]
-        self._dll.ocr_start.restype = ctypes.c_int
-        self._dll.ocr_cancel.argtypes = []
-        self._dll.ocr_cancel.restype = None
-        self._dll.ocr_is_active.argtypes = []
-        self._dll.ocr_is_active.restype = ctypes.c_int
-        self._dll.ocr_stop.argtypes = []
-        self._dll.ocr_stop.restype = None
-        self._dll.ocr_last_error.argtypes = [ctypes.c_char_p, ctypes.c_uint]
-        self._dll.ocr_last_error.restype = ctypes.c_uint
+        self._dll.ss_ocr_start.restype = ctypes.c_int
+        self._dll.ss_ocr_cancel.argtypes = []
+        self._dll.ss_ocr_cancel.restype = None
+        self._dll.ss_ocr_is_active.argtypes = []
+        self._dll.ss_ocr_is_active.restype = ctypes.c_int
+        self._dll.ss_ocr_stop.argtypes = []
+        self._dll.ss_ocr_stop.restype = None
+        self._dll.ss_ocr_last_error.argtypes = [ctypes.c_char_p, ctypes.c_uint]
+        self._dll.ss_ocr_last_error.restype = ctypes.c_uint
 
     def _on_result(
         self,
@@ -151,7 +152,7 @@ class OcrCaptureHotkey:
             log_exception(logger, "ocr_capture.handler.failed")
 
     def _last_error(self) -> str:
-        required = self._dll.ocr_last_error(None, 0)
+        required = self._dll.ss_ocr_last_error(None, 0)
         buffer = ctypes.create_string_buffer(max(required, 1))
-        self._dll.ocr_last_error(buffer, len(buffer))
+        self._dll.ss_ocr_last_error(buffer, len(buffer))
         return buffer.value.decode("utf-8", errors="replace")

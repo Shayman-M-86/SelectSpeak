@@ -10,6 +10,7 @@ from .input.clipboard import ClipboardService
 from .input.hotkeys import HotkeyManager
 from .input.ocr_capture import OcrCaptureError, OcrCaptureHotkey
 from .logging_setup import log_event, log_exception, text_preview
+from .native import shutdown_native_bridge
 from .playback_session import PlaybackSession
 from .speech import Speaker, create_speaker
 from .speech.backends.natural import (
@@ -84,6 +85,7 @@ class SelectSpeakApp:
             on_pause=self.pause,
             on_resume=self.resume,
             on_stop=self.stop,
+            on_refresh_voices=self.refresh_voice_options,
             on_select_voice=self.select_voice,
             on_toggle_clipboard=self.toggle_clipboard_mode,
             on_toggle_auto_hide=self.toggle_auto_hide,
@@ -97,7 +99,7 @@ class SelectSpeakApp:
         self._ocr_capture = OcrCaptureHotkey(
             self._config.ocr_hotkey,
             self._on_ocr_text,
-            dll_path=self._config.native_input_dll,
+            dll_path=self._config.native_dll,
             language=self._config.ocr_language,
         )
         self._speaker = create_speaker(
@@ -110,7 +112,7 @@ class SelectSpeakApp:
             self._config.default_hotkey,
             self._on_hotkey,
             self._on_hotkey_activation,
-            native_dll=self._config.native_input_dll,
+            native_dll=self._config.native_dll,
         )
         self._tray = TrayController(
             app_name=self._config.app_name,
@@ -347,6 +349,33 @@ class SelectSpeakApp:
         self._selected_voice_key = selected_key
         self._player.set_voice_options(options, selected_key)
 
+    def refresh_voice_options(self) -> None:
+        """Re-enumerate voice packages immediately before opening the menu."""
+        with self._state_lock:
+            if self._backend_switching or self._shutting_down:
+                return
+            selected_key = self._selected_voice_key
+            natural_speaker = self._speakers.get("natural")
+        try:
+            if isinstance(natural_speaker, NaturalVoiceSpeaker):
+                natural_voices = list(natural_speaker.refresh_voices())
+            else:
+                natural_voices = discover_natural_voices(self._config.speech)
+        except Exception:
+            log_exception(logger, "speaker.voice.refresh_failed")
+            return
+
+        options = build_voice_options(natural_voices, self._config.speech)
+        with self._state_lock:
+            self._voice_options = {option.key: option for option in options}
+        self._player.set_voice_options(options, selected_key)
+        log_event(
+            logger,
+            logging.INFO,
+            "speaker.voices.refreshed",
+            natural_voice_count=len(natural_voices),
+        )
+
     @staticmethod
     def _speaker_backend(speaker: Speaker) -> str:
         if isinstance(speaker, NaturalVoiceSpeaker):
@@ -385,6 +414,7 @@ class SelectSpeakApp:
             speaker.stop()
         self._hotkeys.close()
         self._ocr_capture.stop()
+        shutdown_native_bridge()
         self._tray.stop()
         self._player.destroy()
         log_event(logger, logging.INFO, "app.shutdown.completed")

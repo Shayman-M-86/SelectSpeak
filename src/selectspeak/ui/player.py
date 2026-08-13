@@ -47,6 +47,7 @@ class PlayerWindow(tk.Tk):
         on_pause: Callable[[], None],
         on_resume: Callable[[], None],
         on_stop: Callable[[], None],
+        on_refresh_voices: Callable[[], None],
         on_select_voice: Callable[[str], None],
         on_toggle_clipboard: Callable[[], None],
         on_toggle_auto_hide: Callable[[], None],
@@ -63,6 +64,7 @@ class PlayerWindow(tk.Tk):
         self._clipboard_mode = False
         self._auto_hide = auto_hide
         self._speech_backend = speech_backend
+        self._on_refresh_voices = on_refresh_voices
         self._on_select_voice = on_select_voice
         self._voice_options: tuple[VoiceOption, ...] = ()
         self._selected_voice_key = tk.StringVar(self, "")
@@ -321,6 +323,7 @@ class PlayerWindow(tk.Tk):
         )
 
     def _show_voice_menu(self) -> None:
+        self._on_refresh_voices()
         if not self._voice_options:
             return
         try:
