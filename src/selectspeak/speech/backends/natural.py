@@ -97,6 +97,54 @@ def find_pinned_natural_voices(root: Path | None = None) -> list[NaturalVoice]:
     return [_pinned_voice(path) for path in package_paths]
 
 
+def discover_natural_voices(config: SpeechConfig) -> list[NaturalVoice]:
+    """List selectable installed and pinned voices without synthesizing."""
+    if config.natural_voice_path:
+        package_path = Path(config.natural_voice_path).resolve()
+        return [
+            NaturalVoice(
+                str(package_path),
+                package_path.name,
+                "",
+                package_path.name,
+                "configured",
+            )
+        ]
+
+    dll_path = find_natural_voice_dll(config.natural_voice_dll)
+    dll_directory = None
+    if hasattr(os, "add_dll_directory"):
+        dll_directory = os.add_dll_directory(str(dll_path.parent))
+    try:
+        dll = ctypes.CDLL(str(dll_path))
+        voices: list[NaturalVoice] = []
+
+        @_VOICE_CALLBACK
+        def collect_voice(
+            package_path: str,
+            name: bytes,
+            locale: bytes,
+            display_name: bytes,
+            _context: int,
+        ) -> None:
+            voices.append(
+                NaturalVoice(
+                    package_path,
+                    _decode(name),
+                    _decode(locale),
+                    _decode(display_name),
+                )
+            )
+
+        dll.nv_list_voices.argtypes = [_VOICE_CALLBACK, ctypes.c_void_p]
+        dll.nv_list_voices.restype = ctypes.c_uint32
+        dll.nv_list_voices(collect_voice, None)
+        return [*voices, *find_pinned_natural_voices()]
+    finally:
+        if dll_directory is not None:
+            dll_directory.close()
+
+
 def _pinned_voice(package_path: Path) -> NaturalVoice:
     name = package_path.name
     locale = ""
@@ -143,7 +191,7 @@ class NaturalVoiceEngine:
 
         self._dll.nv_set_audio_callback(self._audio_callback, None)
         self._dll.nv_set_word_callback(self._word_callback, None)
-        credential = (
+        self._credential = (
             config.natural_voice_credential.encode("utf-8")
             if config.natural_voice_credential
             else None
@@ -160,28 +208,23 @@ class NaturalVoiceEngine:
                     source="configured",
                 )
             ]
-            if self._initialize_first(candidates, credential, failures):
+            self._available_voices = tuple(candidates)
+            if self._initialize_first(candidates, self._credential, failures):
                 return
             raise NaturalVoiceError(
                 "The configured Natural Voice package could not be initialized. "
                 + " | ".join(failures)
             )
 
-        pinned = self._ordered_voices(
-            find_pinned_natural_voices(), config.preferred_voice_match
-        )
-        if self._initialize_first(pinned, credential, failures):
-            return
-
-        # Enumeration opens installed voice packages. Defer it until every
-        # app-owned package has failed so a Store update cannot influence a
-        # known-compatible pinned package.
+        pinned = find_pinned_natural_voices()
         self._dll.nv_list_voices(self._voice_callback, None)
-        installed = self._ordered_voices(
-            self._voices,
+        installed = list(self._voices)
+        candidates = self._ordered_voices(
+            [*installed, *pinned],
             config.preferred_voice_match,
         )
-        if self._initialize_first(installed, credential, failures):
+        self._available_voices = tuple(candidates)
+        if self._initialize_first(candidates, self._credential, failures):
             return
         if not pinned and not installed:
             raise NaturalVoiceError(
@@ -189,7 +232,36 @@ class NaturalVoiceEngine:
                 or "No pinned or installed Windows Natural Voices were found"
             )
         raise NaturalVoiceError(
-            "No compatible Natural Voice package could be initialized. "
+            "No compatible installed or pinned Natural Voice could be initialized. "
+            + " | ".join(failures)
+        )
+
+    @property
+    def available_voices(self) -> tuple[NaturalVoice, ...]:
+        return self._available_voices
+
+    def select_voice(self, package_path: str) -> NaturalVoice:
+        selected = next(
+            (
+                voice
+                for voice in self._available_voices
+                if voice.package_path.casefold() == package_path.casefold()
+            ),
+            None,
+        )
+        if selected is None:
+            raise NaturalVoiceError(
+                f"Natural Voice is no longer available: {package_path}"
+            )
+        previous = self.voice
+        failures: list[str] = []
+        if self._initialize_first([selected], self._credential, failures):
+            return selected
+
+        rollback_failures: list[str] = []
+        self._initialize_first([previous], self._credential, rollback_failures)
+        raise NaturalVoiceError(
+            "The selected Natural Voice could not be initialized. "
             + " | ".join(failures)
         )
 
@@ -312,9 +384,16 @@ _SpeechRequest = SpeechRequest
 
 
 class _Engine(Protocol):
+    @property
+    def voice(self) -> NaturalVoice: ...
+
+    @property
+    def available_voices(self) -> tuple[NaturalVoice, ...]: ...
+
     def speak(self, text: str) -> None: ...
     def stop(self) -> None: ...
     def close(self) -> None: ...
+    def select_voice(self, package_path: str) -> NaturalVoice: ...
 
 
 class NaturalVoiceSpeaker:
@@ -354,6 +433,27 @@ class NaturalVoiceSpeaker:
     @property
     def paused(self) -> bool:
         return self._playback.paused
+
+    @property
+    def voice(self) -> NaturalVoice:
+        return self._engine.voice
+
+    @property
+    def available_voices(self) -> tuple[NaturalVoice, ...]:
+        return self._engine.available_voices
+
+    def select_voice(self, package_path: str) -> NaturalVoice:
+        self.stop()
+        selected = self._engine.select_voice(package_path)
+        log_event(
+            logger,
+            logging.INFO,
+            "natural_voice.changed",
+            voice=selected.name,
+            package_path=selected.package_path,
+            source=selected.source,
+        )
+        return selected
 
     def speak(self, text: str) -> int | None:
         if len(text) < self._config.minimum_text_length:

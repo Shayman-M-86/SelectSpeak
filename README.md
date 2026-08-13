@@ -57,9 +57,12 @@ Set `SELECTSPEAK_INPUT_DLL` to use a native input DLL at another location.
 
 The in-house bridge bypasses SAPI and streams PCM plus exact word-boundary
 events from Microsoft's embedded Speech SDK. The root installer builds this
-bridge by default. A pinned compatible voice is preferred, followed by a
-compatible Narrator Natural Voice installed through Windows Settings; otherwise
-SelectSpeak automatically falls back to SAPI.
+bridge by default. Compatible Narrator Natural Voices installed through Windows
+Settings are preferred, followed by pinned older packages; otherwise SelectSpeak
+automatically falls back to SAPI.
+The bridge reads the credential matching the current Windows speech runtime in
+memory, so newly installed compatible voice-package versions can be discovered
+and probed without hard-coding that credential in SelectSpeak.
 
 `AppConfig.speech_backend` defaults to `"auto"`: SelectSpeak uses the bridge
 when it is present and usable, otherwise it retains the current SAPI backend.
@@ -72,11 +75,13 @@ language, quality steps, and speed are configurable through the
 `supertonic_voice`, `supertonic_language`, `supertonic_steps`, and
 `supertonic_speed` fields in `AppConfig`.
 
-`-NaturalVoiceMsix` extracts the package into the ignored, app-owned
+`-NaturalVoiceMsix` remains an optional compatibility fallback. It extracts the
+package into the ignored, app-owned
 `.runtime/natural_voice/voices` directory; it does not install or downgrade the
-Windows package. SelectSpeak discovers that copy first, so Microsoft Store
-updates cannot silently replace it. Rerunning the command with the same package
-is safe. If the bridge is already built, the package can also be pinned directly:
+Windows package. SelectSpeak discovers and probes voices installed through
+Windows first, then tries pinned packages. Rerunning the command with the same
+package is safe. If the bridge is already built, the package can also be pinned
+directly:
 
 ```powershell
 .\native\natural_voice\pin_voice.ps1 -MsixPath "C:\Downloads\voice.msix"
@@ -130,9 +135,10 @@ run:
   automatically falls back to the existing clipboard when nothing is selected.
 - Click **Mode: Auto** to switch to **Mode: Clipboard** when you want to force
   clipboard reading.
-- Click **Voice: Windows** to switch to the local Supertonic neural voice;
-  click **Voice: Supertonic** to return to Windows Natural Voice/SAPI. The first
-  switch can take a moment while the ONNX model loads into memory.
+- Click **Voice: … ▾** to choose any discovered Windows Natural Voice, the
+  configured local Supertonic model, or the Windows SAPI fallback. Installed
+  and pinned copies with the same name are labelled separately. The first
+  switch to Supertonic can take a moment while its ONNX model loads into memory.
 - Click **Auto hide: On** to keep the player open after speech finishes, or
   click it again to restore automatic hiding. Auto hide is enabled by default.
 - Click **Debug: Off** to show adaptive chunk boundaries and live speech
@@ -177,6 +183,8 @@ inferred from their heading and sentence structure.
 
 The rebound hotkey, clipboard mode, and UI voice selection are not persisted
 between launches. Set `AppConfig.speech_backend` to change the startup voice.
+Set `AppConfig.preferred_voice_match` to a voice name such as `Ava` to choose a
+specific Windows Natural Voice at startup.
 Set `AppConfig.speech_debug_enabled=True` to start with speech diagnostics open.
 After updating the application, choose **Quit** from the tray icon before
 starting it again; closing the player window only hides the existing process.

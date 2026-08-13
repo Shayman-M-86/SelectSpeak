@@ -10,6 +10,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <roapi.h>
@@ -131,13 +132,21 @@ int nv_initialize(const wchar_t* voice_path, const char* credential)
         }
 
         nv_shutdown();
-        auto config = EmbeddedSpeechConfig::FromPath(winrt::to_string(voice_path));
-        config->SetSpeechSynthesisOutputFormat(
-            SpeechSynthesisOutputFormat::Raw24Khz16BitMonoPcm);
-        config->SetProperty(
-            PropertyId::SpeechServiceResponse_RequestSentenceBoundary, "true");
-        config->SetProperty(
-            PropertyId::SpeechServiceResponse_RequestPunctuationBoundary, "false");
+        const auto path = winrt::to_string(voice_path);
+        const auto create_config = [&] {
+            auto config = EmbeddedSpeechConfig::FromPath(path);
+            config->SetSpeechSynthesisOutputFormat(
+                SpeechSynthesisOutputFormat::Raw24Khz16BitMonoPcm);
+            config->SetProperty(
+                PropertyId::SpeechServiceResponse_RequestSentenceBoundary,
+                "true");
+            config->SetProperty(
+                PropertyId::SpeechServiceResponse_RequestPunctuationBoundary,
+                "false");
+            return config;
+        };
+
+        auto config = create_config();
 
         auto probe = SpeechSynthesizer::FromConfig(config, nullptr);
         auto voices = probe->GetVoicesAsync().get();
@@ -147,22 +156,44 @@ int nv_initialize(const wchar_t* voice_path, const char* credential)
                                      voices->ErrorDetails);
         }
 
-        auto license = credential && *credential ? std::string(credential)
-                                                  : legacy_narrator_credential();
-        config->SetSpeechSynthesisVoice(voices->Voices.front()->Name, license);
+        std::vector<std::pair<std::string, std::string>> credentials;
+        if (credential && *credential) {
+            credentials.emplace_back("configured", credential);
+        } else {
+            if (auto installed = installed_narrator_credential()) {
+                credentials.emplace_back("installed Windows runtime",
+                                         std::move(*installed));
+            }
+            credentials.emplace_back("legacy compatibility",
+                                     legacy_narrator_credential());
+        }
 
-        // Probe before publishing the engine. Newer Narrator packages can be
-        // enumerated successfully but reject the legacy embedded-model license.
-        // Failing here lets the Python "auto" backend select SAPI immediately.
-        auto validation_synthesizer =
-            SpeechSynthesizer::FromConfig(config, nullptr);
-        auto validation = validation_synthesizer->SpeakText("");
-        if (validation->Reason != ResultReason::SynthesizingAudioCompleted) {
-            auto details =
+        std::string validation_errors;
+        bool validated = false;
+        for (const auto& [source, candidate] : credentials) {
+            auto candidate_config = create_config();
+            candidate_config->SetSpeechSynthesisVoice(
+                voices->Voices.front()->Name, candidate);
+            auto validation_synthesizer =
+                SpeechSynthesizer::FromConfig(candidate_config, nullptr);
+            auto validation = validation_synthesizer->SpeakText("");
+            if (validation->Reason ==
+                ResultReason::SynthesizingAudioCompleted) {
+                config = std::move(candidate_config);
+                validated = true;
+                break;
+            }
+            const auto details =
                 SpeechSynthesisCancellationDetails::FromResult(validation);
+            if (!validation_errors.empty()) {
+                validation_errors += " | ";
+            }
+            validation_errors += source + ": " + details->ErrorDetails;
+        }
+        if (!validated) {
             throw std::runtime_error(
-                "Natural Voice package rejected its embedded license: " +
-                details->ErrorDetails);
+                "Natural Voice package rejected available embedded licenses: " +
+                validation_errors);
         }
 
         auto stream = AudioOutputStream::CreatePushStream(

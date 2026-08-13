@@ -12,8 +12,17 @@ from .input.ocr_capture import OcrCaptureError, OcrCaptureHotkey
 from .logging_setup import log_event, log_exception, text_preview
 from .playback_session import PlaybackSession
 from .speech import Speaker, create_speaker
+from .speech.backends.natural import (
+    NaturalVoiceSpeaker,
+    discover_natural_voices,
+)
 from .speech.debug import SpeechDebugEvent
 from .speech.normalization import prepare_for_speech
+from .speech.voices import (
+    VoiceOption,
+    build_voice_options,
+    natural_voice_key,
+)
 from .ui.player import PlayerWindow
 from .ui.tray import TrayController
 
@@ -51,11 +60,6 @@ class SelectSpeakApp:
             if config.speech_backend.casefold() == "supertonic"
             else "windows"
         )
-        self._windows_speech_backend = (
-            config.speech_backend
-            if config.speech_backend.casefold() in {"auto", "natural", "sapi"}
-            else "auto"
-        )
         self._backend_switching = False
         self._last_hotkey_time = 0.0
         self._shutting_down = False
@@ -80,7 +84,7 @@ class SelectSpeakApp:
             on_pause=self.pause,
             on_resume=self.resume,
             on_stop=self.stop,
-            on_toggle_speech_backend=self.toggle_speech_backend,
+            on_select_voice=self.select_voice,
             on_toggle_clipboard=self.toggle_clipboard_mode,
             on_toggle_auto_hide=self.toggle_auto_hide,
             on_toggle_debug=self.toggle_speech_debug,
@@ -99,7 +103,9 @@ class SelectSpeakApp:
         self._speaker = create_speaker(
             self._config, self._on_word, self._on_speech_debug
         )
+        self._speech_backend = self._speaker_backend(self._speaker)
         self._speakers = {self._speech_backend: self._speaker}
+        self._configure_voice_options()
         self._hotkeys = HotkeyManager(
             self._config.default_hotkey,
             self._on_hotkey,
@@ -235,55 +241,83 @@ class SelectSpeakApp:
         self._player.set_debug_enabled(enabled)
         log_event(logger, logging.INFO, "speech.debug.changed", enabled=enabled)
 
-    def toggle_speech_backend(self) -> None:
+    def select_voice(self, key: str) -> None:
         with self._state_lock:
             if self._backend_switching:
                 return
+            option = self._voice_options.get(key)
+            if option is None or key == self._selected_voice_key:
+                return
             self._backend_switching = True
-            current = self._speech_backend
-            target = "windows" if current == "supertonic" else "supertonic"
+            current_key = self._selected_voice_key
         self.stop()
-        self._player.set_speech_backend(target, loading=True)
+        self._player.set_voice_selection(
+            option.key,
+            option.short_label,
+            loading=True,
+        )
         threading.Thread(
-            target=self._load_speech_backend,
-            args=(current, target),
+            target=self._load_voice,
+            args=(current_key, option),
             daemon=True,
-            name=f"VoiceBackend-{target}",
+            name=f"VoiceSelection-{option.backend}",
         ).start()
 
-    def _load_speech_backend(self, current: str, target: str) -> None:
+    def _load_voice(self, current_key: str, option: VoiceOption) -> None:
         try:
-            speaker = self._speakers.get(target)
-            if speaker is None:
-                backend = (
-                    "supertonic"
-                    if target == "supertonic"
-                    else self._windows_speech_backend
-                )
+            speaker = self._speakers.get(option.backend)
+            selected_config = replace(
+                self._config,
+                speech_backend=option.backend,
+                preferred_voice_match=(
+                    option.package_path
+                    if option.backend == "natural"
+                    else self._config.preferred_voice_match
+                ),
+            )
+            if option.backend == "natural" and isinstance(
+                speaker, NaturalVoiceSpeaker
+            ):
+                speaker.select_voice(option.package_path)
+            elif speaker is None:
                 speaker = create_speaker(
-                    replace(self._config, speech_backend=backend),
+                    selected_config,
                     self._on_word,
                     self._on_speech_debug,
                 )
-                self._speakers[target] = speaker
+                self._speakers[option.backend] = speaker
             with self._state_lock:
                 if self._shutting_down:
                     return
                 self._speaker = speaker
-                self._speech_backend = target
+                self._speech_backend = option.backend
+                self._selected_voice_key = option.key
+                self._config = selected_config
             self._player.call_soon(
-                lambda: self._player.set_speech_backend(target)
+                lambda: self._player.set_voice_selection(
+                    option.key, option.short_label
+                )
             )
             log_event(
                 logger,
                 logging.INFO,
-                "speaker.backend.changed",
-                backend=target,
+                "speaker.voice.changed",
+                backend=option.backend,
+                voice_key=option.key,
+                voice_label=option.label,
             )
         except Exception as error:
-            log_exception(logger, "speaker.backend.change_failed", backend=target)
+            log_exception(
+                logger,
+                "speaker.voice.change_failed",
+                backend=option.backend,
+                voice_key=option.key,
+            )
+            current = self._voice_options[current_key]
             self._player.call_soon(
-                lambda: self._player.set_speech_backend(current)
+                lambda: self._player.set_voice_selection(
+                    current.key, current.short_label
+                )
             )
             self._player.call_soon(
                 lambda message=str(error): self._player.show_backend_error(message)
@@ -291,6 +325,34 @@ class SelectSpeakApp:
         finally:
             with self._state_lock:
                 self._backend_switching = False
+
+    def _configure_voice_options(self) -> None:
+        try:
+            if isinstance(self._speaker, NaturalVoiceSpeaker):
+                natural_voices = list(self._speaker.available_voices)
+            else:
+                natural_voices = discover_natural_voices(self._config.speech)
+        except Exception:
+            log_exception(logger, "speaker.voice.discovery_failed")
+            natural_voices = []
+
+        options = build_voice_options(natural_voices, self._config.speech)
+        self._voice_options = {option.key: option for option in options}
+        if isinstance(self._speaker, NaturalVoiceSpeaker):
+            selected_key = natural_voice_key(self._speaker.voice.package_path)
+        elif self._speech_backend == "supertonic":
+            selected_key = "supertonic"
+        else:
+            selected_key = "sapi"
+        self._selected_voice_key = selected_key
+        self._player.set_voice_options(options, selected_key)
+
+    @staticmethod
+    def _speaker_backend(speaker: Speaker) -> str:
+        if isinstance(speaker, NaturalVoiceSpeaker):
+            return "natural"
+        name = type(speaker).__name__.casefold()
+        return "supertonic" if "supertonic" in name else "sapi"
 
     def start_hotkey_capture(self) -> None:
         log_event(logger, logging.INFO, "hotkey.capture.requested")

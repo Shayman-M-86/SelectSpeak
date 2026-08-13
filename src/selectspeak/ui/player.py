@@ -7,6 +7,7 @@ from queue import Empty, SimpleQueue
 
 from ..logging_setup import log_event, log_exception
 from ..speech.debug import SpeechDebugEvent
+from ..speech.voices import VoiceOption
 from .debug_panel import SpeechDebugPanelModel
 from .theme import (
     ACCENT,
@@ -46,7 +47,7 @@ class PlayerWindow(tk.Tk):
         on_pause: Callable[[], None],
         on_resume: Callable[[], None],
         on_stop: Callable[[], None],
-        on_toggle_speech_backend: Callable[[], None],
+        on_select_voice: Callable[[str], None],
         on_toggle_clipboard: Callable[[], None],
         on_toggle_auto_hide: Callable[[], None],
         on_toggle_debug: Callable[[], None],
@@ -62,6 +63,9 @@ class PlayerWindow(tk.Tk):
         self._clipboard_mode = False
         self._auto_hide = auto_hide
         self._speech_backend = speech_backend
+        self._on_select_voice = on_select_voice
+        self._voice_options: tuple[VoiceOption, ...] = ()
+        self._selected_voice_key = tk.StringVar(self, "")
         self._debug_enabled = debug_enabled
         self._debug = SpeechDebugPanelModel()
         self._on_play = on_play
@@ -101,7 +105,6 @@ class PlayerWindow(tk.Tk):
             on_toggle_clipboard=on_toggle_clipboard,
             on_toggle_auto_hide=on_toggle_auto_hide,
             on_toggle_debug=on_toggle_debug,
-            on_toggle_speech_backend=on_toggle_speech_backend,
             on_capture_hotkey=on_capture_hotkey,
         )
         self.update_idletasks()
@@ -265,22 +268,69 @@ class PlayerWindow(tk.Tk):
         if self._debug_enabled:
             self._render_debug_metrics()
 
-    def set_speech_backend(self, backend: str, *, loading: bool = False) -> None:
-        self._speech_backend = backend
-        label = "Supertonic" if backend == "supertonic" else "Windows"
+    def set_voice_options(
+        self,
+        options: tuple[VoiceOption, ...],
+        selected_key: str,
+    ) -> None:
+        self._voice_options = options
+        self._voice_menu.delete(0, "end")
+        previous_group = ""
+        for option in options:
+            if option.group != previous_group:
+                if previous_group:
+                    self._voice_menu.add_separator()
+                self._voice_menu.add_command(label=option.group, state="disabled")
+                previous_group = option.group
+            self._voice_menu.add_radiobutton(
+                label=option.label,
+                value=option.key,
+                variable=self._selected_voice_key,
+                command=lambda key=option.key: self._on_select_voice(key),
+            )
+        selected = next(
+            (option for option in options if option.key == selected_key),
+            options[0] if options else None,
+        )
+        if selected is not None:
+            self.set_voice_selection(selected.key, selected.short_label)
+        else:
+            self._backend_button.config(text="Voice: Unavailable", state="disabled")
+
+    def set_voice_selection(
+        self,
+        key: str,
+        label: str,
+        *,
+        loading: bool = False,
+    ) -> None:
+        self._selected_voice_key.set(key)
         self._backend_button.config(
-            text="Voice: Loading…" if loading else f"Voice: {label}",
+            text=f"Voice: {label}…" if loading else f"Voice: {label} ▾",
             state="disabled" if loading else "normal",
-            fg=ACCENT if backend == "supertonic" else DIM_FOREGROUND,
+            fg=ACCENT if key == "supertonic" else DIM_FOREGROUND,
         )
         self._resize(MIN_IDLE_HEIGHT)
         log_event(
             logger,
             logging.INFO,
-            "player.speech_backend.updated",
-            backend=backend,
+            "player.voice.updated",
+            voice_key=key,
+            voice_label=label,
             loading=loading,
         )
+
+    def _show_voice_menu(self) -> None:
+        if not self._voice_options:
+            return
+        try:
+            self._voice_menu.tk_popup(
+                self._backend_button.winfo_rootx(),
+                self._backend_button.winfo_rooty()
+                + self._backend_button.winfo_height(),
+            )
+        finally:
+            self._voice_menu.grab_release()
 
     def show_backend_error(self, message: str) -> None:
         self._status.config(text=f"Voice engine unavailable: {message}", fg=RED)
@@ -510,7 +560,6 @@ class PlayerWindow(tk.Tk):
         on_toggle_clipboard: Callable[[], None],
         on_toggle_auto_hide: Callable[[], None],
         on_toggle_debug: Callable[[], None],
-        on_toggle_speech_backend: Callable[[], None],
         on_capture_hotkey: Callable[[], None],
     ) -> None:
         self._control_row = tk.Frame(parent, bg=BACKGROUND)
@@ -550,10 +599,22 @@ class PlayerWindow(tk.Tk):
         backend_label = (
             "Supertonic" if self._speech_backend == "supertonic" else "Windows"
         )
+        self._voice_menu = tk.Menu(
+            self,
+            tearoff=False,
+            bg=BUTTON_BACKGROUND,
+            fg=FOREGROUND,
+            activebackground=ACCENT,
+            activeforeground=BACKGROUND,
+            disabledforeground=DIM_FOREGROUND,
+            relief="flat",
+            bd=1,
+            font=("Segoe UI", 9),
+        )
         self._backend_button = self._small_button(
             self._control_row,
-            f"Voice: {backend_label}",
-            on_toggle_speech_backend,
+            f"Voice: {backend_label} ▾",
+            self._show_voice_menu,
         )
         self._backend_button.config(
             fg=ACCENT if self._speech_backend == "supertonic" else DIM_FOREGROUND

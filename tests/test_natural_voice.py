@@ -72,7 +72,7 @@ def test_find_pinned_natural_voices_reads_extracted_packages(
     assert voices[0].source == "pinned"
 
 
-def test_engine_uses_pinned_voice_without_opening_installed_packages(
+def test_engine_falls_back_to_pinned_voice_when_no_installed_voice_exists(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -139,7 +139,98 @@ def test_engine_uses_pinned_voice_without_opening_installed_packages(
     assert [name for name, _args in events if name == "nv_initialize"] == [
         "nv_initialize"
     ]
-    assert not any(name == "nv_list_voices" for name, _args in events)
+    assert [name for name, _args in events if name == "nv_list_voices"] == [
+        "nv_list_voices"
+    ]
+
+
+def test_engine_prefers_matching_installed_voice_over_pinned_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    initialized_paths: list[str] = []
+
+    class FakeFunction:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def __call__(self, *args: Any) -> int | None:
+            if self.name == "nv_list_voices":
+                callback = args[0]
+                callback(
+                    "C:/WindowsApps/AvaHD",
+                    b"Microsoft Ava (Natural HD)",
+                    b"en-US",
+                    b"Ava",
+                    None,
+                )
+                return 1
+            if self.name == "nv_initialize":
+                initialized_paths.append(args[0])
+                return 0
+            return None if self.name == "nv_shutdown" else 0
+
+    class FakeDll:
+        def __init__(self) -> None:
+            for name in (
+                "nv_list_voices",
+                "nv_initialize",
+                "nv_set_audio_callback",
+                "nv_set_word_callback",
+                "nv_speak",
+                "nv_stop",
+                "nv_shutdown",
+                "nv_last_error",
+            ):
+                setattr(self, name, FakeFunction(name))
+
+    class FakeDirectory:
+        def close(self) -> None:
+            pass
+
+    pinned = NaturalVoice(
+        str(tmp_path / "Aria-1.0.1"),
+        "Microsoft Aria (Natural)",
+        "en-US",
+        "Aria",
+        "pinned",
+    )
+    fake_dll = FakeDll()
+    monkeypatch.setattr(
+        natural_backend,
+        "find_natural_voice_dll",
+        lambda _configured: tmp_path / "bridge.dll",
+    )
+    monkeypatch.setattr(
+        natural_backend, "find_pinned_natural_voices", lambda: [pinned]
+    )
+    monkeypatch.setattr(natural_backend.ctypes, "CDLL", lambda _path: fake_dll)
+    monkeypatch.setattr(
+        natural_backend.os,
+        "add_dll_directory",
+        lambda _path: FakeDirectory(),
+        raising=False,
+    )
+
+    config = AppConfig(preferred_voice_match="Ava").speech
+    engine = NaturalVoiceEngine(config, lambda _data: None, lambda *_: None)
+
+    assert engine.voice.name == "Microsoft Ava (Natural HD)"
+    assert initialized_paths == ["C:/WindowsApps/AvaHD"]
+    assert engine.available_voices == (
+        NaturalVoice(
+            "C:/WindowsApps/AvaHD",
+            "Microsoft Ava (Natural HD)",
+            "en-US",
+            "Ava",
+        ),
+        pinned,
+    )
+
+    assert engine.select_voice(pinned.package_path) == pinned
+    assert engine.voice == pinned
+    assert initialized_paths == ["C:/WindowsApps/AvaHD", pinned.package_path]
+    engine.close()
 
 
 def test_find_natural_voice_dll_accepts_an_explicit_path(tmp_path: Path) -> None:

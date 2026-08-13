@@ -27,7 +27,8 @@ using nv_voice_callback_t = void (*)(const wchar_t* package_path,
 // Enumerates MicrosoftWindows.Voice.* packages and returns the number of voices.
 NV_API std::uint32_t nv_list_voices(nv_voice_callback_t callback, void* context);
 
-// A null/empty credential uses the isolated legacy Narrator credential provider.
+// A null/empty credential tries the installed Windows runtime credential, then
+// the isolated legacy Narrator credential for older package compatibility.
 NV_API int nv_initialize(const wchar_t* voice_path, const char* credential);
 NV_API void nv_set_audio_callback(nv_audio_callback_t callback, void* context);
 NV_API void nv_set_word_callback(nv_word_callback_t callback, void* context);

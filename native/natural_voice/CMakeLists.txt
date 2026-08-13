@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
 project(selectspeak_natural_voice LANGUAGES CXX)
 
+include(CTest)
+
 if(NOT WIN32 OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
     message(FATAL_ERROR "SelectSpeak's Natural Voice bridge requires 64-bit Windows")
 endif()
@@ -34,3 +36,15 @@ add_custom_command(TARGET selectspeak_natural_voice POST_BUILD
         "${SPEECHSDK_ROOT}/runtimes/win-x64/native"
         "$<TARGET_FILE_DIR:selectspeak_natural_voice>"
     COMMENT "Copying the Microsoft Speech SDK runtime")
+
+if(BUILD_TESTING)
+    add_executable(selectspeak_credential_provider_tests
+        credential_provider.cpp
+        credential_provider_tests.cpp
+    )
+    target_compile_features(selectspeak_credential_provider_tests PRIVATE cxx_std_17)
+    target_compile_definitions(selectspeak_credential_provider_tests PRIVATE
+        WIN32_LEAN_AND_MEAN NOMINMAX)
+    add_test(NAME natural_voice_credential_provider
+        COMMAND selectspeak_credential_provider_tests)
+endif()

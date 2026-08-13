@@ -228,9 +228,9 @@ try {
     }
     if (-not $SkipNaturalVoice) {
         if ($NaturalVoiceMsix) {
-            Write-Host "Natural Voice is pinned locally and will not be replaced by Windows voice updates."
+            Write-Host "Natural Voice has an installed-voice-independent pinned fallback."
         } else {
-            Write-Host "Natural Voice uses a pinned package when available, then compatible Narrator voices installed in Windows."
+            Write-Host "Natural Voice discovers compatible Narrator voices installed in Windows, then pinned fallbacks."
         }
     }
 } finally {

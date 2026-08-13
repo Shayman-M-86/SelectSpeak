@@ -38,6 +38,8 @@ $speechSdkRoot = Join-Path $packagesRoot `
 if ($LASTEXITCODE) { throw "CMake configuration failed with exit code $LASTEXITCODE" }
 & $cmake --build $buildRoot --config Release
 if ($LASTEXITCODE) { throw "Native build failed with exit code $LASTEXITCODE" }
+& $cmake -E chdir $buildRoot ctest -C Release --output-on-failure
+if ($LASTEXITCODE) { throw "Native tests failed with exit code $LASTEXITCODE" }
 
 $bridge = Get-ChildItem -Recurse -LiteralPath $buildRoot `
     -Filter "selectspeak_natural_voice.dll" | Select-Object -First 1
