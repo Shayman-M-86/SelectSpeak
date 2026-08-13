@@ -8,10 +8,9 @@ registration, Azure/Edge networking, WebSockets, proxy support, or MP3 decoder.
 The C ABI discovers current installed packages, probes the actual SDK voice
 name, streams raw 24 kHz/16-bit/mono PCM, emits word boundaries, and supports
 cancellation after the SDK's `SynthesisStarted` event. It obtains the matching
-credential from the installed Windows speech runtime in memory, then falls back
-to the legacy compatibility credential for older voice packages. Python owns
-audio playback through WinMM so pause and resume apply to already-buffered
-sound.
+credential only from the installed Windows speech runtime and keeps it in
+memory. Python owns audio playback through WinMM so pause and resume apply to
+already-buffered sound.
 
 ## Build
 
@@ -30,18 +29,9 @@ For native-only development, run:
 
 The script restores the pinned Speech SDK NuGet packages and creates the local,
 ignored `.runtime/native` directory. It does not bundle voice packages.
-
-An older package can still be kept as an extracted, app-owned fallback:
-
-```powershell
-.\native\natural_voice\pin_voice.ps1 -MsixPath "C:\Downloads\voice.msix"
-```
-
-Pinned packages are stored below `.runtime/native/voices`. Current
-Windows-installed voices are discovered first, and a specifically preferred
-voice is tried before the remaining installed and pinned fallbacks. The root
-installer accepts the same package through `-NaturalVoiceMsix`. Neither command
-installs or downgrades the Windows package.
+Natural Voice is available only when both a compatible
+`MicrosoftWindows.Voice.*` package and the corresponding speech runtime are
+installed through Windows.
 
 The Narrator integration is unofficial and may break after Windows or voice
 package updates. See `THIRD_PARTY_NOTICES.md` before redistributing anything.

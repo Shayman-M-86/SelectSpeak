@@ -4,15 +4,12 @@ import ctypes
 import logging
 import threading
 import time
-import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Protocol
 
 from ...config import SpeechConfig
 from ...native import get_native_bridge
-from ...runtime_paths import repository_runtime_path
 from ..debug import SpeechDebugCallback, emit_speech_debug
 from ..pipeline import AdaptiveSpeechSession, GenerationStatistics
 from ..playback import PlaybackController, SpeechRequest
@@ -36,7 +33,6 @@ class NaturalVoice:
     name: str
     locale: str
     display_name: str
-    source: str = "installed"
 
 
 _AUDIO_CALLBACK = ctypes.CFUNCTYPE(None, ctypes.POINTER(ctypes.c_uint8), ctypes.c_uint32, ctypes.c_void_p)
@@ -61,44 +57,8 @@ def _decode(value: bytes | None) -> str:
     return value.decode("utf-8", errors="replace") if value else ""
 
 
-def find_pinned_natural_voices(root: Path | None = None) -> list[NaturalVoice]:
-    """Find extracted, app-owned voice packages that Windows cannot update."""
-    voice_roots = (
-        (root,)
-        if root is not None
-        else (
-            repository_runtime_path("native", "voices"),
-            repository_runtime_path("natural_voice", "voices"),
-        )
-    )
-    packages_by_identity: dict[str, Path] = {}
-    for voice_root in voice_roots:
-        if not voice_root.is_dir():
-            continue
-        for token_path in voice_root.rglob("Tokens.xml"):
-            package_path = token_path.parent
-            packages_by_identity.setdefault(package_path.name.casefold(), package_path)
-    package_paths = sorted(
-        packages_by_identity.values(),
-        key=lambda path: str(path).casefold(),
-    )
-    return [_pinned_voice(path) for path in package_paths]
-
-
 def discover_natural_voices(config: SpeechConfig) -> list[NaturalVoice]:
-    """List selectable installed and pinned voices without synthesizing."""
-    if config.natural_voice_path:
-        package_path = Path(config.natural_voice_path).resolve()
-        return [
-            NaturalVoice(
-                str(package_path),
-                package_path.name,
-                "",
-                package_path.name,
-                "configured",
-            )
-        ]
-
+    """List selectable Natural Voices installed through Windows."""
     dll = get_native_bridge(config.native_dll).library
     voices: list[NaturalVoice] = []
 
@@ -122,30 +82,7 @@ def discover_natural_voices(config: SpeechConfig) -> list[NaturalVoice]:
     dll.ss_voice_list.argtypes = [_VOICE_CALLBACK, ctypes.c_void_p]
     dll.ss_voice_list.restype = ctypes.c_uint32
     dll.ss_voice_list(collect_voice, None)
-    return [*voices, *find_pinned_natural_voices()]
-
-
-def _pinned_voice(package_path: Path) -> NaturalVoice:
-    name = package_path.name
-    locale = ""
-    try:
-        token = ET.parse(package_path / "Tokens.xml").find(".//Token")
-        if token is not None:
-            display = token.find("./String[@name='']")
-            name_attribute = token.find("./Attribute[@name='Name']")
-            if display is not None and display.get("value"):
-                name = display.get("value", name)
-            elif name_attribute is not None and name_attribute.get("value"):
-                name = name_attribute.get("value", name)
-    except (ET.ParseError, OSError):
-        pass
-    return NaturalVoice(
-        package_path=str(package_path.resolve()),
-        name=name,
-        locale=locale,
-        display_name=name,
-        source="pinned",
-    )
+    return voices
 
 
 class NaturalVoiceEngine:
@@ -169,43 +106,17 @@ class NaturalVoiceEngine:
 
         self._dll.ss_voice_set_audio_callback(self._audio_callback, None)
         self._dll.ss_voice_set_word_callback(self._word_callback, None)
-        self._credential = (
-            config.natural_voice_credential.encode("utf-8") if config.natural_voice_credential else None
-        )
         failures: list[str] = []
-        if config.natural_voice_path:
-            package_path = str(Path(config.natural_voice_path).resolve())
-            candidates = [
-                NaturalVoice(
-                    package_path=package_path,
-                    name=Path(package_path).name,
-                    locale="",
-                    display_name="",
-                    source="configured",
-                )
-            ]
-            self._available_voices = tuple(candidates)
-            if self._initialize_first(candidates, self._credential, failures):
-                return
-            raise NaturalVoiceError(
-                "The configured Natural Voice package could not be initialized. " + " | ".join(failures)
-            )
-
-        pinned = find_pinned_natural_voices()
         installed = self._enumerate_installed_voices()
-        candidates = self._ordered_voices(
-            [*installed, *pinned],
-            config.preferred_voice_match,
-        )
+        candidates = self._ordered_voices(installed, config.preferred_voice_match)
         self._available_voices = tuple(candidates)
-        if self._initialize_first(candidates, self._credential, failures):
+        if self._initialize_first(candidates, failures):
             return
-        if not pinned and not installed:
-            raise NaturalVoiceError(
-                self._last_error() or "No pinned or installed Windows Natural Voices were found"
-            )
+        if not installed:
+            raise NaturalVoiceError(self._last_error() or "No Windows Natural Voices are installed")
         raise NaturalVoiceError(
-            "No compatible installed or pinned Natural Voice could be initialized. " + " | ".join(failures)
+            "No installed Natural Voice could be initialized with the installed "
+            "Windows speech runtime credential. " + " | ".join(failures)
         )
 
     @property
@@ -213,11 +124,8 @@ class NaturalVoiceEngine:
         return self._available_voices
 
     def refresh_voices(self) -> tuple[NaturalVoice, ...]:
-        """Refresh installed and pinned packages without recreating the engine."""
-        voices = [
-            *self._enumerate_installed_voices(),
-            *find_pinned_natural_voices(),
-        ]
+        """Refresh voices installed through Windows without recreating the engine."""
+        voices = self._enumerate_installed_voices()
         active_voice = getattr(self, "voice", None)
         if active_voice is not None and not any(
             voice.package_path.casefold() == active_voice.package_path.casefold() for voice in voices
@@ -240,11 +148,11 @@ class NaturalVoiceEngine:
             raise NaturalVoiceError(f"Natural Voice is no longer available: {package_path}")
         previous = self.voice
         failures: list[str] = []
-        if self._initialize_first([selected], self._credential, failures):
+        if self._initialize_first([selected], failures):
             return selected
 
         rollback_failures: list[str] = []
-        self._initialize_first([previous], self._credential, rollback_failures)
+        self._initialize_first([previous], rollback_failures)
         raise NaturalVoiceError(
             "The selected Natural Voice could not be initialized. " + " | ".join(failures)
         )
@@ -257,26 +165,22 @@ class NaturalVoiceEngine:
     def _initialize_first(
         self,
         candidates: list[NaturalVoice],
-        credential: bytes | None,
         failures: list[str],
     ) -> bool:
         for candidate in candidates:
             logger.info(
-                "natural_voice.probing voice=%s locale=%s package_path=%s source=%s",
+                "natural_voice.probing voice=%s locale=%s package_path=%s",
                 candidate.name,
                 candidate.locale,
                 candidate.package_path,
-                candidate.source,
             )
-            if not self._dll.ss_voice_initialize(candidate.package_path, credential):
+            if not self._dll.ss_voice_initialize(candidate.package_path):
                 self.voice = candidate
                 logger.info(
-                    "natural_voice.selected voice=%s locale=%s package_path=%s "
-                    "source=%s available_voice_count=%s",
+                    "natural_voice.selected voice=%s locale=%s package_path=%s available_voice_count=%s",
                     candidate.name,
                     candidate.locale,
                     candidate.package_path,
-                    candidate.source,
                     len(candidates),
                 )
                 return True
@@ -297,10 +201,7 @@ class NaturalVoiceEngine:
     def _configure_api(self) -> None:
         self._dll.ss_voice_list.argtypes = [_VOICE_CALLBACK, ctypes.c_void_p]
         self._dll.ss_voice_list.restype = ctypes.c_uint32
-        self._dll.ss_voice_initialize.argtypes = [
-            ctypes.c_wchar_p,
-            ctypes.c_char_p,
-        ]
+        self._dll.ss_voice_initialize.argtypes = [ctypes.c_wchar_p]
         self._dll.ss_voice_initialize.restype = ctypes.c_int
         self._dll.ss_voice_set_audio_callback.argtypes = [
             _AUDIO_CALLBACK,
@@ -432,10 +333,9 @@ class NaturalVoiceSpeaker:
         self.stop()
         selected = self._engine.select_voice(package_path)
         logger.info(
-            "natural_voice.changed voice=%s package_path=%s source=%s",
+            "natural_voice.changed voice=%s package_path=%s",
             selected.name,
             selected.package_path,
-            selected.source,
         )
         return selected
 

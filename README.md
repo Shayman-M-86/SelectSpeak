@@ -9,11 +9,55 @@ by a small native Windows bridge.
 
 ## Requirements
 
-- 64-bit Windows 10 or 11
-- An internet connection for first-time setup
-- WinGet (included with Microsoft's App Installer on current Windows releases)
+- 64-bit Windows 10 version 1809 or later, or Windows 11
+- An internet connection the first time the optional Supertonic model is used
 
-## First-time setup
+## User installation
+
+Download and run:
+
+```text
+SelectSpeak-Setup-0.1.0.exe
+```
+
+The installer does not require administrator rights. It installs SelectSpeak
+to `%LOCALAPPDATA%\Programs\SelectSpeak`, adds it to the Start Menu, and offers
+optional desktop and sign-in startup shortcuts. SelectSpeak can be launched at
+the end of the installation.
+
+Quit SelectSpeak from its tray menu before installing an update. The stable
+installer identity lets a newer release upgrade the existing application in
+place while retaining the previously selected shortcut options.
+
+A self-contained portable folder is also produced for testing and portable use:
+
+```text
+dist/SelectSpeak/
+├── SelectSpeak.exe
+├── _internal/
+├── native/
+└── licenses/
+```
+
+Run `SelectSpeak.exe`; Python, uv, CMake, and the repository are not required on
+the destination computer.
+
+SelectSpeak stores writable state outside the application folder:
+
+```text
+%LOCALAPPDATA%\SelectSpeak\
+├── settings.json
+├── logs\selectspeak.log
+└── models\supertonic3\
+```
+
+Settings use a versioned schema and persist the selected backend and Natural
+Voice, hotkeys, speech settings, Supertonic options, OCR language, clipboard
+mode, auto-hide preference, and speech diagnostics preference. Installer
+upgrades and normal uninstall both preserve this directory. It can be removed
+manually when a complete data reset is wanted.
+
+## Developer setup
 
 Open PowerShell in the project folder and run:
 
@@ -21,7 +65,8 @@ Open PowerShell in the project folder and run:
 .\install.ps1
 ```
 
-The installer provisions `uv`, a managed Python 3.13 installation, all Python
+This developer setup script requires WinGet. It provisions `uv`, a managed
+Python 3.13 installation, all Python
 packages, Visual C++ Build Tools and CMake when needed, and the single native
 bridge. It also downloads the local Supertonic ONNX voice model, then verifies
 imports and runs the test, lint, and type-check suites. It is safe to run again
@@ -38,13 +83,6 @@ direct Natural Voice bridge. Use `-SkipSupertonicModel` to defer the model
 download until Supertonic is first selected. Use `-SkipChecks` to omit developer
 checks during installation.
 
-To keep a known-compatible Natural Voice version independent of Windows voice
-updates, pass its downloaded MSIX to the installer:
-
-```powershell
-.\install.ps1 -NaturalVoiceMsix "C:\Downloads\MicrosoftWindows.Voice.en-US.Aria.2_1.0.1.0_x64__cw5n1h2txyewy.Msix"
-```
-
 The input bridge tries UI Automation first, then uses `SendInput`, clipboard
 sequence polling, and an eager multi-format clipboard snapshot as its fallback.
 The normal capture and OCR shortcuts share one native message thread. OCR owns
@@ -59,11 +97,12 @@ Set `SELECTSPEAK_NATIVE_DLL` to use the unified native DLL at another location.
 The in-house bridge bypasses SAPI and streams PCM plus exact word-boundary
 events from Microsoft's embedded Speech SDK. The root installer builds this
 bridge by default. Compatible Narrator Natural Voices installed through Windows
-Settings are preferred, followed by pinned older packages; otherwise SelectSpeak
-automatically falls back to SAPI.
+Settings are discovered dynamically; otherwise SelectSpeak automatically falls
+back to SAPI.
 The bridge reads the credential matching the current Windows speech runtime in
 memory, so newly installed compatible voice-package versions can be discovered
-and probed without hard-coding that credential in SelectSpeak.
+and probed without accepting configured credentials or hard-coding a legacy
+credential in SelectSpeak.
 
 `AppConfig.speech_backend` defaults to `"auto"`: SelectSpeak uses the bridge
 when it is present and usable, otherwise it retains the current SAPI backend.
@@ -76,27 +115,12 @@ language, quality steps, and speed are configurable through the
 `supertonic_voice`, `supertonic_language`, `supertonic_steps`, and
 `supertonic_speed` fields in `AppConfig`.
 
-`-NaturalVoiceMsix` remains an optional compatibility fallback. It extracts the
-package into the ignored, app-owned
-`.runtime/native/voices` directory; it does not install or downgrade the
-Windows package. SelectSpeak discovers and probes voices installed through
-Windows first, then tries pinned packages. Rerunning the command with the same
-package is safe. If the bridge is already built, the package can also be pinned
-directly:
-
-```powershell
-.\native\natural_voice\pin_voice.ps1 -MsixPath "C:\Downloads\voice.msix"
-```
-
-For a voice already extracted elsewhere, set `AppConfig.natural_voice_path` to
-the folder containing `Tokens.xml`. That explicit path bypasses all discovery.
-
 This depends on an unofficial, version-sensitive interface to Microsoft's
 installed voice packages. The build pins Speech SDK 1.41.1 for compatibility;
 the SDK and voice-model redistribution terms are separate from this project's
 source license. See `native/natural_voice/THIRD_PARTY_NOTICES.md`.
 
-## Run
+## Development run
 
 Double-click `run.vbs` to launch without a console window. It uses the
 project-local Python environment created by `install.ps1`, so `uv` does not
@@ -119,7 +143,9 @@ speech normalization, giving the chunker meaningful structural boundaries.
 
 ## Start automatically
 
-Pass `-AddToStartup` to the installer. To remove the startup shortcut later,
+Select **Start SelectSpeak when I sign in** while running the Windows installer.
+For a developer checkout, pass `-AddToStartup` to `install.ps1`. To remove that
+development shortcut later,
 run:
 
 ```powershell
@@ -137,11 +163,10 @@ run:
 - Click **Mode: Auto** to switch to **Mode: Clipboard** when you want to force
   clipboard reading.
 - Click **Voice: … ▾** to choose any discovered Windows Natural Voice, the
-  configured local Supertonic model, or the Windows SAPI fallback. Installed
-  and pinned copies with the same name are labelled separately. Voice packages
-  are scanned again whenever the menu opens, so newly downloaded Windows voices
-  appear without restarting SelectSpeak. The first switch to Supertonic can
-  take a moment while its ONNX model loads into memory.
+  configured local Supertonic model, or the Windows SAPI fallback. Voice
+  packages are scanned again whenever the menu opens, so newly installed
+  Windows voices appear without restarting SelectSpeak. The first switch to
+  Supertonic can take a moment while its ONNX model loads into memory.
 - Click **Auto hide: On** to keep the player open after speech finishes, or
   click it again to restore automatic hiding. Auto hide is enabled by default.
 - Click **Debug: Off** to show adaptive chunk boundaries and live speech
@@ -180,31 +205,28 @@ highlights the active word within the structured preview. Visual bullet markers
 are removed before each segment is sent to the speech engine. When Windows
 preserves list rows but drops their markers, list-shaped multiline blocks are
 inferred from their heading and sentence structure.
-- Click the displayed hotkey to bind a different key combination for the
-  current session.
+- Click the displayed hotkey to bind a different key combination.
 - Use the tray icon to show the player or quit.
 
-The rebound hotkey, clipboard mode, and UI voice selection are not persisted
-between launches. Set `AppConfig.speech_backend` to change the startup voice.
-Set `AppConfig.preferred_voice_match` to a voice name such as `Ava` to choose a
-specific Windows Natural Voice at startup.
-Set `AppConfig.speech_debug_enabled=True` to start with speech diagnostics open.
+The rebound hotkey, clipboard mode, selected backend/voice, and UI preferences
+are persisted in `%LOCALAPPDATA%\SelectSpeak\settings.json`. Code-level
+`AppConfig` values remain the defaults for a new profile.
 After updating the application, choose **Quit** from the tray icon before
 starting it again; closing the player window only hides the existing process.
 
 ## Debug log
 
-Logging is controlled only by `AppConfig` in `src/selectspeak/config.py`. It is
-currently enabled while the Natural Voice integration is being diagnosed and
-writes to `selectspeak.log`. The entry point configures logging once; individual
-modules use their ordinary `logging.getLogger(__name__)` logger and let records
-propagate to that central handler.
+Logging is controlled by `AppConfig` in `src/selectspeak/config.py` and writes to
+`%LOCALAPPDATA%\SelectSpeak\logs\selectspeak.log` by default. The entry point
+configures logging once; individual modules use their ordinary
+`logging.getLogger(__name__)` logger and let records propagate to that central
+handler.
 
 The structured JSON Lines diagnostic switch is:
 
 ```python
 logging_enabled: bool = True
-log_file: str = "selectspeak.log"
+log_file: str = ""  # defaults to %LOCALAPPDATA%\SelectSpeak\logs\selectspeak.log
 ```
 
 The diagnostic log can contain selected or clipboard text previews, so treat
@@ -220,6 +242,38 @@ uv run pytest
 uv run ty check --python-platform win32
 uv build
 ```
+
+To create both the portable Windows application and installer:
+
+```powershell
+.\packaging\build.ps1
+```
+
+This rebuilds the native bridge, stages an explicit ten-file native allowlist,
+collects third-party notices, creates and verifies a PyInstaller `onedir` build,
+and compiles `dist\SelectSpeak-Setup-<version>.exe` with Inno Setup 6. The build
+also creates a SHA-256 checksum alongside the installer. No voice package or
+`.runtime` directory is included. During an iteration where the native bridge
+has already been rebuilt and tested, use `-SkipNativeBuild`. Use
+`-SkipInstaller` when only the portable folder is needed.
+
+Inno Setup is a release-build dependency. Install it with:
+
+```powershell
+winget install --id JRSoftware.InnoSetup --exact
+```
+
+When the portable folder already exists, the installer alone can be rebuilt and
+tested with:
+
+```powershell
+.\packaging\build_installer.ps1
+.\packaging\smoke_test_installer.ps1
+```
+
+The smoke test uses an isolated installation directory, starts the installed
+application, repeats the installation as an upgrade, uninstalls it, and verifies
+that its isolated user settings remain intact.
 
 ## Project structure
 
@@ -237,6 +291,21 @@ src/selectspeak/ui/         Player window, diagnostics, theme, and tray
 native/CMakeLists.txt       One DLL target with a small namespaced C ABI
 native/build.ps1            One native build and runtime deployment path
 native/natural_voice/       Natural Voice implementation module
-native/input/               Hotkey, capture, and Windows OCR implementation module
+native/input/input_bridge.cpp
+                            Stable C ABI forwarding layer
+native/input/input_runtime.h
+                            Internal interface shared with OCR
+native/input/hotkeys/      Message window, hotkeys, input lifecycle,
+                            and shortcut recording
+native/input/selection/    UI Automation and clipboard selection capture
+native/input/ocr/          Windows OCR selection and layout reconstruction
 native/build_helpers.ps1    Shared C++ toolchain discovery and installation
+packaging/SelectSpeak.spec  PyInstaller onedir definition
+packaging/SelectSpeak.iss   Per-user Inno Setup installer definition
+packaging/build.ps1         Portable and installer release build
+packaging/build_installer.ps1
+                            Installer compiler and checksum generation
+packaging/smoke_test_installer.ps1
+                            Install, upgrade, startup, and uninstall test
+packaging/stage_native.ps1  Explicit native runtime allowlist
 ```

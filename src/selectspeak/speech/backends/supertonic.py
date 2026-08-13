@@ -10,6 +10,7 @@ import numpy as np
 from supertonic import TTS
 
 from ...config import SpeechConfig
+from ...runtime_paths import model_dir
 from ..contracts import WordCallback
 from ..debug import SpeechDebugCallback, emit_speech_debug
 from ..pipeline import AdaptiveSpeechSession, GenerationStatistics
@@ -159,7 +160,7 @@ class SupertonicSpeaker:
         self._request_text = ""
         self._generation_statistics = GenerationStatistics()
         logger.info("supertonic.model.loading")
-        self._tts = TTS(auto_download=True)
+        self._tts = TTS(model_dir=model_dir("supertonic3"), auto_download=True)
         self._style = self._tts.get_voice_style(config.supertonic_voice)
         self._sample_rate = int(getattr(self._tts, "sample_rate", SAMPLE_RATE))
         self._player = WaveOutPlayer(

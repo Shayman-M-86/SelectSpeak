@@ -37,21 +37,12 @@ def build_voice_options(
     ordered_voices = sorted(
         voices,
         key=lambda voice: (
-            voice.source != "installed",
             _natural_voice_label(voice).casefold(),
             voice.package_path.casefold(),
         ),
     )
-    duplicate_names = {
-        name
-        for name in {_natural_voice_label(voice) for voice in ordered_voices}
-        if sum(_natural_voice_label(item) == name for item in ordered_voices) > 1
-    }
     for voice in ordered_voices:
         label = _natural_voice_label(voice)
-        if label in duplicate_names:
-            source = "installed" if voice.source == "installed" else "pinned fallback"
-            label = f"{label} ({source})"
         options.append(
             VoiceOption(
                 key=natural_voice_key(voice.package_path),

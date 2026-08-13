@@ -8,7 +8,7 @@
 #define SS_API extern "C" __declspec(dllimport)
 #endif
 
-inline constexpr std::uint32_t SELECTSPEAK_NATIVE_API_VERSION = 1;
+inline constexpr std::uint32_t SELECTSPEAK_NATIVE_API_VERSION = 2;
 
 using ss_capture_callback_t = void(__cdecl*)(const wchar_t*, void*);
 using ss_activation_callback_t = int(__cdecl*)(void*);
@@ -52,8 +52,7 @@ SS_API int ss_ocr_recognize_bgra(const unsigned char* pixels,
                                  ss_ocr_callback_t callback, void* context);
 
 SS_API std::uint32_t ss_voice_list(ss_voice_callback_t callback, void* context);
-SS_API int ss_voice_initialize(const wchar_t* voice_path,
-                               const char* credential);
+SS_API int ss_voice_initialize(const wchar_t* voice_path);
 SS_API void ss_voice_set_audio_callback(ss_audio_callback_t callback,
                                         void* context);
 SS_API void ss_voice_set_word_callback(ss_word_callback_t callback,

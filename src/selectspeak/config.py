@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 
+from .runtime_paths import log_dir
+
 
 @dataclass(frozen=True, slots=True)
 class InputConfig:
@@ -16,8 +18,6 @@ class SpeechConfig:
     preferred_voice_match: str
     speech_backend: str
     native_dll: str
-    natural_voice_path: str
-    natural_voice_credential: str
     supertonic_voice: str
     supertonic_language: str
     supertonic_steps: int
@@ -33,6 +33,7 @@ class UiConfig:
     app_name: str
     auto_hide: bool
     speech_debug_enabled: bool
+    clipboard_mode: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,19 +51,18 @@ class AppConfig:
     preferred_voice_match: str = "natural"
     speech_backend: str = "auto"
     native_dll: str = ""
-    natural_voice_path: str = ""
-    natural_voice_credential: str = ""
     supertonic_voice: str = "F4"
     supertonic_language: str = "en"
     supertonic_steps: int = 8
     supertonic_speed: float = 1.05
     auto_hide: bool = True
+    clipboard_mode: bool = False
     speech_rate: int = 0
     speech_volume: int = 100
     structure_pause_seconds: float = 0.1
     speech_debug_enabled: bool = True
     logging_enabled: bool = True
-    log_file: str = "selectspeak.log"
+    log_file: str = ""
     minimum_text_length: int = 3
     hotkey_debounce_seconds: float = 0.3
     capture_timeout_seconds: float = 15.0
@@ -84,8 +84,6 @@ class AppConfig:
             self.preferred_voice_match,
             self.speech_backend,
             self.native_dll,
-            self.natural_voice_path,
-            self.natural_voice_credential,
             self.supertonic_voice,
             self.supertonic_language,
             self.supertonic_steps,
@@ -98,11 +96,17 @@ class AppConfig:
 
     @property
     def ui(self) -> UiConfig:
-        return UiConfig(self.app_name, self.auto_hide, self.speech_debug_enabled)
+        return UiConfig(
+            self.app_name,
+            self.auto_hide,
+            self.speech_debug_enabled,
+            self.clipboard_mode,
+        )
 
     @property
     def logging(self) -> LoggingConfig:
-        return LoggingConfig(self.logging_enabled, self.log_file)
+        log_file = self.log_file or str(log_dir() / "selectspeak.log")
+        return LoggingConfig(self.logging_enabled, log_file)
 
 
 DEFAULT_CONFIG = AppConfig()

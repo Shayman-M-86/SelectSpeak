@@ -12,6 +12,7 @@ from .input.ocr_capture import OcrCaptureError, OcrCaptureHotkey
 from .logging_setup import text_preview
 from .native import shutdown_native_bridge
 from .playback_session import PlaybackSession
+from .settings import SettingsStore
 from .speech import Speaker, create_speaker
 from .speech.backends.natural import NaturalVoiceSpeaker, discover_natural_voices
 from .speech.debug import SpeechDebugEvent
@@ -38,11 +39,16 @@ def should_stop_clipboard_speech_immediately(*, speaking: bool, source: str) -> 
 class SelectSpeakApp:
     """Coordinate application state while delegating platform-specific work."""
 
-    def __init__(self, config: AppConfig = DEFAULT_CONFIG) -> None:
+    def __init__(
+        self,
+        config: AppConfig = DEFAULT_CONFIG,
+        settings: SettingsStore | None = None,
+    ) -> None:
         self._config = config
+        self._settings = settings
         self._state_lock = threading.RLock()
         self._session = PlaybackSession()
-        self._clipboard_mode = False
+        self._clipboard_mode = config.clipboard_mode
         self._auto_hide = config.auto_hide
         self._speech_debug_enabled = config.speech_debug_enabled
         self._speech_backend = "supertonic" if config.speech_backend.casefold() == "supertonic" else "windows"
@@ -78,6 +84,8 @@ class SelectSpeakApp:
             speech_backend=self._speech_backend,
             debug_enabled=self._speech_debug_enabled,
         )
+        if self._clipboard_mode:
+            self._player.set_clipboard_mode(True)
         self._clipboard = ClipboardService()
         self._ocr_capture = OcrCaptureHotkey(
             self._config.ocr_hotkey,
@@ -182,21 +190,30 @@ class SelectSpeakApp:
         with self._state_lock:
             self._clipboard_mode = not self._clipboard_mode
             enabled = self._clipboard_mode
+            self._config = replace(self._config, clipboard_mode=enabled)
+            config = self._config
         self._player.set_clipboard_mode(enabled)
+        self._save_settings(config)
         logger.info("capture.mode.changed mode=%s", "clipboard" if enabled else "auto")
 
     def toggle_auto_hide(self) -> None:
         with self._state_lock:
             self._auto_hide = not self._auto_hide
             enabled = self._auto_hide
+            self._config = replace(self._config, auto_hide=enabled)
+            config = self._config
         self._player.set_auto_hide(enabled)
+        self._save_settings(config)
         logger.info("player.auto_hide.changed enabled=%s", enabled)
 
     def toggle_speech_debug(self) -> None:
         with self._state_lock:
             self._speech_debug_enabled = not self._speech_debug_enabled
             enabled = self._speech_debug_enabled
+            self._config = replace(self._config, speech_debug_enabled=enabled)
+            config = self._config
         self._player.set_debug_enabled(enabled)
+        self._save_settings(config)
         logger.info("speech.debug.changed enabled=%s", enabled)
 
     def select_voice(self, key: str) -> None:
@@ -239,6 +256,7 @@ class SelectSpeakApp:
                 self._speech_backend = option.backend
                 self._selected_voice_key = option.key
                 self._config = selected_config
+            self._save_settings(selected_config)
             self._player.call_soon(lambda: self._player.set_voice_selection(option.key, option.short_label))
             logger.info(
                 "speaker.voice.changed backend=%s key=%s label=%s",
@@ -516,12 +534,24 @@ class SelectSpeakApp:
             return
         self._player.show_capture_complete(hotkey)
         self._tray.update_hotkey(hotkey)
+        with self._state_lock:
+            self._config = replace(self._config, default_hotkey=hotkey)
+            config = self._config
+        self._save_settings(config)
         logger.info("hotkey.rebind.completed hotkey=%s", hotkey)
 
     def _cancel_hotkey_capture(self) -> None:
         logger.info("hotkey.capture.cancelled")
         self._player.set_hotkey(self._hotkeys.hotkey)
         self._player.show_idle_hint()
+
+    def _save_settings(self, config: AppConfig) -> None:
+        if self._settings is None:
+            return
+        try:
+            self._settings.save(config)
+        except Exception:
+            logger.exception("settings.save_failed path=%s", self._settings.path)
 
     @staticmethod
     def _enable_dpi_awareness() -> None:
@@ -542,5 +572,8 @@ class SelectSpeakApp:
             logger.exception("dpi_awareness.failed")
 
 
-def main() -> None:
-    SelectSpeakApp().run()
+def main(
+    config: AppConfig = DEFAULT_CONFIG,
+    settings: SettingsStore | None = None,
+) -> None:
+    SelectSpeakApp(config, settings).run()

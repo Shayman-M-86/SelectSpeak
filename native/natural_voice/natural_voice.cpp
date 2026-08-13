@@ -124,7 +124,7 @@ std::uint32_t ss_voice_list(ss_voice_callback_t callback, void* context)
     return status == 0 ? count : 0;
 }
 
-int ss_voice_initialize(const wchar_t* voice_path, const char* credential)
+int ss_voice_initialize(const wchar_t* voice_path)
 {
     return guarded([&] {
         if (!voice_path || !*voice_path) {
@@ -156,44 +156,25 @@ int ss_voice_initialize(const wchar_t* voice_path, const char* credential)
                                      voices->ErrorDetails);
         }
 
-        std::vector<std::pair<std::string, std::string>> credentials;
-        if (credential && *credential) {
-            credentials.emplace_back("configured", credential);
-        } else {
-            if (auto installed = installed_narrator_credential()) {
-                credentials.emplace_back("installed Windows runtime",
-                                         std::move(*installed));
-            }
-            credentials.emplace_back("legacy compatibility",
-                                     legacy_narrator_credential());
+        auto credential = installed_narrator_credential();
+        if (!credential) {
+            throw std::runtime_error(
+                "Could not obtain the Natural Voice credential from the "
+                "installed Windows speech runtime");
         }
 
-        std::string validation_errors;
-        bool validated = false;
-        for (const auto& [source, candidate] : credentials) {
-            auto candidate_config = create_config();
-            candidate_config->SetSpeechSynthesisVoice(
-                voices->Voices.front()->Name, candidate);
-            auto validation_synthesizer =
-                SpeechSynthesizer::FromConfig(candidate_config, nullptr);
-            auto validation = validation_synthesizer->SpeakText("");
-            if (validation->Reason ==
-                ResultReason::SynthesizingAudioCompleted) {
-                config = std::move(candidate_config);
-                validated = true;
-                break;
-            }
+        config->SetSpeechSynthesisVoice(voices->Voices.front()->Name,
+                                        *credential);
+        auto validation_synthesizer =
+            SpeechSynthesizer::FromConfig(config, nullptr);
+        auto validation = validation_synthesizer->SpeakText("");
+        if (validation->Reason !=
+            ResultReason::SynthesizingAudioCompleted) {
             const auto details =
                 SpeechSynthesisCancellationDetails::FromResult(validation);
-            if (!validation_errors.empty()) {
-                validation_errors += " | ";
-            }
-            validation_errors += source + ": " + details->ErrorDetails;
-        }
-        if (!validated) {
             throw std::runtime_error(
-                "Natural Voice package rejected available embedded licenses: " +
-                validation_errors);
+                "The installed Natural Voice rejected the installed Windows "
+                "speech runtime credential: " + details->ErrorDetails);
         }
 
         auto stream = AudioOutputStream::CreatePushStream(

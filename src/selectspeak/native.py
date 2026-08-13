@@ -7,9 +7,9 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from .runtime_paths import repository_runtime_path
+from .runtime_paths import is_frozen, native_dir
 
-NATIVE_API_VERSION = 1
+NATIVE_API_VERSION = 2
 
 
 class NativeBridgeError(RuntimeError):
@@ -20,16 +20,18 @@ def find_native_dll(configured_path: str = "") -> Path:
     candidates = (
         configured_path,
         os.environ.get("SELECTSPEAK_NATIVE_DLL", ""),
-        str(repository_runtime_path("native", "selectspeak_native.dll")),
+        str(native_dir() / "selectspeak_native.dll"),
         str(Path(__file__).with_name("selectspeak_native.dll")),
     )
     for candidate in candidates:
         if candidate and Path(candidate).is_file():
             return Path(candidate).resolve()
-    raise NativeBridgeError(
-        "SelectSpeak native bridge not found; run native/build.ps1 or set "
-        "SELECTSPEAK_NATIVE_DLL"
-    )
+    expected = native_dir() / "selectspeak_native.dll"
+    if is_frozen():
+        raise NativeBridgeError(
+            f"SelectSpeak's installation is incomplete: native runtime not found at {expected}"
+        )
+    raise NativeBridgeError(f"SelectSpeak native bridge not found at {expected}; run native/build.ps1")
 
 
 class NativeBridge:

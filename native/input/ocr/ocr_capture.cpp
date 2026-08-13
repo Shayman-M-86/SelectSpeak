@@ -20,8 +20,8 @@
 #include <utility>
 
 #include "ocr_layout.h"
-#include "../api.h"
-#include "input_runtime.h"
+#include "../../api.h"
+#include "../input_runtime.h"
 
 namespace {
 constexpr unsigned int kOcrCompleted = 1;

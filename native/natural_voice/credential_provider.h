@@ -5,10 +5,6 @@
 #include <string>
 #include <vector>
 
-// This compatibility value is intentionally isolated: Microsoft does not expose
-// Narrator voices as a supported third-party API and has changed its protection.
-std::string legacy_narrator_credential();
-
 // Finds the credential embedded in the Windows speech runtime currently
 // installed on this machine. The value is returned in memory only and must
 // never be logged or persisted.

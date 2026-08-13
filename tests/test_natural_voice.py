@@ -1,4 +1,3 @@
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -9,8 +8,8 @@ from selectspeak.speech.backends import natural as natural_backend
 from selectspeak.speech.backends.natural import (
     NaturalVoice,
     NaturalVoiceEngine,
+    NaturalVoiceError,
     NaturalVoiceSpeaker,
-    find_pinned_natural_voices,
 )
 from selectspeak.speech.pipeline import GenerationStatistics
 from selectspeak.speech.playback import PlaybackController
@@ -41,97 +40,14 @@ def test_ordered_voices_keeps_fallbacks_after_preferred_matches() -> None:
     ]
 
 
-def test_find_pinned_natural_voices_reads_extracted_packages(
-    tmp_path: Path,
-) -> None:
-    package = (
-        tmp_path
-        / "versioned-packages"
-        / "MicrosoftWindows.Voice.en-US.Aria.2_1.0.1.0_x64"
-    )
-    package.mkdir(parents=True)
-    (package / "Tokens.xml").write_text(
-        """<?xml version="1.0"?>
-<Tokens><Category><Token name="Aria">
-<String name="" value="Microsoft Aria (Natural) - English (United States)" />
-</Token></Category></Tokens>
-""",
-        encoding="utf-8",
-    )
-    ignored = tmp_path / "not-a-voice"
-    ignored.mkdir()
-
-    voices = find_pinned_natural_voices(tmp_path)
-
-    assert len(voices) == 1
-    assert voices[0].package_path == str(package.resolve())
-    assert voices[0].name == ("Microsoft Aria (Natural) - English (United States)")
-    assert voices[0].source == "pinned"
-
-
-def test_engine_falls_back_to_pinned_voice_when_no_installed_voice_exists(
+def test_engine_initializes_the_preferred_installed_voice(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
 ) -> None:
-    events: list[tuple[str, tuple[Any, ...]]] = []
-
-    class FakeFunction:
-        def __init__(self, name: str) -> None:
-            self.name = name
-
-        def __call__(self, *args: Any) -> int | None:
-            events.append((self.name, args))
-            if self.name == "ss_voice_initialize":
-                return 0
-            if self.name == "ss_voice_shutdown":
-                return None
-            return 0
-
-    class FakeDll:
-        def __init__(self) -> None:
-            for name in (
-                "ss_voice_list",
-                "ss_voice_initialize",
-                "ss_voice_set_audio_callback",
-                "ss_voice_set_word_callback",
-                "ss_voice_speak",
-                "ss_voice_stop",
-                "ss_voice_shutdown",
-                "ss_voice_last_error",
-            ):
-                setattr(self, name, FakeFunction(name))
-
-    pinned = NaturalVoice(
-        str(tmp_path / "Aria-1.0.1"),
-        "Microsoft Aria",
-        "en-US",
-        "Aria",
-        "pinned",
-    )
-    fake_dll = FakeDll()
-    monkeypatch.setattr(
-        natural_backend,
-        "get_native_bridge",
-        lambda _configured: SimpleNamespace(library=fake_dll),
-    )
-    monkeypatch.setattr(natural_backend, "find_pinned_natural_voices", lambda: [pinned])
-    engine = NaturalVoiceEngine(AppConfig().speech, lambda _data: None, lambda *_: None)
-    engine.close()
-
-    assert engine.voice == pinned
-    assert [name for name, _args in events if name == "ss_voice_initialize"] == [
-        "ss_voice_initialize"
+    installed = [
+        NaturalVoice("C:/WindowsApps/AvaHD", "Microsoft Ava", "en-US", "Ava"),
+        NaturalVoice("C:/WindowsApps/Aria", "Microsoft Aria", "en-US", "Aria"),
     ]
-    assert [name for name, _args in events if name == "ss_voice_list"] == [
-        "ss_voice_list"
-    ]
-
-
-def test_engine_prefers_matching_installed_voice_over_pinned_fallback(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    initialized_paths: list[str] = []
+    initialized_arguments: list[tuple[Any, ...]] = []
 
     class FakeFunction:
         def __init__(self, name: str) -> None:
@@ -140,16 +56,17 @@ def test_engine_prefers_matching_installed_voice_over_pinned_fallback(
         def __call__(self, *args: Any) -> int | None:
             if self.name == "ss_voice_list":
                 callback = args[0]
-                callback(
-                    "C:/WindowsApps/AvaHD",
-                    b"Microsoft Ava (Natural HD)",
-                    b"en-US",
-                    b"Ava",
-                    None,
-                )
-                return 1
+                for voice in installed:
+                    callback(
+                        voice.package_path,
+                        voice.name.encode(),
+                        voice.locale.encode(),
+                        voice.display_name.encode(),
+                        None,
+                    )
+                return len(installed)
             if self.name == "ss_voice_initialize":
-                initialized_paths.append(args[0])
+                initialized_arguments.append(args)
                 return 0
             return None if self.name == "ss_voice_shutdown" else 0
 
@@ -167,47 +84,55 @@ def test_engine_prefers_matching_installed_voice_over_pinned_fallback(
             ):
                 setattr(self, name, FakeFunction(name))
 
-    pinned = NaturalVoice(
-        str(tmp_path / "Aria-1.0.1"),
-        "Microsoft Aria (Natural)",
-        "en-US",
-        "Aria",
-        "pinned",
-    )
     fake_dll = FakeDll()
     monkeypatch.setattr(
         natural_backend,
         "get_native_bridge",
         lambda _configured: SimpleNamespace(library=fake_dll),
     )
-    monkeypatch.setattr(natural_backend, "find_pinned_natural_voices", lambda: [pinned])
-    config = AppConfig(preferred_voice_match="Ava").speech
+    config = AppConfig(preferred_voice_match="Aria").speech
     engine = NaturalVoiceEngine(config, lambda _data: None, lambda *_: None)
 
-    assert engine.voice.name == "Microsoft Ava (Natural HD)"
-    assert initialized_paths == ["C:/WindowsApps/AvaHD"]
-    assert engine.available_voices == (
-        NaturalVoice(
-            "C:/WindowsApps/AvaHD",
-            "Microsoft Ava (Natural HD)",
-            "en-US",
-            "Ava",
-        ),
-        pinned,
+    assert engine.voice == installed[1]
+    assert engine.available_voices == (installed[1], installed[0])
+    assert initialized_arguments == [(installed[1].package_path,)]
+    engine.close()
+
+
+def test_engine_requires_an_installed_windows_voice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeFunction:
+        def __init__(self, result: int | None = 0) -> None:
+            self.result = result
+
+        def __call__(self, *_args: Any) -> int | None:
+            return self.result
+
+    class FakeDll:
+        ss_voice_list = FakeFunction()
+        ss_voice_initialize = FakeFunction()
+        ss_voice_set_audio_callback = FakeFunction(None)
+        ss_voice_set_word_callback = FakeFunction(None)
+        ss_voice_speak = FakeFunction()
+        ss_voice_stop = FakeFunction()
+        ss_voice_shutdown = FakeFunction(None)
+        ss_voice_last_error = FakeFunction()
+
+    monkeypatch.setattr(
+        natural_backend,
+        "get_native_bridge",
+        lambda _configured: SimpleNamespace(library=FakeDll()),
     )
 
-    assert engine.select_voice(pinned.package_path) == pinned
-    assert engine.voice == pinned
-    assert initialized_paths == ["C:/WindowsApps/AvaHD", pinned.package_path]
-    engine.close()
+    with pytest.raises(NaturalVoiceError, match="No Windows Natural Voices are installed"):
+        NaturalVoiceEngine(AppConfig().speech, lambda _data: None, lambda *_: None)
 
 
 def test_select_voice_refreshes_packages_installed_after_engine_start(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    installed = [
-        NaturalVoice("C:/WindowsApps/AvaHD", "Microsoft Ava", "en-US", "Ava")
-    ]
+    installed = [NaturalVoice("C:/WindowsApps/AvaHD", "Microsoft Ava", "en-US", "Ava")]
     initialized_paths: list[str] = []
 
     class FakeFunction:
@@ -228,7 +153,7 @@ def test_select_voice_refreshes_packages_installed_after_engine_start(
             )
         return len(installed)
 
-    def initialize(package_path: str, _credential: Any) -> int:
+    def initialize(package_path: str) -> int:
         initialized_paths.append(package_path)
         return 0
 
@@ -247,7 +172,6 @@ def test_select_voice_refreshes_packages_installed_after_engine_start(
         "get_native_bridge",
         lambda _configured: SimpleNamespace(library=FakeDll()),
     )
-    monkeypatch.setattr(natural_backend, "find_pinned_natural_voices", list)
     engine = NaturalVoiceEngine(AppConfig().speech, lambda _data: None, lambda *_: None)
 
     new_voice = NaturalVoice(
@@ -343,10 +267,6 @@ def test_natural_voice_uses_the_shared_persistent_stream() -> None:
     assert len(engine.spoken) == 2
     assert [event for event, _ in player.events].count("start") == 1
     assert [event for event, _ in player.events].count("finish") == 1
-    assert [value for event, value in player.events if event == "silence"] == [
-        pytest.approx(0.1)
-    ]
-    boundary_positions = [
-        value[1] for event, value in player.events if event == "boundary"
-    ]
+    assert [value for event, value in player.events if event == "silence"] == [pytest.approx(0.1)]
+    boundary_positions = [value[1] for event, value in player.events if event == "boundary"]
     assert boundary_positions == sorted(boundary_positions)

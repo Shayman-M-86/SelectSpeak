@@ -11,7 +11,7 @@ const std::string unavailable =
 
 std::uint32_t ss_voice_list(ss_voice_callback_t, void*) { return 0; }
 
-int ss_voice_initialize(const wchar_t*, const char*) { return 1; }
+int ss_voice_initialize(const wchar_t*) { return 1; }
 
 void ss_voice_set_audio_callback(ss_audio_callback_t, void*) {}
 

@@ -32,36 +32,6 @@ def test_voice_options_include_every_engine_and_natural_voice() -> None:
     assert options[1].package_path == "C:/WindowsApps/Aria"
 
 
-def test_duplicate_installed_and_pinned_voice_labels_explain_the_source() -> None:
-    display_name = "Microsoft Aria (Natural) - English (United States)"
-    options = build_voice_options(
-        [
-            NaturalVoice(
-                "C:/WindowsApps/Aria",
-                display_name,
-                "en-US",
-                display_name,
-            ),
-            NaturalVoice(
-                "C:/SelectSpeak/Aria",
-                display_name,
-                "en-US",
-                display_name,
-                "pinned",
-            ),
-        ],
-        AppConfig().speech,
-    )
-
-    natural_labels = [
-        option.label for option in options if option.backend == "natural"
-    ]
-    assert natural_labels == [
-        f"{display_name} (installed)",
-        f"{display_name} (pinned fallback)",
-    ]
-
-
 def test_opening_voice_menu_refreshes_before_displaying_options() -> None:
     events: list[str] = []
 

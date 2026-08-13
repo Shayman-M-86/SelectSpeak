@@ -13,8 +13,11 @@ option(SELECTSPEAK_ENABLE_NATURAL_VOICE
 set(SELECTSPEAK_NATIVE_SOURCES
     api.cpp
     input/input_bridge.cpp
-    input/ocr_capture.cpp
-    input/ocr_layout.cpp)
+    input/hotkeys/hotkey_runtime.cpp
+    input/hotkeys/shortcut_recorder.cpp
+    input/ocr/ocr_capture.cpp
+    input/ocr/ocr_layout.cpp
+    input/selection/selection_capture.cpp)
 
 if(SELECTSPEAK_ENABLE_NATURAL_VOICE)
     set(SPEECHSDK_ROOT "" CACHE PATH
@@ -60,8 +63,8 @@ endif()
 
 if(BUILD_TESTING)
     add_executable(selectspeak_ocr_layout_tests
-        input/ocr_layout.cpp
-        input/ocr_layout_tests.cpp)
+        input/ocr/ocr_layout.cpp
+        input/ocr/ocr_layout_tests.cpp)
     target_compile_features(selectspeak_ocr_layout_tests PRIVATE cxx_std_17)
     target_compile_definitions(selectspeak_ocr_layout_tests PRIVATE NOMINMAX)
     if(MSVC)

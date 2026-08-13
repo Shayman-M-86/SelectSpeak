@@ -4,7 +4,6 @@ param(
     [switch]$RemoveFromStartup,
     [switch]$Launch,
     [switch]$SkipNaturalVoice,
-    [string]$NaturalVoiceMsix = "",
     [switch]$SkipSupertonicModel,
     [switch]$SkipChecks
 )
@@ -109,9 +108,6 @@ if (-not [Environment]::Is64BitOperatingSystem) {
 if ($AddToStartup -and $RemoveFromStartup) {
     throw "Use either -AddToStartup or -RemoveFromStartup, not both."
 }
-if ($SkipNaturalVoice -and $NaturalVoiceMsix) {
-    throw "-NaturalVoiceMsix cannot be combined with -SkipNaturalVoice."
-}
 if ($RemoveFromStartup) {
     Remove-SelectSpeakFromStartup
     return
@@ -160,15 +156,6 @@ try {
     Write-Host "Building the SelectSpeak native bridge..." -ForegroundColor Cyan
     & (Join-Path $projectRoot "native\build.ps1") `
         -InstallPrerequisites -SkipNaturalVoice:$SkipNaturalVoice
-
-    if (-not $SkipNaturalVoice) {
-        if ($NaturalVoiceMsix) {
-            Write-Host "Pinning the compatible Natural Voice package..." `
-                -ForegroundColor Cyan
-            & (Join-Path $projectRoot "native\natural_voice\pin_voice.ps1") `
-                -MsixPath $NaturalVoiceMsix | Out-Host
-        }
-    }
 
     $requiredFiles = @(
         $venvPython,
@@ -221,11 +208,7 @@ try {
         Write-Host "Double-click run.vbs to start it."
     }
     if (-not $SkipNaturalVoice) {
-        if ($NaturalVoiceMsix) {
-            Write-Host "Natural Voice has an installed-voice-independent pinned fallback."
-        } else {
-            Write-Host "Natural Voice discovers compatible Narrator voices installed in Windows, then pinned fallbacks."
-        }
+        Write-Host "Natural Voice uses compatible Narrator voices and the speech runtime installed through Windows."
     }
 } finally {
     Set-Location -LiteralPath $previousLocation
