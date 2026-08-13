@@ -1,6 +1,6 @@
 #include <windows.h>
 #include <ole2.h>
-#include <shlobj.h>
+#include <roapi.h>
 #include <uiautomation.h>
 
 #include <atomic>
@@ -13,25 +13,24 @@
 #include <vector>
 
 #include "../api.h"
+#include "input_runtime.h"
 
 namespace {
 constexpr int kHotkeyId = 1;
+constexpr int kOcrHotkeyId = 2;
 constexpr UINT kRebindMessage = WM_APP + 1;
 constexpr UINT kStartRecordingMessage = WM_APP + 2;
 constexpr UINT kStopRecordingMessage = WM_APP + 3;
 constexpr UINT kRecordingEventMessage = WM_APP + 4;
+constexpr UINT kCaptureMessage = WM_APP + 5;
+constexpr UINT kRegisterOcrHotkeyMessage = WM_APP + 6;
+constexpr UINT kUnregisterOcrHotkeyMessage = WM_APP + 7;
 constexpr DWORD kClipboardTimeoutMs = 1000;
 constexpr wchar_t kWindowClass[] = L"SelectSpeakNativeInputWindow";
 
 struct State {
     std::mutex lifecycle_mutex;
-    std::mutex request_mutex;
-    std::condition_variable request_changed;
-    bool capture_requested = false;
-    ULONGLONG capture_requested_at = 0;
-    bool worker_stopping = false;
     std::thread message_thread;
-    std::thread worker_thread;
 
     std::mutex ready_mutex;
     std::condition_variable ready_changed;
@@ -44,7 +43,6 @@ struct State {
     std::atomic<unsigned int> capture_source{0};
     std::atomic<ULONGLONG> completed_capture_requested_at{0};
     HWND window = nullptr;
-    HANDLE clipboard_changed = nullptr;
     ss_capture_callback_t callback = nullptr;
     ss_activation_callback_t activation_callback = nullptr;
     void* callback_context = nullptr;
@@ -57,6 +55,8 @@ struct State {
     std::atomic<unsigned int> recorded_chord_modifiers{0};
     std::atomic<unsigned int> recorded_key{0};
     std::atomic<bool> recorded_key_down{false};
+    selectspeak::input::OcrHotkeyHandler ocr_handler = nullptr;
+    std::atomic<bool> ocr_dispatching{false};
 
     std::mutex error_mutex;
     std::string last_error;
@@ -64,294 +64,113 @@ struct State {
 
 State g_state;
 
-HRESULT DuplicateMedium(const FORMATETC& format, const STGMEDIUM& source,
-                        STGMEDIUM* result) {
-    if (result == nullptr) {
-        return E_POINTER;
-    }
-    *result = {};
-    result->tymed = source.tymed;
-    switch (source.tymed) {
-    case TYMED_HGLOBAL:
-        result->hGlobal = static_cast<HGLOBAL>(
-            OleDuplicateData(source.hGlobal, format.cfFormat, 0));
-        break;
-    case TYMED_GDI:
-        result->hBitmap = static_cast<HBITMAP>(
-            OleDuplicateData(source.hBitmap, format.cfFormat, 0));
-        break;
-    case TYMED_MFPICT:
-        result->hMetaFilePict = static_cast<HMETAFILEPICT>(
-            OleDuplicateData(source.hMetaFilePict, format.cfFormat, 0));
-        break;
-    case TYMED_ENHMF:
-        result->hEnhMetaFile = static_cast<HENHMETAFILE>(
-            OleDuplicateData(source.hEnhMetaFile, format.cfFormat, 0));
-        break;
-    case TYMED_FILE: {
-        if (source.lpszFileName == nullptr) {
-            return DV_E_TYMED;
-        }
-        const size_t bytes =
-            (wcslen(source.lpszFileName) + 1) * sizeof(wchar_t);
-        result->lpszFileName = static_cast<LPOLESTR>(CoTaskMemAlloc(bytes));
-        if (result->lpszFileName != nullptr) {
-            memcpy(result->lpszFileName, source.lpszFileName, bytes);
-        }
-        break;
-    }
-    case TYMED_ISTREAM: {
-        if (source.pstm == nullptr) {
-            return DV_E_TYMED;
-        }
-        HRESULT status = CreateStreamOnHGlobal(nullptr, TRUE, &result->pstm);
-        if (FAILED(status)) {
-            return status;
-        }
-        LARGE_INTEGER zero{};
-        source.pstm->Seek(zero, STREAM_SEEK_SET, nullptr);
-        ULARGE_INTEGER maximum{};
-        maximum.QuadPart = static_cast<ULONGLONG>(-1);
-        status = source.pstm->CopyTo(result->pstm, maximum, nullptr, nullptr);
-        result->pstm->Seek(zero, STREAM_SEEK_SET, nullptr);
-        if (FAILED(status)) {
-            result->pstm->Release();
-            result->pstm = nullptr;
-            return status;
-        }
-        return S_OK;
-    }
-    case TYMED_ISTORAGE: {
-        if (source.pstg == nullptr) {
-            return DV_E_TYMED;
-        }
-        ILockBytes* bytes = nullptr;
-        HRESULT status = CreateILockBytesOnHGlobal(nullptr, TRUE, &bytes);
-        if (SUCCEEDED(status)) {
-            status = StgCreateDocfileOnILockBytes(
-                bytes, STGM_CREATE | STGM_READWRITE | STGM_SHARE_EXCLUSIVE, 0,
-                &result->pstg);
-        }
-        if (SUCCEEDED(status)) {
-            status = source.pstg->CopyTo(0, nullptr, nullptr, result->pstg);
-        }
-        if (SUCCEEDED(status)) {
-            status = result->pstg->Commit(STGC_DEFAULT);
-        }
-        if (bytes != nullptr) {
-            bytes->Release();
-        }
-        if (FAILED(status)) {
-            if (result->pstg != nullptr) {
-                result->pstg->Release();
-                result->pstg = nullptr;
-            }
-            return status;
-        }
-        return S_OK;
-    }
-    default:
-        return DV_E_TYMED;
-    }
-    if (result->hGlobal == nullptr) {
-        *result = {};
-        return E_OUTOFMEMORY;
-    }
-    return S_OK;
+struct OcrHotkeyRegistration {
+    unsigned int modifiers;
+    unsigned int virtual_key;
+    selectspeak::input::OcrHotkeyHandler handler;
+    DWORD error = ERROR_SUCCESS;
+};
+
+bool OpenClipboardWithRetry();
+
+bool IsUnsupportedClipboardFormat(UINT format) {
+    return format == CF_OWNERDISPLAY || format == CF_DSPTEXT ||
+           format == CF_DSPBITMAP || format == CF_DSPMETAFILEPICT ||
+           format == CF_DSPENHMETAFILE ||
+           (format >= CF_PRIVATEFIRST && format <= CF_PRIVATELAST) ||
+           (format >= CF_GDIOBJFIRST && format <= CF_GDIOBJLAST);
 }
 
-FORMATETC CopyFormat(const FORMATETC& source) {
-    FORMATETC result = source;
-    result.ptd = nullptr;
-    if (source.ptd != nullptr && source.ptd->tdSize >= sizeof(DVTARGETDEVICE)) {
-        result.ptd = static_cast<DVTARGETDEVICE*>(
-            CoTaskMemAlloc(source.ptd->tdSize));
-        if (result.ptd != nullptr) {
-            memcpy(result.ptd, source.ptd, source.ptd->tdSize);
-        }
+HANDLE DuplicateClipboardData(UINT format, HANDLE source) {
+    if (format == CF_ENHMETAFILE) {
+        return CopyEnhMetaFileW(static_cast<HENHMETAFILE>(source), nullptr);
     }
-    return result;
+    return OleDuplicateData(source, format, GMEM_MOVEABLE);
+}
+
+void ReleaseClipboardData(UINT format, HANDLE data) {
+    if (data == nullptr) {
+        return;
+    }
+    if (format == CF_BITMAP || format == CF_PALETTE) {
+        DeleteObject(data);
+    } else if (format == CF_METAFILEPICT) {
+        auto* picture = static_cast<METAFILEPICT*>(GlobalLock(data));
+        if (picture != nullptr) {
+            DeleteMetaFile(picture->hMF);
+            GlobalUnlock(data);
+        }
+        GlobalFree(data);
+    } else if (format == CF_ENHMETAFILE) {
+        DeleteEnhMetaFile(static_cast<HENHMETAFILE>(data));
+    } else {
+        GlobalFree(data);
+    }
 }
 
 struct ClipboardEntry {
-    FORMATETC format{};
-    STGMEDIUM medium{};
+    UINT format = 0;
+    HANDLE data = nullptr;
 
-    ~ClipboardEntry() {
-        if (format.ptd != nullptr) {
-            CoTaskMemFree(format.ptd);
-        }
-        ReleaseStgMedium(&medium);
+    ClipboardEntry(UINT entry_format, HANDLE entry_data)
+        : format(entry_format), data(entry_data) {}
+    ClipboardEntry(const ClipboardEntry&) = delete;
+    ClipboardEntry& operator=(const ClipboardEntry&) = delete;
+    ClipboardEntry(ClipboardEntry&& other) noexcept
+        : format(other.format), data(other.data) {
+        other.data = nullptr;
     }
+    ClipboardEntry& operator=(ClipboardEntry&&) = delete;
+    ~ClipboardEntry() { ReleaseClipboardData(format, data); }
 };
 
-class ClipboardSnapshot final : public IDataObject {
+class ClipboardSnapshot {
 public:
-    HRESULT Add(IDataObject* source, const FORMATETC& format) {
-        auto entry = std::make_unique<ClipboardEntry>();
-        entry->format = CopyFormat(format);
-        STGMEDIUM medium{};
-        HRESULT result =
-            source->GetData(const_cast<FORMATETC*>(&format), &medium);
-        if (FAILED(result)) {
-            return result;
+    bool Capture() {
+        if (!OpenClipboardWithRetry()) {
+            return false;
         }
-        result = DuplicateMedium(format, medium, &entry->medium);
-        ReleaseStgMedium(&medium);
-        if (FAILED(result)) {
-            return result;
+        bool captured_all = true;
+        UINT format = 0;
+        while ((format = EnumClipboardFormats(format)) != 0) {
+            if (IsUnsupportedClipboardFormat(format)) {
+                continue;
+            }
+            HANDLE source = GetClipboardData(format);
+            HANDLE duplicate =
+                source == nullptr ? nullptr : DuplicateClipboardData(format, source);
+            if (duplicate != nullptr) {
+                entries_.emplace_back(format, duplicate);
+            } else {
+                captured_all = false;
+            }
         }
-        entries_.push_back(std::move(entry));
-        return S_OK;
+        CloseClipboard();
+        return captured_all;
     }
 
-    bool empty() const { return entries_.empty(); }
-
-    bool Restore() const {
-        bool opened = false;
-        for (int attempt = 0; attempt < 10; ++attempt) {
-            if (OpenClipboard(nullptr)) {
-                opened = true;
-                break;
-            }
-            Sleep(10);
-        }
-        if (!opened) {
+    bool Restore() {
+        if (!OpenClipboardWithRetry()) {
             return false;
         }
         if (!EmptyClipboard()) {
             CloseClipboard();
             return false;
         }
-
-        bool restored_any = entries_.empty();
-        for (const auto& entry : entries_) {
-            if (entry->medium.tymed != TYMED_HGLOBAL &&
-                entry->medium.tymed != TYMED_GDI &&
-                entry->medium.tymed != TYMED_MFPICT &&
-                entry->medium.tymed != TYMED_ENHMF) {
-                continue;
+        bool restored_all = true;
+        for (auto& entry : entries_) {
+            if (SetClipboardData(entry.format, entry.data) == nullptr) {
+                restored_all = false;
+            } else {
+                entry.data = nullptr;  // Clipboard ownership transferred.
             }
-            STGMEDIUM copy{};
-            if (FAILED(DuplicateMedium(entry->format, entry->medium, &copy))) {
-                continue;
-            }
-            if (SetClipboardData(entry->format.cfFormat, copy.hGlobal) != nullptr) {
-                restored_any = true;
-                copy.tymed = TYMED_NULL;
-                copy.hGlobal = nullptr;
-            }
-            ReleaseStgMedium(&copy);
         }
         CloseClipboard();
-        return restored_any;
-    }
-
-    STDMETHODIMP QueryInterface(REFIID iid, void** object) override {
-        if (object == nullptr) {
-            return E_POINTER;
-        }
-        if (iid == IID_IUnknown || iid == IID_IDataObject) {
-            *object = static_cast<IDataObject*>(this);
-            AddRef();
-            return S_OK;
-        }
-        *object = nullptr;
-        return E_NOINTERFACE;
-    }
-
-    STDMETHODIMP_(ULONG) AddRef() override {
-        return static_cast<ULONG>(InterlockedIncrement(&references_));
-    }
-
-    STDMETHODIMP_(ULONG) Release() override {
-        const ULONG remaining =
-            static_cast<ULONG>(InterlockedDecrement(&references_));
-        if (remaining == 0) {
-            delete this;
-        }
-        return remaining;
-    }
-
-    STDMETHODIMP GetData(FORMATETC* requested, STGMEDIUM* result) override {
-        if (requested == nullptr || result == nullptr) {
-            return E_POINTER;
-        }
-        for (const auto& entry : entries_) {
-            if (Matches(*requested, entry->format)) {
-                return DuplicateMedium(entry->format, entry->medium, result);
-            }
-        }
-        return DV_E_FORMATETC;
-    }
-
-    STDMETHODIMP GetDataHere(FORMATETC*, STGMEDIUM*) override {
-        return E_NOTIMPL;
-    }
-
-    STDMETHODIMP QueryGetData(FORMATETC* requested) override {
-        if (requested == nullptr) {
-            return E_POINTER;
-        }
-        for (const auto& entry : entries_) {
-            if (Matches(*requested, entry->format)) {
-                return S_OK;
-            }
-        }
-        return DV_E_FORMATETC;
-    }
-
-    STDMETHODIMP GetCanonicalFormatEtc(FORMATETC*, FORMATETC* output) override {
-        if (output != nullptr) {
-            output->ptd = nullptr;
-        }
-        return E_NOTIMPL;
-    }
-
-    STDMETHODIMP SetData(FORMATETC*, STGMEDIUM*, BOOL) override {
-        return E_NOTIMPL;
-    }
-
-    STDMETHODIMP EnumFormatEtc(DWORD direction,
-                               IEnumFORMATETC** enumerator) override {
-        if (enumerator == nullptr) {
-            return E_POINTER;
-        }
-        *enumerator = nullptr;
-        if (direction != DATADIR_GET) {
-            return E_NOTIMPL;
-        }
-        std::vector<FORMATETC> formats;
-        formats.reserve(entries_.size());
-        for (const auto& entry : entries_) {
-            formats.push_back(entry->format);
-        }
-        return SHCreateStdEnumFmtEtc(static_cast<UINT>(formats.size()),
-                                     formats.data(), enumerator);
-    }
-
-    STDMETHODIMP DAdvise(FORMATETC*, DWORD, IAdviseSink*, DWORD*) override {
-        return OLE_E_ADVISENOTSUPPORTED;
-    }
-
-    STDMETHODIMP DUnadvise(DWORD) override {
-        return OLE_E_ADVISENOTSUPPORTED;
-    }
-
-    STDMETHODIMP EnumDAdvise(IEnumSTATDATA**) override {
-        return OLE_E_ADVISENOTSUPPORTED;
+        return restored_all;
     }
 
 private:
-    static bool Matches(const FORMATETC& requested, const FORMATETC& available) {
-        return requested.cfFormat == available.cfFormat &&
-               requested.dwAspect == available.dwAspect &&
-               requested.lindex == available.lindex &&
-               (requested.tymed & available.tymed) != 0;
-    }
-
-    volatile LONG references_ = 1;
-    std::vector<std::unique_ptr<ClipboardEntry>> entries_;
+    std::vector<ClipboardEntry> entries_;
 };
 
 void SetError(const std::string& message) {
@@ -363,17 +182,6 @@ void SetWindowsError(const char* action) {
     const DWORD code = GetLastError();
     SetError(std::string(action) + " failed with Windows error " +
              std::to_string(code));
-}
-
-void QueueCapture() {
-    std::lock_guard lock(g_state.request_mutex);
-    if (!g_state.worker_stopping) {
-        if (!g_state.capture_requested) {
-            g_state.capture_requested_at = GetTickCount64();
-        }
-        g_state.capture_requested = true;
-        g_state.request_changed.notify_one();
-    }
 }
 
 unsigned int ModifierForKey(DWORD virtual_key) {
@@ -640,59 +448,19 @@ bool WaitForClipboardChange(DWORD original_sequence) {
         if (GetClipboardSequenceNumber() != original_sequence) {
             return true;
         }
-        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
-            deadline - std::chrono::steady_clock::now());
-        const DWORD wait_ms = static_cast<DWORD>(
-            remaining.count() > 0 ? remaining.count() : 1);
-        WaitForSingleObject(g_state.clipboard_changed, wait_ms);
-        ResetEvent(g_state.clipboard_changed);
+        Sleep(10);
     }
     return GetClipboardSequenceNumber() != original_sequence;
 }
 
-ClipboardSnapshot* SnapshotClipboard() {
-    IDataObject* source = nullptr;
-    if (FAILED(OleGetClipboard(&source)) || source == nullptr) {
-        SetError("OleGetClipboard could not access the current clipboard");
+std::unique_ptr<ClipboardSnapshot> SnapshotClipboard() {
+    auto snapshot = std::make_unique<ClipboardSnapshot>();
+    if (!snapshot->Capture()) {
+        SetError(
+            "The clipboard could not be snapshotted without losing formats");
         return nullptr;
     }
-
-    auto* snapshot = new ClipboardSnapshot();
-    IEnumFORMATETC* formats = nullptr;
-    const HRESULT enum_result = source->EnumFormatEtc(DATADIR_GET, &formats);
-    if (SUCCEEDED(enum_result) && formats != nullptr) {
-        FORMATETC format{};
-        while (formats->Next(1, &format, nullptr) == S_OK) {
-            const HRESULT add_result = snapshot->Add(source, format);
-            if (FAILED(add_result)) {
-                SetError("Clipboard format snapshot failed with HRESULT " +
-                         std::to_string(static_cast<unsigned long>(add_result)));
-            }
-            if (format.ptd != nullptr) {
-                CoTaskMemFree(format.ptd);
-                format.ptd = nullptr;
-            }
-        }
-        formats->Release();
-    } else {
-        SetError("Clipboard format enumeration failed with HRESULT " +
-                 std::to_string(static_cast<unsigned long>(enum_result)));
-    }
-    source->Release();
-    if (snapshot->empty()) {
-        SetError("The clipboard snapshot contained no transferable formats");
-    }
     return snapshot;
-}
-
-void RestoreClipboard(ClipboardSnapshot* saved) {
-    if (saved == nullptr) {
-        return;
-    }
-    if (!saved->Restore()) {
-        SetError("The native input adapter could not restore the previous clipboard");
-    }
-    saved->Release();
 }
 
 void CaptureSelection(ULONGLONG requested_at) {
@@ -716,7 +484,7 @@ void CaptureSelection(ULONGLONG requested_at) {
         return;
     }
 
-    ClipboardSnapshot* saved = SnapshotClipboard();
+    auto saved = SnapshotClipboard();
     if (saved == nullptr) {
         if (g_state.callback != nullptr) {
             g_state.completed_capture_requested_at.store(requested_at);
@@ -727,7 +495,6 @@ void CaptureSelection(ULONGLONG requested_at) {
 
     if (EmptyClipboardSafely()) {
         const DWORD sequence = GetClipboardSequenceNumber();
-        ResetEvent(g_state.clipboard_changed);
         if (SendCopyShortcut(g_state.modifiers.load()) &&
             WaitForClipboardChange(sequence)) {
             selected = ReadClipboardText();
@@ -737,37 +504,12 @@ void CaptureSelection(ULONGLONG requested_at) {
         }
     }
 
-    RestoreClipboard(saved);
+    if (!saved->Restore()) {
+        SetError("The native input adapter could not restore the previous clipboard");
+    }
     if (g_state.callback != nullptr) {
         g_state.completed_capture_requested_at.store(requested_at);
         g_state.callback(selected.c_str(), g_state.callback_context);
-    }
-}
-
-void CaptureWorker() {
-    const HRESULT ole_result = OleInitialize(nullptr);
-    if (FAILED(ole_result)) {
-        SetError("OleInitialize failed on the capture worker");
-    }
-
-    while (true) {
-        ULONGLONG requested_at = 0;
-        {
-            std::unique_lock lock(g_state.request_mutex);
-            g_state.request_changed.wait(lock, [] {
-                return g_state.capture_requested || g_state.worker_stopping;
-            });
-            if (g_state.worker_stopping) {
-                break;
-            }
-            requested_at = g_state.capture_requested_at;
-            g_state.capture_requested = false;
-        }
-        CaptureSelection(requested_at);
-    }
-
-    if (SUCCEEDED(ole_result)) {
-        OleUninitialize();
     }
 }
 
@@ -775,18 +517,47 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wparam,
                                  LPARAM lparam) {
     switch (message) {
     case WM_HOTKEY:
-        if (wparam == kHotkeyId && !g_state.recording.load()) {
+        if (wparam == kHotkeyId && !g_state.recording.load() &&
+            !g_state.ocr_dispatching.load()) {
             if (g_state.activation_callback != nullptr &&
                 g_state.activation_callback(g_state.callback_context) != 0) {
                 return 0;
             }
-            QueueCapture();
+            CaptureSelection(GetTickCount64());
+            return 0;
+        }
+        if (wparam == kOcrHotkeyId && !g_state.recording.load() &&
+            g_state.ocr_handler != nullptr &&
+            !g_state.ocr_dispatching.exchange(true)) {
+            g_state.ocr_handler();
+            g_state.ocr_dispatching.store(false);
             return 0;
         }
         break;
-    case WM_CLIPBOARDUPDATE:
-        SetEvent(g_state.clipboard_changed);
+    case kCaptureMessage:
+        if (!g_state.ocr_dispatching.load()) {
+            CaptureSelection(static_cast<ULONGLONG>(wparam));
+        }
         return 0;
+    case kRegisterOcrHotkeyMessage: {
+        auto* registration = reinterpret_cast<OcrHotkeyRegistration*>(lparam);
+        if (registration == nullptr || registration->handler == nullptr ||
+            registration->virtual_key == 0) {
+            return 0;
+        }
+        if (!RegisterHotKey(window, kOcrHotkeyId,
+                            registration->modifiers | MOD_NOREPEAT,
+                            registration->virtual_key)) {
+            registration->error = GetLastError();
+            return 0;
+        }
+        g_state.ocr_handler = registration->handler;
+        return 1;
+    }
+    case kUnregisterOcrHotkeyMessage:
+        UnregisterHotKey(window, kOcrHotkeyId);
+        g_state.ocr_handler = nullptr;
+        return 1;
     case kRebindMessage: {
         const UINT previous_modifiers = g_state.modifiers.load();
         const UINT previous_key = g_state.virtual_key.load();
@@ -849,6 +620,8 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wparam,
         return 0;
     case WM_CLOSE:
         SendMessageW(window, kStopRecordingMessage, 0, 0);
+        UnregisterHotKey(window, kOcrHotkeyId);
+        g_state.ocr_handler = nullptr;
         DestroyWindow(window);
         return 0;
     case WM_DESTROY:
@@ -859,6 +632,17 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wparam,
 }
 
 void MessageLoop() {
+    const HRESULT apartment = RoInitialize(RO_INIT_MULTITHREADED);
+    if (FAILED(apartment)) {
+        SetError("RoInitialize failed on the native input thread");
+        {
+            std::lock_guard lock(g_state.ready_mutex);
+            g_state.start_succeeded = false;
+            g_state.ready = true;
+        }
+        g_state.ready_changed.notify_one();
+        return;
+    }
     const HINSTANCE instance = GetModuleHandleW(nullptr);
     WNDCLASSW window_class{};
     window_class.lpfnWndProc = WindowProcedure;
@@ -871,7 +655,6 @@ void MessageLoop() {
     bool succeeded = window != nullptr;
     if (succeeded) {
         g_state.window = window;
-        AddClipboardFormatListener(window);
         succeeded = RegisterHotKey(window, kHotkeyId,
                                    g_state.modifiers.load() | MOD_NOREPEAT,
                                    g_state.virtual_key.load()) != FALSE;
@@ -891,6 +674,7 @@ void MessageLoop() {
     }
     g_state.ready_changed.notify_one();
     if (!succeeded) {
+        RoUninitialize();
         return;
     }
 
@@ -899,11 +683,37 @@ void MessageLoop() {
         TranslateMessage(&message);
         DispatchMessageW(&message);
     }
-    RemoveClipboardFormatListener(window);
+    UnregisterHotKey(window, kOcrHotkeyId);
     UnregisterHotKey(window, kHotkeyId);
     g_state.window = nullptr;
+    RoUninitialize();
 }
 }  // namespace
+
+namespace selectspeak::input {
+
+DWORD RegisterOcrHotkey(unsigned int modifiers, unsigned int virtual_key,
+                        OcrHotkeyHandler handler) {
+    if (!g_state.running.load() || g_state.window == nullptr) {
+        return ERROR_SERVICE_NOT_ACTIVE;
+    }
+    OcrHotkeyRegistration registration{modifiers, virtual_key, handler};
+    const LRESULT registered = SendMessageW(
+        g_state.window, kRegisterOcrHotkeyMessage, 0,
+        reinterpret_cast<LPARAM>(&registration));
+    if (!registered && registration.error == ERROR_SUCCESS) {
+        return ERROR_GEN_FAILURE;
+    }
+    return registration.error;
+}
+
+void UnregisterOcrHotkey() {
+    if (g_state.running.load() && g_state.window != nullptr) {
+        SendMessageW(g_state.window, kUnregisterOcrHotkeyMessage, 0, 0);
+    }
+}
+
+}  // namespace selectspeak::input
 
 int ss_input_start(unsigned int modifiers, unsigned int virtual_key,
                           ss_capture_callback_t callback,
@@ -926,30 +736,13 @@ int ss_input_start(unsigned int modifiers, unsigned int virtual_key,
     g_state.virtual_key.store(virtual_key);
     g_state.ready = false;
     g_state.start_succeeded = false;
-    g_state.capture_requested = false;
-    g_state.worker_stopping = false;
-    g_state.clipboard_changed = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    if (g_state.clipboard_changed == nullptr) {
-        SetWindowsError("CreateEvent");
-        return 1;
-    }
-
-    g_state.worker_thread = std::thread(CaptureWorker);
     g_state.message_thread = std::thread(MessageLoop);
     {
         std::unique_lock ready_lock(g_state.ready_mutex);
         g_state.ready_changed.wait(ready_lock, [] { return g_state.ready; });
     }
     if (!g_state.start_succeeded) {
-        {
-            std::lock_guard request_lock(g_state.request_mutex);
-            g_state.worker_stopping = true;
-        }
-        g_state.request_changed.notify_one();
         g_state.message_thread.join();
-        g_state.worker_thread.join();
-        CloseHandle(g_state.clipboard_changed);
-        g_state.clipboard_changed = nullptr;
         return 1;
     }
     g_state.running.store(true);
@@ -974,7 +767,11 @@ int ss_input_capture_now() {
         SetError("The native input adapter is not running");
         return 1;
     }
-    QueueCapture();
+    if (!PostMessageW(g_state.window, kCaptureMessage,
+                      static_cast<WPARAM>(GetTickCount64()), 0)) {
+        SetWindowsError("PostMessage");
+        return 1;
+    }
     return 0;
 }
 
@@ -998,6 +795,9 @@ void ss_input_record_stop() {
 }
 
 void ss_input_stop() {
+    // OCR registers on this message thread and must release its hotkey/overlay
+    // before the window is destroyed.
+    ss_ocr_stop();
     std::lock_guard lifecycle_lock(g_state.lifecycle_mutex);
     if (!g_state.running.exchange(false)) {
         return;
@@ -1008,16 +808,6 @@ void ss_input_stop() {
     if (g_state.message_thread.joinable()) {
         g_state.message_thread.join();
     }
-    {
-        std::lock_guard request_lock(g_state.request_mutex);
-        g_state.worker_stopping = true;
-    }
-    g_state.request_changed.notify_one();
-    if (g_state.worker_thread.joinable()) {
-        g_state.worker_thread.join();
-    }
-    CloseHandle(g_state.clipboard_changed);
-    g_state.clipboard_changed = nullptr;
     g_state.callback = nullptr;
     g_state.activation_callback = nullptr;
     g_state.callback_context = nullptr;

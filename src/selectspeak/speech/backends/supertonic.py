@@ -10,10 +10,9 @@ import numpy as np
 from supertonic import TTS
 
 from ...config import SpeechConfig
-from ...logging_setup import log_event, log_exception, text_preview
 from ..contracts import WordCallback
-from ..debug import SpeechDebugCallback, SpeechDebugEvent
-from ..pipeline import AdaptiveSpeechPipeline, GenerationStatistics
+from ..debug import SpeechDebugCallback, emit_speech_debug
+from ..pipeline import AdaptiveSpeechSession, GenerationStatistics
 from ..playback import PlaybackController, SpeechRequest
 from ..segments import SpeechSegment
 from ..waveout import TICKS_PER_SECOND, WaveOutPlayer
@@ -114,9 +113,7 @@ def normalize_edge_silence(
     prefix = samples[:prefix_length].reshape(-1, window_size)
     prefix_rms = np.sqrt(np.mean(prefix**2, axis=1))
     prefix_active = np.flatnonzero(prefix_rms > threshold)
-    active_start = (
-        int(prefix_active[0]) * window_size if prefix_active.size else 0
-    )
+    active_start = int(prefix_active[0]) * window_size if prefix_active.size else 0
 
     tail_start = samples.size - tail_length
     tail = samples[tail_start:].reshape(-1, window_size)
@@ -161,7 +158,7 @@ class SupertonicSpeaker:
         self._synthesis_lock = threading.Lock()
         self._request_text = ""
         self._generation_statistics = GenerationStatistics()
-        log_event(logger, logging.INFO, "supertonic.model.loading")
+        logger.info("supertonic.model.loading")
         self._tts = TTS(auto_download=True)
         self._style = self._tts.get_voice_style(config.supertonic_voice)
         self._sample_rate = int(getattr(self._tts, "sample_rate", SAMPLE_RATE))
@@ -172,17 +169,13 @@ class SupertonicSpeaker:
             backend_name="supertonic",
             debug_callback=debug_callback,
         )
-        self._thread = threading.Thread(
-            target=self._run, daemon=True, name="SupertonicSpeaker"
-        )
+        self._thread = threading.Thread(target=self._run, daemon=True, name="SupertonicSpeaker")
         self._thread.start()
-        log_event(
-            logger,
-            logging.INFO,
-            "supertonic.model.loaded",
-            voice=config.supertonic_voice,
-            language=config.supertonic_language,
-            sample_rate=self._sample_rate,
+        logger.info(
+            "supertonic.model.loaded voice=%s language=%s sample_rate=%s",
+            config.supertonic_voice,
+            config.supertonic_language,
+            self._sample_rate,
         )
 
     def speak(self, text: str) -> int | None:
@@ -217,123 +210,90 @@ class SupertonicSpeaker:
             try:
                 self._speak_request(request)
             except Exception:
-                log_exception(
-                    logger,
-                    "supertonic.request.failed",
-                    generation=request.generation,
-                )
+                logger.exception("supertonic.request.failed generation=%s", request.generation)
                 self._playback.fail(request.generation)
                 return
 
     def _speak_request(self, request: _SpeechRequest) -> None:
         if not self._playback.begin(request.generation):
             return
-        player_started = False
         try:
-            pipeline = AdaptiveSpeechPipeline(
-                request.text, self._generation_statistics
-            )
-            decision = pipeline.choose_next()
-            if decision is None:
-                return
-            prepared = self._synthesize_segment(decision.segment)
-            pipeline.record_generation(
-                decision.segment, prepared.synthesis_ms / 1000
-            )
-            if self._is_superseded(request.generation):
-                return
-            self._request_text = request.text
-            self._player.start()
-            player_started = True
-            index = 0
-            while True:
-                if self._is_superseded(request.generation):
-                    return
-                audio_base = self._player.fed_bytes
-                for boundary in estimate_word_boundaries(
-                    prepared.spoken, prepared.spoken_seconds
-                ):
-                    self._player.add_boundary(
-                        round(
-                            (
-                                boundary.seconds
-                                + prepared.leading_silence_seconds
-                            )
-                            * TICKS_PER_SECOND
-                        ),
-                        prepared.offset + boundary.position,
-                        boundary.length,
-                        base_byte_offset=audio_base,
-                    )
-                self._player.feed(prepared.pcm)
-                debug_event = SpeechDebugEvent(
-                        kind="chunk_ready",
-                        backend="supertonic",
-                        chunk_index=index,
-                        text_offset=prepared.offset,
-                        text_length=len(prepared.spoken),
-                        target_characters=decision.target_characters,
-                        predicted_synthesis_ms=round(
-                            decision.predicted_synthesis_seconds * 1000
-                        ),
-                        actual_synthesis_ms=prepared.synthesis_ms,
-                        audio_ms=round(prepared.audio_seconds * 1000),
-                        runway_ms=round(decision.playback_runway * 1000),
-                        boundary=(
-                            "sentence/structure"
-                            if prepared.pause_after
-                            else "technical"
-                        ),
-                    )
-                debug_callback = getattr(self, "_debug_callback", None)
-                if debug_callback:
-                    debug_callback(debug_event)
-                add_debug_marker = getattr(self._player, "add_debug_marker", None)
-                if add_debug_marker:
-                    add_debug_marker(audio_base, debug_event)
-                log_event(
-                    logger,
-                    logging.INFO,
-                    "supertonic.segment.queued",
-                    generation=request.generation,
-                    segment_index=index,
-                    remaining_characters=pipeline.remaining_characters,
-                    audio_seconds=round(prepared.audio_seconds, 3),
-                    synthesis_ms=prepared.synthesis_ms,
-                    buffered_seconds=round(self._player.buffered_seconds, 3),
-                )
-                if not pipeline.remaining_characters:
-                    break
-                if prepared.pause_after:
-                    self._player.feed_silence(
-                        self._config.structure_pause_seconds
-                    )
-                if not self._wait_for_buffer_capacity(request.generation):
-                    return
-                runway = self._player.buffered_seconds
-                decision = pipeline.choose_next(runway)
-                if decision is None:
-                    break
-                log_event(
-                    logger,
-                    logging.DEBUG,
-                    "supertonic.chunk.selected",
-                    segment_index=index + 1,
-                    target_characters=decision.target_characters,
-                    actual_characters=len(decision.segment.text),
-                    playback_runway=round(runway, 3),
-                    observations=pipeline.statistics.observations,
-                    text_preview=text_preview(decision.segment.text),
-                )
-                prepared = self._synthesize_segment(decision.segment)
-                pipeline.record_generation(
-                    decision.segment, prepared.synthesis_ms / 1000
-                )
-                index += 1
+            self._synthesize_request(request)
         finally:
-            if player_started:
-                self._player.finish()
             self._playback.complete(request.generation)
+
+    def _synthesize_request(self, request: _SpeechRequest) -> None:
+        session = AdaptiveSpeechSession.start(request.text, "supertonic", self._generation_statistics)
+        if session is None:
+            return
+        prepared = self._prepare_chunk(session)
+        if self._is_superseded(request.generation):
+            return
+        self._request_text = request.text
+        self._player.start()
+        try:
+            self._queue_chunks(request.generation, session, prepared)
+        finally:
+            self._player.finish()
+
+    def _queue_chunks(
+        self,
+        generation: int,
+        session: AdaptiveSpeechSession,
+        prepared: _PreparedSegment,
+    ) -> None:
+        while not self._is_superseded(generation):
+            audio_base = self._queue_segment_audio(prepared)
+            self._report_queued_chunk(generation, session, prepared, audio_base)
+            if not session.remaining_characters:
+                return
+            session.queue_structure_pause(self._player.feed_silence, self._config.structure_pause_seconds)
+            if not self._wait_for_buffer_capacity(generation):
+                return
+            if not session.advance(self._player.buffered_seconds):
+                return
+            prepared = self._prepare_chunk(session)
+
+    def _prepare_chunk(self, session: AdaptiveSpeechSession) -> _PreparedSegment:
+        prepared = self._synthesize_segment(session.decision.segment)
+        session.record_generation(prepared.synthesis_ms / 1000)
+        return prepared
+
+    def _queue_segment_audio(self, prepared: _PreparedSegment) -> int:
+        audio_base = self._player.fed_bytes
+        for boundary in estimate_word_boundaries(prepared.spoken, prepared.spoken_seconds):
+            self._player.add_boundary(
+                round((boundary.seconds + prepared.leading_silence_seconds) * TICKS_PER_SECOND),
+                prepared.offset + boundary.position,
+                boundary.length,
+                base_byte_offset=audio_base,
+            )
+        self._player.feed(prepared.pcm)
+        return audio_base
+
+    def _report_queued_chunk(
+        self,
+        generation: int,
+        session: AdaptiveSpeechSession,
+        prepared: _PreparedSegment,
+        audio_base: int,
+    ) -> None:
+        emit_speech_debug(
+            session.debug_event(prepared.synthesis_ms / 1000, prepared.audio_seconds),
+            getattr(self, "_debug_callback", None),
+            getattr(self._player, "add_debug_marker", None),
+            byte_offset=audio_base,
+        )
+        logger.info(
+            "supertonic.segment.queued generation=%s segment_index=%s remaining_characters=%s "
+            "audio_seconds=%s synthesis_ms=%s buffered_seconds=%s",
+            generation,
+            session.index,
+            session.remaining_characters,
+            round(prepared.audio_seconds, 3),
+            prepared.synthesis_ms,
+            round(self._player.buffered_seconds, 3),
+        )
 
     def _synthesize_segment(self, segment: SpeechSegment) -> _PreparedSegment:
         started_at = time.monotonic()
@@ -351,14 +311,12 @@ class SupertonicSpeaker:
         )
         pcm = (np.clip(audio, -1.0, 1.0) * 32767).astype("<i2").tobytes()
         synthesis_ms = round((time.monotonic() - started_at) * 1000)
-        log_event(
-            logger,
-            logging.INFO,
-            "supertonic.segment.synthesized",
-            text_length=len(segment.text),
-            audio_seconds=round(audio.size / self._sample_rate, 3),
-            synthesis_ms=synthesis_ms,
-            pause_after=segment.pause_after,
+        logger.info(
+            "supertonic.segment.synthesized text_length=%s audio_seconds=%s synthesis_ms=%s pause_after=%s",
+            len(segment.text),
+            round(audio.size / self._sample_rate, 3),
+            synthesis_ms,
+            segment.pause_after,
         )
         return _PreparedSegment(
             offset=segment.offset,

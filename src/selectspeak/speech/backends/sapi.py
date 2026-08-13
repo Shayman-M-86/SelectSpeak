@@ -12,7 +12,7 @@ import pythoncom
 import win32com.client
 
 from ...config import SpeechConfig
-from ...logging_setup import log_event, log_exception, text_preview
+from ...logging_setup import text_preview
 from ..contracts import WordCallback
 from ..playback import PlaybackCommand, PlaybackController, SpeechRequest
 from ..segments import SpeechSegment, split_speech_segments
@@ -84,15 +84,13 @@ class SapiWorker:
         self._config = config
         self._playback = playback
         self._word_callback = word_callback
-        self._thread = threading.Thread(
-            target=self._run, daemon=True, name="SapiSpeaker"
-        )
+        self._thread = threading.Thread(target=self._run, daemon=True, name="SapiSpeaker")
 
     def start(self) -> None:
         self._thread.start()
 
     def _run(self) -> None:
-        log_event(logger, logging.DEBUG, "speaker.com_initializing")
+        logger.debug("speaker.com_initializing")
         pythoncom.CoInitialize()
         try:
             voice = self._create_voice()
@@ -104,11 +102,11 @@ class SapiWorker:
                 if self._playback.is_current(request.generation):
                     self._play_request(voice, request)
         except Exception:
-            log_exception(logger, "speaker.worker.failed")
+            logger.exception("speaker.worker.failed")
             self._playback.fail()
         finally:
             pythoncom.CoUninitialize()
-            log_event(logger, logging.INFO, "speaker.com_uninitialized")
+            logger.info("speaker.com_uninitialized")
 
     def _create_voice(self) -> SapiVoice:
         voice = cast(SapiVoice, win32com.client.Dispatch("SAPI.SpVoice"))
@@ -125,26 +123,22 @@ class SapiWorker:
                 break
         voice.Rate = self._config.speech_rate
         voice.Volume = self._config.speech_volume
-        log_event(
-            logger,
-            logging.INFO,
-            "speaker.voice.configured",
-            voice=voice.Voice.GetDescription(),
-            rate=voice.Rate,
-            volume=voice.Volume,
-            available_voice_count=tokens.Count,
+        logger.info(
+            "speaker.voice.configured voice=%s rate=%s volume=%s available_voice_count=%s",
+            voice.Voice.GetDescription(),
+            voice.Rate,
+            voice.Volume,
+            tokens.Count,
         )
 
     def _play_request(self, voice: SapiVoice, request: SpeechRequest) -> None:
         if not self._playback.begin(request.generation):
             return
-        log_event(
-            logger,
-            logging.INFO,
-            "speaker.request.started",
-            generation=request.generation,
-            text_length=len(request.text),
-            text_preview=text_preview(request.text),
+        logger.info(
+            "speaker.request.started generation=%s text_length=%s text_preview=%s",
+            request.generation,
+            len(request.text),
+            text_preview(request.text),
         )
         try:
             segments = split_speech_segments(request.text)
@@ -158,18 +152,14 @@ class SapiWorker:
                 ):
                     return
         except Exception:
-            log_exception(
-                logger, "speaker.request.failed", generation=request.generation
-            )
+            logger.exception("speaker.request.failed generation=%s", request.generation)
         finally:
             self._playback.complete(request.generation)
-            log_event(
-                logger,
-                logging.INFO,
-                "speaker.request.finished",
-                generation=request.generation,
-                current_generation=self._playback.generation,
-                completed_generation=self._playback.completed_generation,
+            logger.info(
+                "speaker.request.finished generation=%s current_generation=%s completed_generation=%s",
+                request.generation,
+                self._playback.generation,
+                self._playback.completed_generation,
             )
 
     def _play_segment(
@@ -235,21 +225,17 @@ class SapiWorker:
 class SapiSpeaker:
     """Thread-safe facade for the Windows SAPI backend."""
 
-    def __init__(
-        self, config: SpeechConfig, word_callback: WordCallback | None = None
-    ) -> None:
+    def __init__(self, config: SpeechConfig, word_callback: WordCallback | None = None) -> None:
         self._config = config
         self._playback = PlaybackController()
         self._worker = SapiWorker(config, self._playback, word_callback)
         self._worker.start()
-        log_event(
-            logger,
-            logging.INFO,
-            "speaker.worker.started",
-            preferred_voice=config.preferred_voice_match,
-            rate=config.speech_rate,
-            volume=config.speech_volume,
-            structure_pause_seconds=config.structure_pause_seconds,
+        logger.info(
+            "speaker.worker.started preferred_voice=%s rate=%s volume=%s structure_pause_seconds=%s",
+            config.preferred_voice_match,
+            config.speech_rate,
+            config.speech_volume,
+            config.structure_pause_seconds,
         )
 
     @property
@@ -264,18 +250,16 @@ class SapiSpeaker:
         if len(text) < self._config.minimum_text_length:
             return None
         request, _was_active = self._playback.submit(text)
-        log_event(
-            logger,
-            logging.INFO,
-            "speaker.request.queued",
-            generation=request.generation,
-            text_length=len(text),
+        logger.info(
+            "speaker.request.queued generation=%s text_length=%s",
+            request.generation,
+            len(text),
         )
         return request.generation
 
     def stop(self) -> None:
         generation, _was_active = self._playback.cancel()
-        log_event(logger, logging.INFO, "speaker.stop.signalled", generation=generation)
+        logger.info("speaker.stop.signalled generation=%s", generation)
 
     def pause(self) -> None:
         self._playback.request_pause()

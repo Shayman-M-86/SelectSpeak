@@ -1,7 +1,5 @@
 import logging
 
-from ..logging_setup import log_event
-
 logger = logging.getLogger(__name__)
 
 _MODIFIER_ALIASES = {
@@ -56,13 +54,7 @@ _WINDOWS_KEY_NAMES = {value: key for key, value in _WINDOWS_NAMED_KEYS.items()}
 def normalize_key(name: str) -> str:
     lowered = name.lower()
     normalized = _MODIFIER_ALIASES.get(lowered, lowered)
-    log_event(
-        logger,
-        logging.DEBUG,
-        "key.normalized",
-        input=name,
-        output=normalized,
-    )
+    logger.debug("key.normalized input=%s output=%s", name, normalized)
     return normalized
 
 
@@ -72,23 +64,15 @@ def build_hotkey(keys: set[str]) -> str:
     modifiers = [key for key in _MODIFIER_ORDER if key in normalized]
     ordinary_keys = sorted(key for key in normalized if key not in _MODIFIER_NAMES)
     if not ordinary_keys:
-        log_event(
-            logger,
-            logging.DEBUG,
-            "hotkey.built",
-            keys=sorted(keys),
-            result="",
-            reason="modifier_only",
+        logger.debug(
+            "hotkey.built keys=%s result=%s reason=%s",
+            sorted(keys),
+            "",
+            "modifier_only",
         )
         return ""
     result = "+".join([*modifiers, *ordinary_keys])
-    log_event(
-        logger,
-        logging.DEBUG,
-        "hotkey.built",
-        keys=sorted(keys),
-        result=result,
-    )
+    logger.debug("hotkey.built keys=%s result=%s", sorted(keys), result)
     return result
 
 
@@ -111,13 +95,11 @@ def to_windows_hotkey(hotkey: str) -> tuple[int, int]:
     modifiers = 0
     for part in parts:
         modifiers |= _WINDOWS_MODIFIERS.get(part, 0)
-    log_event(
-        logger,
-        logging.DEBUG,
-        "hotkey.translated_for_windows",
-        input=hotkey,
-        modifiers=modifiers,
-        virtual_key=virtual_key,
+    logger.debug(
+        "hotkey.translated_for_windows input=%s modifiers=%s virtual_key=%s",
+        hotkey,
+        modifiers,
+        virtual_key,
     )
     return modifiers, virtual_key
 

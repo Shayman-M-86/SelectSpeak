@@ -6,7 +6,7 @@ import threading
 from collections.abc import Callable
 from typing import Any
 
-from ..logging_setup import log_event, log_exception, text_preview
+from ..logging_setup import text_preview
 from ..native import get_native_bridge
 from .keymap import to_windows_hotkey
 
@@ -65,13 +65,11 @@ class OcrCaptureHotkey:
         ):
             raise OcrCaptureError(self._last_error())
         self._started = True
-        log_event(
-            logger,
-            logging.INFO,
-            "ocr_hotkey.registered",
-            hotkey=self.hotkey,
-            language=self.language or "automatic",
-            implementation="native_windows_ocr",
+        logger.info(
+            "ocr_hotkey.registered hotkey=%s language=%s implementation=%s",
+            self.hotkey,
+            self.language or "automatic",
+            "native_windows_ocr",
         )
 
     def cancel(self) -> None:
@@ -82,7 +80,7 @@ class OcrCaptureHotkey:
         if self._started:
             self._dll.ss_ocr_stop()
             self._started = False
-            log_event(logger, logging.INFO, "ocr_hotkey.unregistered")
+            logger.info("ocr_hotkey.unregistered")
 
     def _configure_api(self) -> None:
         self._dll.ss_ocr_start.argtypes = [
@@ -110,31 +108,23 @@ class OcrCaptureHotkey:
     ) -> None:
         captured = text or ""
         if status == OCR_CANCELLED:
-            log_event(logger, logging.INFO, "ocr_capture.cancelled")
+            logger.info("ocr_capture.cancelled")
             return
         if status == OCR_FAILED:
-            log_event(
-                logger,
-                logging.ERROR,
-                "ocr_capture.failed",
-                error=self._last_error(),
-            )
+            logger.error("ocr_capture.failed error=%s", self._last_error())
             return
         if status != OCR_COMPLETED:
-            log_event(
-                logger,
-                logging.ERROR,
-                "ocr_capture.failed",
-                error=f"Native OCR returned unknown status {status}",
+            logger.error(
+                "ocr_capture.failed error=%s",
+                f"Native OCR returned unknown status {status}",
             )
             return
 
-        log_event(
-            logger,
+        logger.log(
             logging.INFO if captured.strip() else logging.WARNING,
-            "ocr_capture.completed",
-            text_length=len(captured),
-            text_preview=text_preview(captured),
+            "ocr_capture.completed text_length=%s text_preview=%s",
+            len(captured),
+            text_preview(captured),
         )
         if not captured.strip():
             return
@@ -149,7 +139,7 @@ class OcrCaptureHotkey:
         try:
             self._on_text(text)
         except Exception:
-            log_exception(logger, "ocr_capture.handler.failed")
+            logger.exception("ocr_capture.handler.failed")
 
     def _last_error(self) -> str:
         required = self._dll.ss_ocr_last_error(None, 0)

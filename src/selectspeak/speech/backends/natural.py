@@ -11,11 +11,10 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from ...config import SpeechConfig
-from ...logging_setup import log_event, log_exception, text_preview
 from ...native import get_native_bridge
 from ...runtime_paths import repository_runtime_path
-from ..debug import SpeechDebugCallback, SpeechDebugEvent
-from ..pipeline import AdaptiveSpeechPipeline, GenerationStatistics
+from ..debug import SpeechDebugCallback, emit_speech_debug
+from ..pipeline import AdaptiveSpeechSession, GenerationStatistics
 from ..playback import PlaybackController, SpeechRequest
 from ..waveout import WaveOutPlayer
 
@@ -40,9 +39,7 @@ class NaturalVoice:
     source: str = "installed"
 
 
-_AUDIO_CALLBACK = ctypes.CFUNCTYPE(
-    None, ctypes.POINTER(ctypes.c_uint8), ctypes.c_uint32, ctypes.c_void_p
-)
+_AUDIO_CALLBACK = ctypes.CFUNCTYPE(None, ctypes.POINTER(ctypes.c_uint8), ctypes.c_uint32, ctypes.c_void_p)
 _WORD_CALLBACK = ctypes.CFUNCTYPE(
     None,
     ctypes.c_uint64,
@@ -173,9 +170,7 @@ class NaturalVoiceEngine:
         self._dll.ss_voice_set_audio_callback(self._audio_callback, None)
         self._dll.ss_voice_set_word_callback(self._word_callback, None)
         self._credential = (
-            config.natural_voice_credential.encode("utf-8")
-            if config.natural_voice_credential
-            else None
+            config.natural_voice_credential.encode("utf-8") if config.natural_voice_credential else None
         )
         failures: list[str] = []
         if config.natural_voice_path:
@@ -193,8 +188,7 @@ class NaturalVoiceEngine:
             if self._initialize_first(candidates, self._credential, failures):
                 return
             raise NaturalVoiceError(
-                "The configured Natural Voice package could not be initialized. "
-                + " | ".join(failures)
+                "The configured Natural Voice package could not be initialized. " + " | ".join(failures)
             )
 
         pinned = find_pinned_natural_voices()
@@ -208,12 +202,10 @@ class NaturalVoiceEngine:
             return
         if not pinned and not installed:
             raise NaturalVoiceError(
-                self._last_error()
-                or "No pinned or installed Windows Natural Voices were found"
+                self._last_error() or "No pinned or installed Windows Natural Voices were found"
             )
         raise NaturalVoiceError(
-            "No compatible installed or pinned Natural Voice could be initialized. "
-            + " | ".join(failures)
+            "No compatible installed or pinned Natural Voice could be initialized. " + " | ".join(failures)
         )
 
     @property
@@ -228,8 +220,7 @@ class NaturalVoiceEngine:
         ]
         active_voice = getattr(self, "voice", None)
         if active_voice is not None and not any(
-            voice.package_path.casefold() == active_voice.package_path.casefold()
-            for voice in voices
+            voice.package_path.casefold() == active_voice.package_path.casefold() for voice in voices
         ):
             voices.append(active_voice)
         self._available_voices = tuple(voices)
@@ -246,9 +237,7 @@ class NaturalVoiceEngine:
             None,
         )
         if selected is None:
-            raise NaturalVoiceError(
-                f"Natural Voice is no longer available: {package_path}"
-            )
+            raise NaturalVoiceError(f"Natural Voice is no longer available: {package_path}")
         previous = self.voice
         failures: list[str] = []
         if self._initialize_first([selected], self._credential, failures):
@@ -257,8 +246,7 @@ class NaturalVoiceEngine:
         rollback_failures: list[str] = []
         self._initialize_first([previous], self._credential, rollback_failures)
         raise NaturalVoiceError(
-            "The selected Natural Voice could not be initialized. "
-            + " | ".join(failures)
+            "The selected Natural Voice could not be initialized. " + " | ".join(failures)
         )
 
     def _enumerate_installed_voices(self) -> list[NaturalVoice]:
@@ -273,26 +261,23 @@ class NaturalVoiceEngine:
         failures: list[str],
     ) -> bool:
         for candidate in candidates:
-            log_event(
-                logger,
-                logging.INFO,
-                "natural_voice.probing",
-                voice=candidate.name,
-                locale=candidate.locale,
-                package_path=candidate.package_path,
-                source=candidate.source,
+            logger.info(
+                "natural_voice.probing voice=%s locale=%s package_path=%s source=%s",
+                candidate.name,
+                candidate.locale,
+                candidate.package_path,
+                candidate.source,
             )
             if not self._dll.ss_voice_initialize(candidate.package_path, credential):
                 self.voice = candidate
-                log_event(
-                    logger,
-                    logging.INFO,
-                    "natural_voice.selected",
-                    voice=candidate.name,
-                    locale=candidate.locale,
-                    package_path=candidate.package_path,
-                    source=candidate.source,
-                    available_voice_count=len(candidates),
+                logger.info(
+                    "natural_voice.selected voice=%s locale=%s package_path=%s "
+                    "source=%s available_voice_count=%s",
+                    candidate.name,
+                    candidate.locale,
+                    candidate.package_path,
+                    candidate.source,
+                    len(candidates),
                 )
                 return True
             failures.append(f"{candidate.name}: {self._last_error()}")
@@ -343,9 +328,7 @@ class NaturalVoiceEngine:
     ) -> None:
         self._audio_consumer(ctypes.string_at(data, length))
 
-    def _on_word(
-        self, audio_offset: int, text_offset: int, length: int, _context: int
-    ) -> None:
+    def _on_word(self, audio_offset: int, text_offset: int, length: int, _context: int) -> None:
         self._boundary_consumer(audio_offset, text_offset, length)
 
     def _on_voice(
@@ -356,11 +339,7 @@ class NaturalVoiceEngine:
         display_name: bytes,
         _context: int,
     ) -> None:
-        self._voices.append(
-            NaturalVoice(
-                package_path, _decode(name), _decode(locale), _decode(display_name)
-            )
-        )
+        self._voices.append(NaturalVoice(package_path, _decode(name), _decode(locale), _decode(display_name)))
 
     def _last_error(self) -> str:
         required = self._dll.ss_voice_last_error(None, 0)
@@ -373,17 +352,13 @@ class NaturalVoiceEngine:
         return NaturalVoiceEngine._ordered_voices(voices, preferred)[0]
 
     @staticmethod
-    def _ordered_voices(
-        voices: list[NaturalVoice], preferred: str
-    ) -> list[NaturalVoice]:
+    def _ordered_voices(voices: list[NaturalVoice], preferred: str) -> list[NaturalVoice]:
         needle = preferred.casefold().strip()
         if not needle:
             return list(voices)
 
         def matches(voice: NaturalVoice) -> bool:
-            haystack = " ".join(
-                (voice.name, voice.display_name, voice.locale, voice.package_path)
-            ).casefold()
+            haystack = " ".join((voice.name, voice.display_name, voice.locale, voice.package_path)).casefold()
             return needle in haystack
 
         return [voice for voice in voices if matches(voice)] + [
@@ -430,12 +405,8 @@ class NaturalVoiceSpeaker:
             config.speech_volume,
             debug_callback=debug_callback,
         )
-        self._engine: _Engine = NaturalVoiceEngine(
-            config, self._on_engine_audio, self._on_engine_boundary
-        )
-        self._thread = threading.Thread(
-            target=self._run, daemon=True, name="NaturalVoiceSpeaker"
-        )
+        self._engine: _Engine = NaturalVoiceEngine(config, self._on_engine_audio, self._on_engine_boundary)
+        self._thread = threading.Thread(target=self._run, daemon=True, name="NaturalVoiceSpeaker")
         self._thread.start()
 
     @property
@@ -460,13 +431,11 @@ class NaturalVoiceSpeaker:
     def select_voice(self, package_path: str) -> NaturalVoice:
         self.stop()
         selected = self._engine.select_voice(package_path)
-        log_event(
-            logger,
-            logging.INFO,
-            "natural_voice.changed",
-            voice=selected.name,
-            package_path=selected.package_path,
-            source=selected.source,
+        logger.info(
+            "natural_voice.changed voice=%s package_path=%s source=%s",
+            selected.name,
+            selected.package_path,
+            selected.source,
         )
         return selected
 
@@ -509,99 +478,58 @@ class NaturalVoiceSpeaker:
             except Exception:
                 if self._is_superseded(request.generation):
                     continue
-                log_exception(
-                    logger,
-                    "natural_voice.request.failed",
-                    generation=request.generation,
-                )
+                logger.exception("natural_voice.request.failed generation=%s", request.generation)
                 self._playback.fail(request.generation)
                 return
 
     def _speak_request(self, request: _SpeechRequest) -> None:
         if not self._playback.begin(request.generation):
             return
-        player_started = False
         try:
-            pipeline = AdaptiveSpeechPipeline(request.text, self._generation_statistics)
-            decision = pipeline.choose_next()
-            if decision is None:
-                return
-            self._request_text = request.text
-            self._player.start()
-            player_started = True
-            index = 0
-            while decision is not None:
-                if not self._playback.is_current(request.generation):
-                    return
-                segment = decision.segment
-                self._segment_text_offset = segment.offset
-                self._segment_audio_base = self._player.fed_bytes
-                started_at = time.monotonic()
-                self._engine.speak(segment.text)
-                synthesis_seconds = time.monotonic() - started_at
-                generated_bytes = self._player.fed_bytes - self._segment_audio_base
-                pipeline.record_generation(segment, synthesis_seconds)
-                debug_event = SpeechDebugEvent(
-                    kind="chunk_ready",
-                    backend="natural",
-                    chunk_index=index,
-                    text_offset=segment.offset,
-                    text_length=len(segment.text),
-                    target_characters=decision.target_characters,
-                    predicted_synthesis_ms=round(
-                        decision.predicted_synthesis_seconds * 1000
-                    ),
-                    actual_synthesis_ms=round(synthesis_seconds * 1000),
-                    audio_ms=round(generated_bytes / (SAMPLE_RATE * 2) * 1000),
-                    runway_ms=round(decision.playback_runway * 1000),
-                    boundary=_boundary_name(segment.pause_after),
-                )
-                debug_callback = getattr(self, "_debug_callback", None)
-                if debug_callback:
-                    debug_callback(debug_event)
-                add_debug_marker = getattr(self._player, "add_debug_marker", None)
-                if add_debug_marker:
-                    add_debug_marker(self._segment_audio_base, debug_event)
-                if not pipeline.remaining_characters:
-                    break
-                if segment.pause_after:
-                    self._player.feed_silence(self._config.structure_pause_seconds)
-                    log_event(
-                        logger,
-                        logging.DEBUG,
-                        "speech.structure_pause.queued",
-                        backend="natural",
-                        configured_ms=round(
-                            self._config.structure_pause_seconds * 1000
-                        ),
-                        segment_index=index,
-                    )
-                runway = self._player.buffered_seconds
-                decision = pipeline.choose_next(runway)
-                if decision is not None:
-                    log_event(
-                        logger,
-                        logging.DEBUG,
-                        "natural_voice.chunk.selected",
-                        segment_index=index + 1,
-                        target_characters=decision.target_characters,
-                        actual_characters=len(decision.segment.text),
-                        playback_runway=round(runway, 3),
-                        observations=pipeline.statistics.observations,
-                        text_preview=text_preview(decision.segment.text),
-                    )
-                index += 1
+            self._synthesize_request(request)
         finally:
-            if player_started:
-                self._player.finish()
             self._playback.complete(request.generation)
+
+    def _synthesize_request(self, request: _SpeechRequest) -> None:
+        session = AdaptiveSpeechSession.start(request.text, "natural", self._generation_statistics)
+        if session is None:
+            return
+        self._request_text = request.text
+        self._player.start()
+        try:
+            self._synthesize_chunks(request.generation, session)
+        finally:
+            self._player.finish()
+
+    def _synthesize_chunks(self, generation: int, session: AdaptiveSpeechSession) -> None:
+        while self._playback.is_current(generation):
+            self._synthesize_chunk(session)
+            if not session.remaining_characters:
+                return
+            session.queue_structure_pause(self._player.feed_silence, self._config.structure_pause_seconds)
+            if not session.advance(self._player.buffered_seconds):
+                return
+
+    def _synthesize_chunk(self, session: AdaptiveSpeechSession) -> None:
+        segment = session.decision.segment
+        self._segment_text_offset = segment.offset
+        self._segment_audio_base = self._player.fed_bytes
+        started_at = time.monotonic()
+        self._engine.speak(segment.text)
+        synthesis_seconds = time.monotonic() - started_at
+        generated_bytes = self._player.fed_bytes - self._segment_audio_base
+        session.record_generation(synthesis_seconds)
+        emit_speech_debug(
+            session.debug_event(synthesis_seconds, generated_bytes / (SAMPLE_RATE * 2)),
+            getattr(self, "_debug_callback", None),
+            getattr(self._player, "add_debug_marker", None),
+            byte_offset=self._segment_audio_base,
+        )
 
     def _on_engine_audio(self, data: bytes) -> None:
         self._player.feed(data)
 
-    def _on_engine_boundary(
-        self, audio_offset: int, text_offset: int, length: int
-    ) -> None:
+    def _on_engine_boundary(self, audio_offset: int, text_offset: int, length: int) -> None:
         self._player.add_boundary(
             audio_offset,
             self._segment_text_offset + text_offset,
@@ -615,7 +543,3 @@ class NaturalVoiceSpeaker:
 
     def _is_superseded(self, generation: int) -> bool:
         return not self._playback.is_current(generation)
-
-
-def _boundary_name(pause_after: bool) -> str:
-    return "sentence/structure" if pause_after else "technical"

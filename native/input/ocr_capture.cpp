@@ -11,7 +11,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <condition_variable>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
@@ -22,9 +21,9 @@
 
 #include "ocr_layout.h"
 #include "../api.h"
+#include "input_runtime.h"
 
 namespace {
-constexpr int kOcrHotkeyId = 2;
 constexpr unsigned int kOcrCompleted = 1;
 constexpr unsigned int kOcrCancelled = 2;
 constexpr unsigned int kOcrFailed = 3;
@@ -88,6 +87,7 @@ struct OverlayContext {
     HGDIOBJ old_frame = nullptr;
     HGDIOBJ old_shade = nullptr;
     int border_width = kSelectionBorderDips;
+    bool show_hint = true;
 
     ~OverlayContext() {
         if (screenshot_dc != nullptr) {
@@ -119,22 +119,14 @@ struct OverlayContext {
 
 struct OcrState {
     std::mutex lifecycle_mutex;
-    std::thread thread;
     std::atomic<bool> running{false};
     std::atomic<bool> stopping{false};
     std::atomic<bool> active{false};
+    std::atomic<bool> cancel_requested{false};
     std::atomic<HWND> overlay{nullptr};
-    DWORD thread_id = 0;
-    unsigned int modifiers = 0;
-    unsigned int virtual_key = 0;
     std::wstring language;
     ss_ocr_callback_t callback = nullptr;
     void* callback_context = nullptr;
-
-    std::mutex ready_mutex;
-    std::condition_variable ready_changed;
-    bool ready = false;
-    bool start_succeeded = false;
 
     std::mutex error_mutex;
     std::string last_error;
@@ -188,40 +180,8 @@ UINT SelectionDpi(HWND window, const OverlayContext& context,
     return GetDpiForWindow(window);
 }
 
-RECT ClampRect(const OverlayContext& context, RECT area) {
-    area.left = std::clamp<LONG>(area.left, 0, context.screenshot->width);
-    area.top = std::clamp<LONG>(area.top, 0, context.screenshot->height);
-    area.right = std::clamp<LONG>(area.right, 0, context.screenshot->width);
-    area.bottom = std::clamp<LONG>(area.bottom, 0, context.screenshot->height);
-    return area;
-}
-
-RECT ExpandedSelection(const OverlayContext& context, const RECT& selected) {
-    const int padding = context.border_width + 2;
-    return ClampRect(context, {
-        selected.left - padding,
-        selected.top - padding,
-        selected.right + padding,
-        selected.bottom + padding,
-    });
-}
-
 bool HasArea(const RECT& area) {
     return area.right > area.left && area.bottom > area.top;
-}
-
-void RestoreDimmedRegion(OverlayContext& context, const RECT& requested) {
-    const RECT area = ClampRect(context, requested);
-    if (!HasArea(area)) {
-        return;
-    }
-    const int width = area.right - area.left;
-    const int height = area.bottom - area.top;
-    BitBlt(context.frame_dc, area.left, area.top, width, height,
-           context.screenshot_dc, area.left, area.top, SRCCOPY);
-    BLENDFUNCTION blend{AC_SRC_OVER, 0, kOverlayShadeAlpha, 0};
-    AlphaBlend(context.frame_dc, area.left, area.top, width, height,
-               context.shade_dc, 0, 0, 1, 1, blend);
 }
 
 void DrawSelection(OverlayContext& context, const RECT& selected) {
@@ -275,29 +235,23 @@ bool InitializeOverlayFrame(OverlayContext& context) {
     context.old_frame = SelectObject(context.frame_dc, context.frame_bitmap);
     context.old_shade = SelectObject(context.shade_dc, context.shade_bitmap);
     SetPixel(context.shade_dc, 0, 0, RGB(0, 0, 0));
-    RestoreDimmedRegion(context, {
-        0,
-        0,
-        context.screenshot->width,
-        context.screenshot->height,
-    });
-    DrawHint(context);
     return true;
 }
 
-void UpdateSelectionFrame(HWND window, OverlayContext& context,
-                          const RECT& previous) {
-    const RECT current = NormalizedSelection(context);
-    const RECT previous_dirty = ExpandedSelection(context, previous);
-    const RECT current_dirty = ExpandedSelection(context, current);
-    RestoreDimmedRegion(context, previous_dirty);
-    DrawSelection(context, current);
-    RECT dirty{};
-    UnionRect(&dirty, &previous_dirty, &current_dirty);
-    InvalidateRect(window, &dirty, FALSE);
-}
-
 void PaintOverlay(HWND window, OverlayContext& context) {
+    BitBlt(context.frame_dc, 0, 0, context.screenshot->width,
+           context.screenshot->height, context.screenshot_dc, 0, 0, SRCCOPY);
+    BLENDFUNCTION blend{AC_SRC_OVER, 0, kOverlayShadeAlpha, 0};
+    AlphaBlend(context.frame_dc, 0, 0, context.screenshot->width,
+               context.screenshot->height, context.shade_dc, 0, 0, 1, 1,
+               blend);
+    if (context.selection.dragging) {
+        DrawSelection(context, NormalizedSelection(context));
+    }
+    if (context.show_hint) {
+        DrawHint(context);
+    }
+
     PAINTSTRUCT paint{};
     HDC destination = BeginPaint(window, &paint);
     if (HasArea(paint.rcPaint)) {
@@ -339,17 +293,16 @@ LRESULT CALLBACK OverlayProcedure(HWND window, UINT message, WPARAM wparam,
             MulDiv(kSelectionBorderDips,
                    SelectionDpi(window, *context, context->selection.start),
                    96));
-        RestoreDimmedRegion(*context, kHintRect);
+        context->show_hint = false;
         context->selection.current = context->selection.start;
         context->selection.dragging = true;
         SetCapture(window);
-        InvalidateRect(window, &kHintRect, FALSE);
+        InvalidateRect(window, nullptr, FALSE);
         return 0;
     case WM_MOUSEMOVE:
         if (context->selection.dragging) {
-            const RECT previous = NormalizedSelection(*context);
             context->selection.current = ClampedPoint(window, lparam);
-            UpdateSelectionFrame(window, *context, previous);
+            InvalidateRect(window, nullptr, FALSE);
         }
         return 0;
     case WM_LBUTTONUP:
@@ -452,6 +405,9 @@ bool SelectScreenRegion(Screenshot& screenshot, RECT& selected) {
         throw std::runtime_error("Could not create the OCR selection overlay");
     }
     g_ocr.overlay.store(window);
+    if (g_ocr.cancel_requested.load() || g_ocr.stopping.load()) {
+        PostMessageW(window, WM_CLOSE, 0, 0);
+    }
     SetWindowPos(window, HWND_TOPMOST, screenshot.x, screenshot.y,
                  screenshot.width, screenshot.height, SWP_SHOWWINDOW);
     SetForegroundWindow(window);
@@ -675,6 +631,12 @@ void SendResult(const std::wstring& text, unsigned int status) {
 void CaptureAndRecognize() {
     const std::wstring foreground_language = ForegroundLanguage();
     Screenshot screenshot = CaptureVirtualScreen();
+    if (g_ocr.cancel_requested.load() || g_ocr.stopping.load()) {
+        if (!g_ocr.stopping.load()) {
+            SendResult({}, kOcrCancelled);
+        }
+        return;
+    }
     RECT selected{};
     if (!SelectScreenRegion(screenshot, selected)) {
         if (!g_ocr.stopping.load()) {
@@ -693,76 +655,24 @@ void CaptureAndRecognize() {
                kOcrCompleted);
 }
 
-void SignalReady(bool succeeded) {
-    {
-        std::lock_guard lock(g_ocr.ready_mutex);
-        g_ocr.start_succeeded = succeeded;
-        g_ocr.ready = true;
+void HandleOcrHotkey() {
+    if (!g_ocr.running.load() || g_ocr.active.load()) {
+        return;
     }
-    g_ocr.ready_changed.notify_one();
-}
-
-void OcrThread() {
-    bool ready_signalled = false;
-    bool apartment_initialized = false;
-    bool hotkey_registered = false;
+    g_ocr.cancel_requested.store(false);
+    if (g_ocr.active.exchange(true)) {
+        return;
+    }
     try {
-        winrt::init_apartment(winrt::apartment_type::multi_threaded);
-        apartment_initialized = true;
-        g_ocr.thread_id = GetCurrentThreadId();
-        if (!RegisterHotKey(nullptr, kOcrHotkeyId,
-                            g_ocr.modifiers | MOD_NOREPEAT,
-                            g_ocr.virtual_key)) {
-            SetOcrWindowsError("RegisterHotKey");
-            SignalReady(false);
-            ready_signalled = true;
-        } else {
-            hotkey_registered = true;
-            SignalReady(true);
-            ready_signalled = true;
-
-            MSG message{};
-            while (!g_ocr.stopping.load() &&
-                   GetMessageW(&message, nullptr, 0, 0) > 0) {
-                if (message.message != WM_HOTKEY ||
-                    message.wParam != kOcrHotkeyId ||
-                    g_ocr.active.exchange(true)) {
-                    TranslateMessage(&message);
-                    DispatchMessageW(&message);
-                    continue;
-                }
-                try {
-                    CaptureAndRecognize();
-                } catch (const winrt::hresult_error& error) {
-                    SetOcrError(winrt::to_string(error.message()));
-                    SendResult({}, kOcrFailed);
-                } catch (const std::exception& error) {
-                    SetOcrError(error.what());
-                    SendResult({}, kOcrFailed);
-                }
-                g_ocr.active.store(false);
-            }
-        }
+        CaptureAndRecognize();
     } catch (const winrt::hresult_error& error) {
         SetOcrError(winrt::to_string(error.message()));
-        if (!ready_signalled) {
-            SignalReady(false);
-        }
+        SendResult({}, kOcrFailed);
     } catch (const std::exception& error) {
         SetOcrError(error.what());
-        if (!ready_signalled) {
-            SignalReady(false);
-        }
+        SendResult({}, kOcrFailed);
     }
-    if (hotkey_registered) {
-        UnregisterHotKey(nullptr, kOcrHotkeyId);
-    }
-    if (apartment_initialized) {
-        winrt::uninit_apartment();
-    }
-    g_ocr.thread_id = 0;
     g_ocr.active.store(false);
-    g_ocr.running.store(false);
 }
 }  // namespace
 
@@ -778,35 +688,28 @@ int ss_ocr_start(unsigned int modifiers, unsigned int virtual_key,
         SetOcrError("An OCR callback and virtual key are required");
         return 1;
     }
-    if (g_ocr.thread.joinable()) {
-        g_ocr.thread.join();
-    }
-    g_ocr.modifiers = modifiers;
-    g_ocr.virtual_key = virtual_key;
     g_ocr.language = language == nullptr ? L"" : language;
     g_ocr.callback = callback;
     g_ocr.callback_context = context;
     g_ocr.stopping.store(false);
     g_ocr.active.store(false);
-    g_ocr.ready = false;
-    g_ocr.start_succeeded = false;
+    g_ocr.cancel_requested.store(false);
     g_ocr.running.store(true);
-    g_ocr.thread = std::thread(OcrThread);
-    {
-        std::unique_lock ready_lock(g_ocr.ready_mutex);
-        g_ocr.ready_changed.wait(ready_lock, [] { return g_ocr.ready; });
-    }
-    if (!g_ocr.start_succeeded) {
-        if (g_ocr.thread.joinable()) {
-            g_ocr.thread.join();
-        }
+    const DWORD error = selectspeak::input::RegisterOcrHotkey(
+        modifiers, virtual_key, HandleOcrHotkey);
+    if (error != ERROR_SUCCESS) {
+        SetOcrError("Could not register the OCR hotkey; Windows error " +
+                    std::to_string(error));
         g_ocr.running.store(false);
+        g_ocr.callback = nullptr;
+        g_ocr.callback_context = nullptr;
         return 1;
     }
     return 0;
 }
 
 void ss_ocr_cancel() {
+    g_ocr.cancel_requested.store(true);
     HWND overlay = g_ocr.overlay.load();
     if (overlay != nullptr) {
         PostMessageW(overlay, WM_CLOSE, 0, 0);
@@ -817,20 +720,15 @@ int ss_ocr_is_active() { return g_ocr.active.load() ? 1 : 0; }
 
 void ss_ocr_stop() {
     std::lock_guard lifecycle_lock(g_ocr.lifecycle_mutex);
-    if (!g_ocr.running.load() && !g_ocr.thread.joinable()) {
+    if (!g_ocr.running.exchange(false)) {
         return;
     }
     g_ocr.stopping.store(true);
     ss_ocr_cancel();
-    if (g_ocr.thread_id != 0) {
-        PostThreadMessageW(g_ocr.thread_id, WM_QUIT, 0, 0);
-    }
-    if (g_ocr.thread.joinable()) {
-        g_ocr.thread.join();
-    }
+    selectspeak::input::UnregisterOcrHotkey();
     g_ocr.callback = nullptr;
     g_ocr.callback_context = nullptr;
-    g_ocr.running.store(false);
+    g_ocr.active.store(false);
 }
 
 unsigned int ss_ocr_last_error(char* buffer, unsigned int length) {

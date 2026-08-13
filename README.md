@@ -46,10 +46,11 @@ updates, pass its downloaded MSIX to the installer:
 ```
 
 The input bridge tries UI Automation first, then uses `SendInput`, clipboard
-change notifications, and an eager multi-format clipboard snapshot as its
-fallback. It also owns the frozen-screen OCR selector and calls Windows' local
-OCR engine directly. It uses `RegisterHotKey` during normal operation and
-installs a low-level keyboard hook only while recording a new shortcut.
+sequence polling, and an eager multi-format clipboard snapshot as its fallback.
+The normal capture and OCR shortcuts share one native message thread. OCR owns
+only the frozen-screen selector and Windows' local recognition work. The bridge
+uses `RegisterHotKey` during normal operation and installs a low-level keyboard
+hook only while recording a new shortcut.
 
 Set `SELECTSPEAK_NATIVE_DLL` to use the unified native DLL at another location.
 
@@ -195,7 +196,9 @@ starting it again; closing the player window only hides the existing process.
 
 Logging is controlled only by `AppConfig` in `src/selectspeak/config.py`. It is
 currently enabled while the Natural Voice integration is being diagnosed and
-writes to `selectspeak.log`.
+writes to `selectspeak.log`. The entry point configures logging once; individual
+modules use their ordinary `logging.getLogger(__name__)` logger and let records
+propagate to that central handler.
 
 The structured JSON Lines diagnostic switch is:
 

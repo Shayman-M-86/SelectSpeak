@@ -5,27 +5,42 @@ from selectspeak.config import AppConfig
 from selectspeak.logging_setup import JsonLineFormatter, configure_logging
 
 
-def test_json_line_formatter_emits_structured_event() -> None:
+def test_json_line_formatter_emits_record_metadata() -> None:
     record = logging.LogRecord(
         name="selectspeak.test",
         level=logging.INFO,
         pathname=__file__,
         lineno=1,
-        msg="ignored message",
+        msg="test.event",
         args=(),
         exc_info=None,
     )
-    record.event_name = "test.event"
-    record.event_details = {"answer": 42}
-
     payload = json.loads(JsonLineFormatter().format(record))
 
     assert payload["level"] == "INFO"
     assert payload["component"] == "selectspeak.test"
     assert payload["event"] == "test.event"
-    assert payload["details"] == {"answer": 42}
+    assert "details" not in payload
     assert payload["timestamp"]
     assert payload["session"]
+
+
+def test_json_line_formatter_accepts_standard_logger_messages() -> None:
+    record = logging.LogRecord(
+        name="selectspeak.app",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="app.started hotkey=%s",
+        args=("alt+s",),
+        exc_info=None,
+    )
+
+    payload = json.loads(JsonLineFormatter().format(record))
+
+    assert payload["component"] == "selectspeak.app"
+    assert payload["event"] == "app.started hotkey=alt+s"
+    assert "details" not in payload
 
 
 def test_logging_is_disabled_by_app_config() -> None:

@@ -7,7 +7,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from ..logging_setup import log_event, log_exception, text_preview
+from ..logging_setup import text_preview
 from ..native import get_native_bridge
 from .keymap import from_windows_hotkey, to_windows_hotkey
 
@@ -63,35 +63,25 @@ class NativeInputAdapter:
         ):
             raise NativeInputError(self._last_error())
         self._started = True
-        log_event(
-            logger,
-            logging.INFO,
-            "native_input.started",
-            hotkey=self.hotkey,
-        )
+        logger.info("native_input.started hotkey=%s", self.hotkey)
 
     def rebind(self, hotkey: str) -> None:
         modifiers, virtual_key = to_windows_hotkey(hotkey)
         if self._dll.ss_input_rebind(modifiers, virtual_key):
             raise NativeInputError(self._last_error())
         self.hotkey = hotkey
-        log_event(logger, logging.INFO, "native_input.rebound", hotkey=hotkey)
+        logger.info("native_input.rebound hotkey=%s", hotkey)
 
     def trigger(self) -> None:
         if self._dll.ss_input_capture_now():
             raise NativeInputError(self._last_error())
-        log_event(
-            logger,
-            logging.INFO,
-            "native_input.capture.requested",
-            source="application_button",
-        )
+        logger.info("native_input.capture.requested source=%s", "application_button")
 
     def stop(self) -> None:
         if self._started:
             self._dll.ss_input_stop()
             self._started = False
-        log_event(logger, logging.INFO, "native_input.stopped", hotkey=self.hotkey)
+        logger.info("native_input.stopped hotkey=%s", self.hotkey)
 
     def start_recording(
         self,
@@ -99,9 +89,7 @@ class NativeInputAdapter:
         on_complete: Callable[[str], None],
         on_cancel: Callable[[], None],
     ) -> None:
-        def handle_recording(
-            event: int, modifiers: int, virtual_key: int, _context: Any
-        ) -> None:
+        def handle_recording(event: int, modifiers: int, virtual_key: int, _context: Any) -> None:
             hotkey = from_windows_hotkey(modifiers, virtual_key)
             if event == 1 and hotkey:
                 on_preview(hotkey)
@@ -114,11 +102,11 @@ class NativeInputAdapter:
         if self._dll.ss_input_record_start(callback, None):
             raise NativeInputError(self._last_error())
         self._record_callback = callback
-        log_event(logger, logging.INFO, "native_input.recording.started")
+        logger.info("native_input.recording.started")
 
     def stop_recording(self) -> None:
         self._dll.ss_input_record_stop()
-        log_event(logger, logging.INFO, "native_input.recording.stopped")
+        logger.info("native_input.recording.stopped")
 
     def _configure_api(self) -> None:
         self._dll.ss_input_start.argtypes = [
@@ -158,15 +146,15 @@ class NativeInputAdapter:
         activated_at = time.monotonic() - capture_latency_ms / 1000
         source_id = self._dll.ss_input_last_capture_source()
         source = {1: "ui_automation", 2: "clipboard"}.get(source_id, "empty")
-        log_event(
-            logger,
+        logger.log(
             logging.INFO if captured else logging.WARNING,
-            "native_input.capture.completed",
-            captured=bool(captured),
-            source=source,
-            capture_latency_ms=capture_latency_ms,
-            text_length=len(captured),
-            text_preview=text_preview(captured),
+            "native_input.capture.completed captured=%s source=%s "
+            "capture_latency_ms=%s text_length=%s text_preview=%s",
+            bool(captured),
+            source,
+            capture_latency_ms,
+            len(captured),
+            text_preview(captured),
         )
         threading.Thread(
             target=self._run_handler,
@@ -179,14 +167,14 @@ class NativeInputAdapter:
         try:
             return int(self._activation_handler())
         except Exception:
-            log_exception(logger, "native_input.activation_handler.failed")
+            logger.exception("native_input.activation_handler.failed")
             return 0
 
     def _run_handler(self, text: str, activated_at: float) -> None:
         try:
             self._handler(text, activated_at)
         except Exception:
-            log_exception(logger, "native_input.handler.failed")
+            logger.exception("native_input.handler.failed")
 
     def _last_error(self) -> str:
         required = self._dll.ss_input_last_error(None, 0)

@@ -18,6 +18,8 @@ class PlaybackSnapshot:
     source: str
 
 
+# This state-transition code is clearer with related snapshot fields grouped by row.
+# fmt: off
 class PlaybackSession:
     """Own application playback state independently of any one backend."""
 
@@ -30,23 +32,14 @@ class PlaybackSession:
             return self._snapshot
 
     def start(
-        self,
-        speaker: Speaker,
-        generation: int,
-        text: str,
-        source: str,
-        started_at: float,
+        self, speaker: Speaker, generation: int,
+        text: str, source: str, started_at: float,
     ) -> None:
         with self._lock:
             self._snapshot = PlaybackSnapshot(
-                text,
-                generation,
-                speaker,
-                True,
-                False,
-                started_at,
-                float("inf"),
-                source,
+                text, generation, speaker,
+                True, False, started_at,
+                float("inf"), source,
             )
 
     def stop(self, fallback: Speaker, ended_at: float) -> tuple[Speaker, str]:
@@ -54,14 +47,9 @@ class PlaybackSession:
             current = self._snapshot
             speaker = current.speaker or fallback
             self._snapshot = PlaybackSnapshot(
-                current.text,
-                None,
-                None,
-                False,
-                False,
-                current.started_at,
-                ended_at,
-                current.source,
+                current.text, None, None,
+                False, False, current.started_at,
+                ended_at, current.source,
             )
             return speaker, current.text
 
@@ -71,14 +59,9 @@ class PlaybackSession:
             if not current.speaking or current.paused:
                 return None
             self._snapshot = PlaybackSnapshot(
-                current.text,
-                current.generation,
-                current.speaker,
-                True,
-                True,
-                current.started_at,
-                current.ended_at,
-                current.source,
+                current.text, current.generation, current.speaker,
+                True, True, current.started_at,
+                current.ended_at, current.source,
             )
             return current.speaker or fallback, current.text
 
@@ -88,32 +71,21 @@ class PlaybackSession:
             if not current.speaking or not current.paused:
                 return None
             self._snapshot = PlaybackSnapshot(
-                current.text,
-                current.generation,
-                current.speaker,
-                True,
-                False,
-                current.started_at,
-                current.ended_at,
-                current.source,
+                current.text, current.generation, current.speaker,
+                True, False, current.started_at,
+                current.ended_at, current.source,
             )
             return current.speaker or fallback, current.text
 
-    def complete(
-        self, speaker: Speaker, generation: int, ended_at: float
-    ) -> bool:
+    def complete(self, speaker: Speaker, generation: int, ended_at: float) -> bool:
         with self._lock:
             current = self._snapshot
             if current.generation != generation or current.speaker is not speaker:
                 return False
             self._snapshot = PlaybackSnapshot(
-                current.text,
-                None,
-                None,
-                False,
-                False,
-                current.started_at,
-                ended_at,
-                current.source,
+                current.text, None, None,
+                False, False, current.started_at,
+                ended_at, current.source,
             )
             return True
+# fmt: on

@@ -8,7 +8,6 @@ from collections import deque
 from collections.abc import Callable
 from typing import Any
 
-from ..logging_setup import log_event
 from .debug import SpeechDebugCallback, SpeechDebugEvent, with_queue_delay
 
 BYTES_PER_SAMPLE = 2
@@ -63,6 +62,9 @@ class _MMTimeValue(ctypes.Union):
 
 class _MMTime(ctypes.Structure):
     _fields_ = [("wType", ctypes.c_uint32), ("u", _MMTimeValue)]
+
+
+_QueuedBlock = tuple[ctypes.Array[Any], _WaveHeader, int]
 
 
 class WaveOutPlayer:
@@ -163,9 +165,7 @@ class WaveOutPlayer:
         relative_bytes = int(offset_ticks * self._bytes_per_second / TICKS_PER_SECOND)
         self.add_boundary_at_byte(base_byte_offset + relative_bytes, position, length)
 
-    def add_boundary_at_byte(
-        self, byte_offset: int, position: int, length: int
-    ) -> None:
+    def add_boundary_at_byte(self, byte_offset: int, position: int, length: int) -> None:
         with self._boundary_lock:
             self._boundaries.append((byte_offset, position, length))
             self._boundaries.sort(key=lambda item: item[0])
@@ -180,9 +180,7 @@ class WaveOutPlayer:
         if self._debug_callback is None:
             return
         with self._debug_lock:
-            self._debug_markers.append(
-                (byte_offset, event, generated_at or time.monotonic())
-            )
+            self._debug_markers.append((byte_offset, event, generated_at or time.monotonic()))
             self._debug_markers.sort(key=lambda item: item[0])
 
     def finish(self) -> None:
@@ -243,101 +241,116 @@ class WaveOutPlayer:
         )
 
     def _run(self) -> None:
-        queued: deque[tuple[ctypes.Array[Any], _WaveHeader, int]] = deque()
+        queued: deque[_QueuedBlock] = deque()
         underrun_started_at: float | None = None
         try:
             self._wait_for_prebuffer()
-            if not self._stopped.is_set():
-                with self._audio_condition:
-                    buffered_bytes = len(self._pending_audio)
-                log_event(
-                    logger,
-                    logging.INFO,
-                    "audio.playback.started",
-                    backend=self._backend_name,
-                    buffered_bytes=buffered_bytes,
-                    startup_ms=round((time.monotonic() - self._started_at) * 1000),
-                )
-                self._playback_started.set()
+            self._mark_playback_started()
 
             while not self._stopped.is_set():
-                self._update_playback_position()
-                self._release_completed(queued)
-                self._emit_boundaries()
-                self._emit_debug_markers()
-
-                while len(queued) < MAX_QUEUED_BUFFERS:
-                    chunk = self._take_audio_block()
-                    if chunk is None:
-                        break
-                    queued.append(self._submit_block(chunk))
-
-                with self._audio_condition:
-                    finished = self._synthesis_finished and not self._pending_audio
-                if finished and not queued:
+                self._process_playback_updates(queued)
+                self._fill_playback_queue(queued)
+                if self._playback_finished(queued):
                     break
+                underrun_started_at = self._handle_buffer_state(queued, underrun_started_at)
 
-                with self._audio_condition:
-                    starved = (
-                        not queued
-                        and not self._pending_audio
-                        and not self._synthesis_finished
-                    )
-                    now = time.monotonic()
-                    if starved and underrun_started_at is None:
-                        underrun_started_at = now
-                    elif not starved and underrun_started_at is not None:
-                        self._log_underrun(underrun_started_at, now)
-                        underrun_started_at = None
-                    self._audio_condition.wait(
-                        timeout=0.005
-                        if not self._pending_audio and not self._synthesis_finished
-                        else 0.002
-                    )
-
-            if not self._stopped.is_set():
-                self._played_bytes = self._submitted_bytes
-                self._emit_boundaries()
-                self._emit_debug_markers()
+            self._finish_playback_events()
         except Exception:
             logger.exception("PCM audio playback failed")
         finally:
-            if underrun_started_at is not None:
-                self._log_underrun(underrun_started_at, time.monotonic())
-            self._playback_started.set()
-            if self._handle:
-                self._winmm.waveOutReset(self._handle)
-                while queued:
-                    _, header, _ = queued.popleft()
-                    self._winmm.waveOutUnprepareHeader(
-                        self._handle,
-                        ctypes.byref(header),
-                        ctypes.sizeof(header),
-                    )
-                self._winmm.waveOutClose(self._handle)
-                self._handle = ctypes.c_void_p()
-            log_event(
-                logger,
-                logging.INFO,
-                "audio.playback.finished",
-                backend=self._backend_name,
-                played_bytes=self._played_bytes,
-                audio_seconds=round(self._played_bytes / self._bytes_per_second, 3),
-                elapsed_ms=round((time.monotonic() - self._started_at) * 1000),
-                stopped=self._stopped.is_set(),
-            )
-            self._done.set()
+            self._cleanup_playback(queued, underrun_started_at)
+
+    def _mark_playback_started(self) -> None:
+        if self._stopped.is_set():
+            return
+        with self._audio_condition:
+            buffered_bytes = len(self._pending_audio)
+        logger.info(
+            "audio.playback.started backend=%s buffered_bytes=%s startup_ms=%s",
+            self._backend_name,
+            buffered_bytes,
+            round((time.monotonic() - self._started_at) * 1000),
+        )
+        self._playback_started.set()
+
+    def _process_playback_updates(self, queued: deque[_QueuedBlock]) -> None:
+        self._update_playback_position()
+        self._release_completed(queued)
+        self._emit_boundaries()
+        self._emit_debug_markers()
+
+    def _fill_playback_queue(self, queued: deque[_QueuedBlock]) -> None:
+        while len(queued) < MAX_QUEUED_BUFFERS:
+            chunk = self._take_audio_block()
+            if chunk is None:
+                return
+            queued.append(self._submit_block(chunk))
+
+    def _playback_finished(self, queued: deque[_QueuedBlock]) -> bool:
+        with self._audio_condition:
+            return self._synthesis_finished and not self._pending_audio and not queued
+
+    def _handle_buffer_state(
+        self,
+        queued: deque[_QueuedBlock],
+        underrun_started_at: float | None,
+    ) -> float | None:
+        with self._audio_condition:
+            starved = not queued and not self._pending_audio and not self._synthesis_finished
+            now = time.monotonic()
+            if starved and underrun_started_at is None:
+                underrun_started_at = now
+            elif not starved and underrun_started_at is not None:
+                self._log_underrun(underrun_started_at, now)
+                underrun_started_at = None
+            timeout = 0.005 if not self._pending_audio and not self._synthesis_finished else 0.002
+            self._audio_condition.wait(timeout=timeout)
+        return underrun_started_at
+
+    def _finish_playback_events(self) -> None:
+        if self._stopped.is_set():
+            return
+        self._played_bytes = self._submitted_bytes
+        self._emit_boundaries()
+        self._emit_debug_markers()
+
+    def _cleanup_playback(
+        self,
+        queued: deque[_QueuedBlock],
+        underrun_started_at: float | None,
+    ) -> None:
+        if underrun_started_at is not None:
+            self._log_underrun(underrun_started_at, time.monotonic())
+        self._playback_started.set()
+        if self._handle:
+            self._winmm.waveOutReset(self._handle)
+            while queued:
+                _, header, _ = queued.popleft()
+                self._winmm.waveOutUnprepareHeader(
+                    self._handle,
+                    ctypes.byref(header),
+                    ctypes.sizeof(header),
+                )
+            self._winmm.waveOutClose(self._handle)
+            self._handle = ctypes.c_void_p()
+        logger.info(
+            "audio.playback.finished backend=%s played_bytes=%s audio_seconds=%s elapsed_ms=%s stopped=%s",
+            self._backend_name,
+            self._played_bytes,
+            round(self._played_bytes / self._bytes_per_second, 3),
+            round((time.monotonic() - self._started_at) * 1000),
+            self._stopped.is_set(),
+        )
+        self._done.set()
 
     def _log_underrun(self, started_at: float, ended_at: float) -> None:
         duration_ms = round((ended_at - started_at) * 1000)
         if duration_ms >= 20:
-            log_event(
-                logger,
-                logging.WARNING,
-                "audio.playback.underrun",
-                backend=self._backend_name,
-                duration_ms=duration_ms,
-                buffered_seconds=round(self.buffered_seconds, 3),
+            logger.warning(
+                "audio.playback.underrun backend=%s duration_ms=%s buffered_seconds=%s",
+                self._backend_name,
+                duration_ms,
+                round(self.buffered_seconds, 3),
             )
             if self._debug_callback:
                 self._debug_callback(
@@ -391,9 +404,7 @@ class WaveOutPlayer:
         self._submitted_bytes += len(chunk)
         return buffer, header, len(chunk)
 
-    def _release_completed(
-        self, queued: deque[tuple[ctypes.Array[Any], _WaveHeader, int]]
-    ) -> None:
+    def _release_completed(self, queued: deque[_QueuedBlock]) -> None:
         while queued and queued[0][1].dwFlags & WHDR_DONE:
             _, header, _ = queued.popleft()
             self._winmm.waveOutUnprepareHeader(
@@ -404,9 +415,7 @@ class WaveOutPlayer:
 
     def _update_playback_position(self) -> None:
         position = _MMTime(TIME_BYTES)
-        result = self._winmm.waveOutGetPosition(
-            self._handle, ctypes.byref(position), ctypes.sizeof(position)
-        )
+        result = self._winmm.waveOutGetPosition(self._handle, ctypes.byref(position), ctypes.sizeof(position))
         if result:
             return
         if position.wType == TIME_BYTES:
@@ -435,10 +444,7 @@ class WaveOutPlayer:
             return
         ready: list[tuple[SpeechDebugEvent, float]] = []
         with self._debug_lock:
-            while (
-                self._debug_markers
-                and self._debug_markers[0][0] <= self._played_bytes
-            ):
+            while self._debug_markers and self._debug_markers[0][0] <= self._played_bytes:
                 _, event, generated_at = self._debug_markers.pop(0)
                 ready.append((event, generated_at))
         played_at = time.monotonic()

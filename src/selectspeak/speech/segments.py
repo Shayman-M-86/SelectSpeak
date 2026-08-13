@@ -11,9 +11,7 @@ MAX_ADAPTIVE_CHUNK_CHARACTERS = 200
 MIN_STARTUP_CHUNK_CHARACTERS = 50
 _SENTENCE_END = re.compile(r"[.!?]+(?:[\"'”’)]*)\s+")
 _ADAPTIVE_BOUNDARY = re.compile(r"[.!?;:,]+(?:[\"'”’)]*)(?=\s|$)")
-_NON_TERMINAL_ABBREVIATIONS = frozenset(
-    {"dr.", "e.g.", "i.e.", "mr.", "mrs.", "ms.", "prof.", "st.", "vs."}
-)
+_NON_TERMINAL_ABBREVIATIONS = frozenset({"dr.", "e.g.", "i.e.", "mr.", "mrs.", "ms.", "prof.", "st.", "vs."})
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,15 +80,11 @@ class AdaptiveSpeechChunker:
             if self._first:
                 # A tiny opener such as "Yes." is not a useful startup chunk.
                 meaningful = [
-                    position
-                    for position in candidates
-                    if position - start >= MIN_STARTUP_CHUNK_CHARACTERS
+                    position for position in candidates if position - start >= MIN_STARTUP_CHUNK_CHARACTERS
                 ]
                 candidates = meaningful
             if candidates:
-                split = min(
-                    candidates, key=lambda position: abs(position - target)
-                )
+                split = min(candidates, key=lambda position: abs(position - target))
             elif end <= hard_end:
                 split = end
             else:
@@ -107,9 +101,7 @@ class AdaptiveSpeechChunker:
             )
         spoken = raw[:trailing_end]
         absolute_end = start + trailing_end
-        pause_after = (
-            absolute_end == end or absolute_end in self._punctuation.sentence_boundaries
-        )
+        pause_after = absolute_end == end or absolute_end in self._punctuation.sentence_boundaries
         self._cursor = split
         self._first = False
         return SpeechSegment(spoken, start, pause_after)
@@ -121,9 +113,7 @@ class AdaptiveSpeechChunker:
             self._cursor += len(DISPLAY_BULLET_PREFIX)
 
     def _whitespace_boundary(self, start: int, target: int, hard_end: int) -> int:
-        spaces = [
-            match.end() for match in re.finditer(r"\s+", self._text[start:hard_end])
-        ]
+        spaces = [match.end() for match in re.finditer(r"\s+", self._text[start:hard_end])]
         if spaces:
             absolute = [start + position for position in spaces]
             after_target = [position for position in absolute if position >= target]
@@ -143,24 +133,59 @@ def split_speech_segments(
     """Split prepared text consistently at lines, sentences, then safe clauses."""
     segments: list[SpeechSegment] = []
     for line_match in re.finditer(r"[^\n]+", text):
-        line = line_match.group()
-        spoken, prefix = strip_display_bullet_prefix(line)
-        spoken_offset = line_match.start() + prefix
-        for start, end in _sentence_spans(spoken):
-            chunks = _bounded_spans(spoken, start, end, max_characters)
-            for chunk_index, (chunk_start, chunk_end) in enumerate(chunks):
-                chunk = spoken[chunk_start:chunk_end]
-                leading = len(chunk) - len(chunk.lstrip())
-                trailing_end = len(chunk.rstrip())
-                if trailing_end > leading:
-                    segments.append(
-                        SpeechSegment(
-                            chunk[leading:trailing_end],
-                            spoken_offset + chunk_start + leading,
-                            pause_after=chunk_index == len(chunks) - 1,
-                        )
-                    )
+        segments.extend(_split_speech_line(line_match.group(), line_match.start(), max_characters))
     return segments
+
+
+def _split_speech_line(line: str, line_offset: int, max_characters: int) -> list[SpeechSegment]:
+    spoken, prefix_length = strip_display_bullet_prefix(line)
+    spoken_offset = line_offset + prefix_length
+    segments: list[SpeechSegment] = []
+    for start, end in _sentence_spans(spoken):
+        segments.extend(_split_sentence(spoken, spoken_offset, start, end, max_characters))
+    return segments
+
+
+def _split_sentence(
+    text: str,
+    text_offset: int,
+    start: int,
+    end: int,
+    max_characters: int,
+) -> list[SpeechSegment]:
+    chunks = _bounded_spans(text, start, end, max_characters)
+    segments: list[SpeechSegment] = []
+    for index, (chunk_start, chunk_end) in enumerate(chunks):
+        segment = _trimmed_segment(
+            text,
+            text_offset,
+            chunk_start,
+            chunk_end,
+            pause_after=index == len(chunks) - 1,
+        )
+        if segment is not None:
+            segments.append(segment)
+    return segments
+
+
+def _trimmed_segment(
+    text: str,
+    text_offset: int,
+    start: int,
+    end: int,
+    *,
+    pause_after: bool,
+) -> SpeechSegment | None:
+    chunk = text[start:end]
+    leading = len(chunk) - len(chunk.lstrip())
+    trailing_end = len(chunk.rstrip())
+    if trailing_end <= leading:
+        return None
+    return SpeechSegment(
+        chunk[leading:trailing_end],
+        text_offset + start + leading,
+        pause_after,
+    )
 
 
 def _sentence_spans(text: str) -> list[tuple[int, int]]:
@@ -179,16 +204,12 @@ def _sentence_spans(text: str) -> list[tuple[int, int]]:
     return spans
 
 
-def _bounded_spans(
-    text: str, start: int, end: int, max_characters: int
-) -> list[tuple[int, int]]:
+def _bounded_spans(text: str, start: int, end: int, max_characters: int) -> list[tuple[int, int]]:
     spans: list[tuple[int, int]] = []
     cursor = start
     while end - cursor > max_characters:
         limit = cursor + max_characters
-        candidates = [
-            match.end() for match in re.finditer(r"[,;:]\s+|\s+", text[cursor:limit])
-        ]
+        candidates = [match.end() for match in re.finditer(r"[,;:]\s+|\s+", text[cursor:limit])]
         split = cursor + (candidates[-1] if candidates else max_characters)
         if split <= cursor:
             split = limit

@@ -2,7 +2,6 @@ import logging
 import threading
 from collections.abc import Callable
 
-from ..logging_setup import log_event
 from .native import NativeInputAdapter
 
 logger = logging.getLogger(__name__)
@@ -25,7 +24,7 @@ class HotkeyManager:
         self._timeout_timer: threading.Timer | None = None
         self._capture_active = False
         self._lock = threading.RLock()
-        log_event(logger, logging.DEBUG, "hotkey.manager.created", hotkey=hotkey)
+        logger.debug("hotkey.manager.created hotkey=%s", hotkey)
 
     @property
     def capturing(self) -> bool:
@@ -33,10 +32,10 @@ class HotkeyManager:
             return self._capture_active
 
     def register(self) -> None:
-        log_event(logger, logging.INFO, "hotkey.register.requested", hotkey=self.hotkey)
+        logger.info("hotkey.register.requested hotkey=%s", self.hotkey)
         with self._lock:
             if self._listener is not None:
-                log_event(logger, logging.DEBUG, "hotkey.register.already_registered")
+                logger.debug("hotkey.register.already_registered")
                 return
             listener = NativeInputAdapter(
                 self.hotkey,
@@ -46,32 +45,26 @@ class HotkeyManager:
             )
             listener.start()
             self._listener = listener
-        log_event(
-            logger,
-            logging.INFO,
-            "hotkey.register.completed",
-            hotkey=self.hotkey,
-            engine="native_windows",
+        logger.info(
+            "hotkey.register.completed hotkey=%s engine=%s",
+            self.hotkey,
+            "native_windows",
         )
 
     def rebind(self, hotkey: str) -> None:
-        log_event(
-            logger,
-            logging.INFO,
-            "hotkey.listener.rebind.started",
-            previous_hotkey=self.hotkey,
-            new_hotkey=hotkey,
+        logger.info(
+            "hotkey.listener.rebind.started previous_hotkey=%s new_hotkey=%s",
+            self.hotkey,
+            hotkey,
         )
         with self._lock:
             listener = self._require_listener()
             listener.rebind(hotkey)
             self.hotkey = hotkey
-        log_event(
-            logger,
-            logging.INFO,
-            "hotkey.listener.rebind.completed",
-            hotkey=hotkey,
-            engine="native_windows",
+        logger.info(
+            "hotkey.listener.rebind.completed hotkey=%s engine=%s",
+            hotkey,
+            "native_windows",
         )
 
     def start_capture(
@@ -82,12 +75,7 @@ class HotkeyManager:
         on_complete: Callable[[str], None],
         on_cancel: Callable[[], None],
     ) -> bool:
-        log_event(
-            logger,
-            logging.INFO,
-            "hotkey.capture_listener.requested",
-            timeout_seconds=timeout_seconds,
-        )
+        logger.info("hotkey.capture_listener.requested timeout_seconds=%s", timeout_seconds)
         with self._lock:
             if self._capture_active:
                 return False
@@ -104,17 +92,10 @@ class HotkeyManager:
             except Exception:
                 self._capture_active = False
                 raise
-            self._timeout_timer = threading.Timer(
-                timeout_seconds, lambda: self.cancel_capture(on_cancel)
-            )
+            self._timeout_timer = threading.Timer(timeout_seconds, lambda: self.cancel_capture(on_cancel))
             self._timeout_timer.daemon = True
             self._timeout_timer.start()
-        log_event(
-            logger,
-            logging.INFO,
-            "hotkey.capture_listener.started",
-            engine="native_windows",
-        )
+        logger.info("hotkey.capture_listener.started engine=%s", "native_windows")
         return True
 
     def cancel_capture(self, callback: Callable[[], None] | None = None) -> None:
@@ -125,7 +106,7 @@ class HotkeyManager:
         (callback or self._on_cancel)()
 
     def close(self) -> None:
-        log_event(logger, logging.INFO, "hotkey.manager.close.started")
+        logger.info("hotkey.manager.close.started")
         with self._lock:
             if self._capture_active:
                 self._finish_capture()
@@ -133,7 +114,7 @@ class HotkeyManager:
             self._listener = None
         if listener is not None:
             listener.stop()
-        log_event(logger, logging.INFO, "hotkey.manager.close.completed")
+        logger.info("hotkey.manager.close.completed")
 
     def trigger(self) -> None:
         with self._lock:
@@ -153,13 +134,7 @@ class HotkeyManager:
                 return
             callback = self._on_complete
             self._finish_capture()
-        log_event(
-            logger,
-            logging.INFO,
-            "hotkey.capture.completed",
-            combo=hotkey,
-            engine="native_windows",
-        )
+        logger.info("hotkey.capture.completed combo=%s engine=%s", hotkey, "native_windows")
         callback(hotkey)
 
     def _recording_cancel(self) -> None:

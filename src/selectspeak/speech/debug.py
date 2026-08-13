@@ -25,11 +25,23 @@ class SpeechDebugEvent:
 
 
 SpeechDebugCallback = Callable[[SpeechDebugEvent], None]
+SpeechDebugMarker = Callable[[int, SpeechDebugEvent], None]
 
 
-def with_queue_delay(
-    event: SpeechDebugEvent, generated_at: float, played_at: float
-) -> SpeechDebugEvent:
+def emit_speech_debug(
+    event: SpeechDebugEvent,
+    callback: SpeechDebugCallback | None,
+    marker: SpeechDebugMarker | None,
+    *,
+    byte_offset: int,
+) -> None:
+    if callback:
+        callback(event)
+    if marker:
+        marker(byte_offset, event)
+
+
+def with_queue_delay(event: SpeechDebugEvent, generated_at: float, played_at: float) -> SpeechDebugEvent:
     return replace(
         event,
         kind="chunk_playing",

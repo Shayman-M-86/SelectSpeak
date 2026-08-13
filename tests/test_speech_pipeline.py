@@ -1,4 +1,32 @@
-from selectspeak.speech.pipeline import AdaptiveSpeechPipeline, GenerationStatistics
+from selectspeak.speech.pipeline import (
+    AdaptiveSpeechPipeline,
+    AdaptiveSpeechSession,
+    GenerationStatistics,
+)
+
+
+def test_adaptive_session_shares_chunk_lifecycle_between_backends() -> None:
+    text = (
+        "A complete opening sentence contains enough words to reach a meaningful "
+        "startup boundary safely. A second sentence contains enough additional "
+        "words to remain available for the next adaptive chunk selection."
+    )
+    statistics = GenerationStatistics()
+    session = AdaptiveSpeechSession.start(text, "test", statistics)
+
+    assert session is not None
+    pauses: list[float] = []
+    session.record_generation(0.25)
+    session.queue_structure_pause(pauses.append, 0.1)
+    event = session.debug_event(0.25, 1.5)
+
+    assert statistics.observations == 1
+    assert pauses == [0.1]
+    assert event.backend == "test"
+    assert event.chunk_index == 0
+    assert event.boundary == "sentence/structure"
+    assert session.advance(playback_runway=5.0)
+    assert session.index == 1
 
 
 def test_pipeline_uses_a_meaningful_first_phrase_then_adapts_to_runway() -> None:
@@ -60,9 +88,7 @@ def test_chunk_decision_includes_the_predicted_synthesis_time() -> None:
     decision = pipeline.choose_next()
 
     assert decision is not None
-    assert decision.predicted_synthesis_seconds == (
-        0.2 + len(decision.segment.text) * 0.01
-    )
+    assert decision.predicted_synthesis_seconds == (0.2 + len(decision.segment.text) * 0.01)
 
 
 def test_second_chunk_stays_within_readability_ceiling() -> None:
@@ -143,8 +169,7 @@ def test_pipeline_does_not_force_tiny_chunks_for_short_sentences() -> None:
         chunks.append(decision.segment.text)
 
     assert chunks[0] == (
-        "A sufficiently long opening sentence establishes initial runway. "
-        "Second sentence is ready."
+        "A sufficiently long opening sentence establishes initial runway. Second sentence is ready."
     )
 
 
@@ -166,9 +191,7 @@ def test_logged_growth_limiter_regression_uses_balanced_punctuation() -> None:
         assert decision is not None
         chunks.append(decision.segment.text)
         targets.append(decision.target_characters)
-        pipeline.record_generation(
-            decision.segment, 0.15 + len(decision.segment.text) * 0.0035
-        )
+        pipeline.record_generation(decision.segment, 0.15 + len(decision.segment.text) * 0.0035)
 
     assert targets == [100, 120, 140, 140]
     assert [len(chunk) for chunk in chunks] == [55, 97, 113, 137]

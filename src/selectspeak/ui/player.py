@@ -5,7 +5,6 @@ import tkinter as tk
 from collections.abc import Callable
 from queue import Empty, SimpleQueue
 
-from ..logging_setup import log_event, log_exception
 from ..speech.debug import SpeechDebugEvent
 from ..speech.voices import VoiceOption
 from .debug_panel import SpeechDebugPanelModel
@@ -114,48 +113,44 @@ class PlayerWindow(tk.Tk):
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         self.geometry(
-            f"{width}x{height}"
-            f"+{max(0, screen_width - width - 20)}"
-            f"+{max(0, screen_height - height - 60)}"
+            f"{width}x{height}+{max(0, screen_width - width - 20)}+{max(0, screen_height - height - 60)}"
         )
         self.after(20, self._drain_callbacks)
         self.withdraw()
-        log_event(
-            logger,
-            logging.INFO,
-            "player.created",
-            app_name=app_name,
-            hotkey=hotkey,
-            initial_mode="auto",
-            auto_hide=auto_hide,
-            width=width,
-            height=height,
-            requested_width=self._content.winfo_reqwidth(),
-            requested_height=self._content.winfo_reqheight(),
-            scaling=round(float(self.tk.call("tk", "scaling")), 3),
+        logger.info(
+            "player.created app_name=%s hotkey=%s initial_mode=%s "
+            "auto_hide=%s width=%s height=%s requested_width=%s "
+            "requested_height=%s scaling=%s",
+            app_name,
+            hotkey,
+            "auto",
+            auto_hide,
+            width,
+            height,
+            self._content.winfo_reqwidth(),
+            self._content.winfo_reqheight(),
+            round(float(self.tk.call("tk", "scaling")), 3),
         )
 
     def call_soon(self, callback: Callable[[], None]) -> None:
         self._callbacks.put(callback)
-        log_event(
-            logger,
-            logging.DEBUG,
-            "player.callback.queued",
-            callback=getattr(callback, "__name__", type(callback).__name__),
+        logger.debug(
+            "player.callback.queued callback=%s",
+            getattr(callback, "__name__", type(callback).__name__),
         )
 
     def show(self) -> None:
-        log_event(logger, logging.INFO, "player.show")
+        logger.info("player.show")
         self.deiconify()
         self.lift()
 
     def hide(self) -> None:
-        log_event(logger, logging.INFO, "player.hidden")
+        logger.info("player.hidden")
         self.withdraw()
 
     def _enable_no_activate(self) -> None:
         if os.name != "nt":
-            log_event(logger, logging.DEBUG, "player.no_activate.unavailable")
+            logger.debug("player.no_activate.unavailable")
             return
         try:
             user32 = ctypes.windll.user32
@@ -181,27 +176,17 @@ class PlayerWindow(tk.Tk):
                 0,
                 _SWP_REFRESH_FRAME_NO_ACTIVATE,
             )
-            log_event(
-                logger,
-                logging.INFO,
-                "player.no_activate.enabled",
-                window_handle=window_handle,
-            )
+            logger.info("player.no_activate.enabled window_handle=%s", window_handle)
         except Exception:
-            log_exception(logger, "player.no_activate.failed")
+            logger.exception("player.no_activate.failed")
 
     def set_hotkey(self, hotkey: str) -> None:
-        log_event(logger, logging.INFO, "player.hotkey.updated", hotkey=hotkey)
+        logger.info("player.hotkey.updated hotkey=%s", hotkey)
         self._hotkey = hotkey
         self._hotkey_button.config(text=hotkey.upper())
 
     def set_clipboard_mode(self, enabled: bool) -> None:
-        log_event(
-            logger,
-            logging.INFO,
-            "player.capture_mode.updated",
-            mode="clipboard" if enabled else "auto",
-        )
+        logger.info("player.capture_mode.updated mode=%s", "clipboard" if enabled else "auto")
         self._clipboard_mode = enabled
         if enabled:
             self._clipboard_button.config(
@@ -224,12 +209,7 @@ class PlayerWindow(tk.Tk):
             fg=ACCENT if enabled else DIM_FOREGROUND,
             font=("Segoe UI", 7, "bold" if enabled else "normal"),
         )
-        log_event(
-            logger,
-            logging.INFO,
-            "player.auto_hide.updated",
-            enabled=enabled,
-        )
+        logger.info("player.auto_hide.updated enabled=%s", enabled)
 
     def set_debug_enabled(self, enabled: bool) -> None:
         self._debug_enabled = enabled
@@ -253,15 +233,13 @@ class PlayerWindow(tk.Tk):
             else MIN_IDLE_HEIGHT
         )
         self._resize(minimum)
-        log_event(logger, logging.INFO, "player.speech_debug.updated", enabled=enabled)
+        logger.info("player.speech_debug.updated enabled=%s", enabled)
 
     def update_speech_debug(self, event: SpeechDebugEvent) -> None:
         display_event = self._debug.update(event)
         if not self._debug_enabled:
             return
-        self._apply_chunk_tags(
-            event if event.kind == "chunk_playing" else None
-        )
+        self._apply_chunk_tags(event if event.kind == "chunk_playing" else None)
         self._render_debug_metrics(display_event)
 
     def reset_speech_debug(self) -> None:
@@ -313,13 +291,11 @@ class PlayerWindow(tk.Tk):
             fg=ACCENT if key == "supertonic" else DIM_FOREGROUND,
         )
         self._resize(MIN_IDLE_HEIGHT)
-        log_event(
-            logger,
-            logging.INFO,
-            "player.voice.updated",
-            voice_key=key,
-            voice_label=label,
-            loading=loading,
+        logger.info(
+            "player.voice.updated voice_key=%s voice_label=%s loading=%s",
+            key,
+            label,
+            loading,
         )
 
     def _show_voice_menu(self) -> None:
@@ -329,8 +305,7 @@ class PlayerWindow(tk.Tk):
         try:
             self._voice_menu.tk_popup(
                 self._backend_button.winfo_rootx(),
-                self._backend_button.winfo_rooty()
-                + self._backend_button.winfo_height(),
+                self._backend_button.winfo_rooty() + self._backend_button.winfo_height(),
             )
         finally:
             self._voice_menu.grab_release()
@@ -344,55 +319,33 @@ class PlayerWindow(tk.Tk):
         self.show()
 
     def show_capture_started(self) -> None:
-        log_event(logger, logging.INFO, "player.hotkey_capture.started")
+        logger.info("player.hotkey_capture.started")
         self._status.config(text="⌨  Press keys…  (Esc to cancel)", fg=ACCENT)
         self._hotkey_button.config(text="…")
 
     def show_capture_preview(self, hotkey: str) -> None:
-        log_event(
-            logger,
-            logging.DEBUG,
-            "player.hotkey_capture.preview",
-            hotkey=hotkey,
-        )
+        logger.debug("player.hotkey_capture.preview hotkey=%s", hotkey)
         self._status.config(text=f"⌨  {hotkey.upper()}", fg=ACCENT)
         self._hotkey_button.config(text=hotkey.upper())
 
     def show_capture_complete(self, hotkey: str) -> None:
-        log_event(
-            logger,
-            logging.INFO,
-            "player.hotkey_capture.completed",
-            hotkey=hotkey,
-        )
+        logger.info("player.hotkey_capture.completed hotkey=%s", hotkey)
         self.set_hotkey(hotkey)
         self._status.config(text=f"✓  Hotkey set to  {hotkey.upper()}", fg=GREEN)
         self.after(2000, self.show_idle_hint)
 
     def show_idle_hint(self) -> None:
         target = "clipboard" if self._clipboard_mode else "selection or clipboard"
-        log_event(
-            logger,
-            logging.DEBUG,
-            "player.idle_hint.shown",
-            target=target,
-            hotkey=self._hotkey,
-        )
-        self._status.config(
-            text=f"Press {self._hotkey.upper()} to read {target}", fg=DIM_FOREGROUND
-        )
+        logger.debug("player.idle_hint.shown target=%s hotkey=%s", target, self._hotkey)
+        self._status.config(text=f"Press {self._hotkey.upper()} to read {target}", fg=DIM_FOREGROUND)
         self._hotkey_button.config(text=self._hotkey.upper())
 
-    def set_playback(
-        self, *, speaking: bool, paused: bool = False, text: str = ""
-    ) -> None:
-        log_event(
-            logger,
-            logging.INFO,
-            "player.playback.updated",
-            speaking=speaking,
-            paused=paused,
-            text_length=len(text),
+    def set_playback(self, *, speaking: bool, paused: bool = False, text: str = "") -> None:
+        logger.info(
+            "player.playback.updated speaking=%s paused=%s text_length=%s",
+            speaking,
+            paused,
+            len(text),
         )
         if speaking and not paused:
             self._start_animation()
@@ -437,39 +390,27 @@ class PlayerWindow(tk.Tk):
 
     def highlight_word(self, position: int, length: int) -> None:
         generation = self._reader_generation
-        log_event(
-            logger,
-            logging.DEBUG,
-            "player.word_highlight.queued",
-            position=position,
-            length=length,
-            reader_generation=generation,
+        logger.debug(
+            "player.word_highlight.queued position=%s length=%s reader_generation=%s",
+            position,
+            length,
+            generation,
         )
 
         def update() -> None:
             if generation != self._reader_generation:
-                log_event(
-                    logger,
-                    logging.DEBUG,
-                    "player.word_highlight.stale",
-                    queued_generation=generation,
-                    current_generation=self._reader_generation,
+                logger.debug(
+                    "player.word_highlight.stale queued_generation=%s current_generation=%s",
+                    generation,
+                    self._reader_generation,
                 )
                 return
             self._reader.config(state="normal")
             self._reader.tag_remove("current", "1.0", "end")
-            self._reader.tag_add(
-                "current", f"1.0+{position}c", f"1.0+{position + length}c"
-            )
+            self._reader.tag_add("current", f"1.0+{position}c", f"1.0+{position + length}c")
             self._reader.see(f"1.0+{position}c")
             self._reader.config(state="disabled")
-            log_event(
-                logger,
-                logging.DEBUG,
-                "player.word_highlight.applied",
-                position=position,
-                length=length,
-            )
+            logger.debug("player.word_highlight.applied position=%s length=%s", position, length)
 
         self.call_soon(update)
 
@@ -572,36 +513,24 @@ class PlayerWindow(tk.Tk):
 
         read_wrapper = tk.Frame(self._control_row, bg=BUTTON_BORDER, padx=1, pady=1)
         read_wrapper.pack(side="left", padx=(0, 6))
-        self._read_button = self._control_button(
-            read_wrapper, "▶ Read", GREEN, self._on_read
-        )
+        self._read_button = self._control_button(read_wrapper, "▶ Read", GREEN, self._on_read)
         self._read_button.pack()
 
         play_wrapper = tk.Frame(self._control_row, bg=BUTTON_BORDER, padx=1, pady=1)
         play_wrapper.pack(side="left", padx=(0, 6))
-        self._play_button = self._control_button(
-            play_wrapper, "▶ Replay", FOREGROUND, self._on_play
-        )
+        self._play_button = self._control_button(play_wrapper, "▶ Replay", FOREGROUND, self._on_play)
         self._play_button.pack()
 
         stop_wrapper = tk.Frame(self._control_row, bg=BUTTON_BORDER, padx=1, pady=1)
         stop_wrapper.pack(side="left")
-        self._stop_button = self._control_button(
-            stop_wrapper, "■ Stop", RED, self._on_stop
-        )
+        self._stop_button = self._control_button(stop_wrapper, "■ Stop", RED, self._on_stop)
         self._stop_button.pack()
 
-        self._hotkey_button = self._small_button(
-            self._control_row, self._hotkey.upper(), on_capture_hotkey
-        )
+        self._hotkey_button = self._small_button(self._control_row, self._hotkey.upper(), on_capture_hotkey)
         self._hotkey_button.pack(side="right")
-        self._clipboard_button = self._small_button(
-            self._control_row, "Mode: Auto", on_toggle_clipboard
-        )
+        self._clipboard_button = self._small_button(self._control_row, "Mode: Auto", on_toggle_clipboard)
         self._clipboard_button.pack(side="right", padx=(0, 4))
-        backend_label = (
-            "Supertonic" if self._speech_backend == "supertonic" else "Windows"
-        )
+        backend_label = "Supertonic" if self._speech_backend == "supertonic" else "Windows"
         self._voice_menu = tk.Menu(
             self,
             tearoff=False,
@@ -619,9 +548,7 @@ class PlayerWindow(tk.Tk):
             f"Voice: {backend_label} ▾",
             self._show_voice_menu,
         )
-        self._backend_button.config(
-            fg=ACCENT if self._speech_backend == "supertonic" else DIM_FOREGROUND
-        )
+        self._backend_button.config(fg=ACCENT if self._speech_backend == "supertonic" else DIM_FOREGROUND)
         self._backend_button.pack(side="right", padx=(0, 4))
         self._auto_hide_button = self._small_button(
             self._control_row,
@@ -645,12 +572,7 @@ class PlayerWindow(tk.Tk):
         self._debug_button.pack(side="right", padx=(0, 4))
 
     def _show_reader(self, text: str) -> None:
-        log_event(
-            logger,
-            logging.DEBUG,
-            "player.reader.shown",
-            text_length=len(text),
-        )
+        logger.debug("player.reader.shown text_length=%s", len(text))
         self._reader_generation += 1
         self._reader_text = text
         self._reader.config(state="normal")
@@ -683,11 +605,7 @@ class PlayerWindow(tk.Tk):
         if self._debug_enabled and not self._debug_frame.winfo_ismapped():
             self._debug_frame.pack(fill="x", pady=(0, 5), before=self._control_row)
         # Measure only after every speaking-mode panel has been inserted.
-        self._resize(
-            MIN_DEBUG_READING_HEIGHT
-            if self._debug_enabled
-            else MIN_READING_HEIGHT
-        )
+        self._resize(MIN_DEBUG_READING_HEIGHT if self._debug_enabled else MIN_READING_HEIGHT)
         self._control_row.lift()
 
     def _clear_chunk_tags(self) -> None:
@@ -714,9 +632,7 @@ class PlayerWindow(tk.Tk):
                 f"1.0+{event.text_offset}c",
                 f"1.0+{event.text_offset + event.text_length}c",
             )
-        self._reader.tag_config(
-            "debug_active_chunk", background="#3b4261", foreground="#ffffff"
-        )
+        self._reader.tag_config("debug_active_chunk", background="#3b4261", foreground="#ffffff")
         if active and active.chunk_index is not None:
             self._reader.tag_add(
                 "debug_active_chunk",
@@ -744,12 +660,7 @@ class PlayerWindow(tk.Tk):
             self._control_row.lift()
 
     def _hide_reader(self, hint: str) -> None:
-        log_event(
-            logger,
-            logging.DEBUG,
-            "player.reader.hidden",
-            hint=hint,
-        )
+        logger.debug("player.reader.hidden hint=%s", hint)
         self._reader_generation += 1
         self._reader_frame.pack_forget()
         self._debug_frame.pack_forget()
@@ -758,7 +669,7 @@ class PlayerWindow(tk.Tk):
         self._resize(MIN_IDLE_HEIGHT)
 
     def _start_animation(self) -> None:
-        log_event(logger, logging.DEBUG, "player.animation.started")
+        logger.debug("player.animation.started")
         self._stop_animation()
         self._animation_frame = 0
         self._animation_tick()
@@ -775,16 +686,13 @@ class PlayerWindow(tk.Tk):
             except tk.TclError:
                 pass
             self._animation_job = None
-            log_event(logger, logging.DEBUG, "player.animation.stopped")
+            logger.debug("player.animation.stopped")
         if hasattr(self, "_animation_label"):
             self._animation_label.config(text="")
 
     def _idle_hint(self) -> str:
         target = "clipboard" if self._clipboard_mode else "selection or clipboard"
-        return (
-            f"Press {self._hotkey.upper()} to read {target}"
-            f"  •  {self._ocr_hotkey.upper()} for OCR"
-        )
+        return f"Press {self._hotkey.upper()} to read {target}  •  {self._ocr_hotkey.upper()} for OCR"
 
     def _drain_callbacks(self) -> None:
         drained = 0
@@ -795,18 +703,9 @@ class PlayerWindow(tk.Tk):
         except Empty:
             pass
         except Exception:
-            log_exception(
-                logger,
-                "player.callback.failed",
-                callbacks_completed=drained,
-            )
+            logger.exception("player.callback.failed callbacks_completed=%s", drained)
         if drained:
-            log_event(
-                logger,
-                logging.DEBUG,
-                "player.callbacks.drained",
-                count=drained,
-            )
+            logger.debug("player.callbacks.drained count=%s", drained)
         try:
             self.after(20, self._drain_callbacks)
         except tk.TclError:
@@ -825,53 +724,41 @@ class PlayerWindow(tk.Tk):
         max_x = max(0, self.winfo_screenwidth() - width)
         new_x = min(max(0, self.winfo_x()), max_x)
         self.geometry(f"{width}x{height}+{new_x}+{new_y}")
-        log_event(
-            logger,
-            logging.DEBUG,
-            "player.resized_to_content",
-            width=width,
-            height=height,
-            requested_width=self._content.winfo_reqwidth(),
-            requested_height=self._content.winfo_reqheight(),
-            minimum_height=minimum_height,
-            scaling=round(float(self.tk.call("tk", "scaling")), 3),
+        logger.debug(
+            "player.resized_to_content width=%s height=%s requested_width=%s "
+            "requested_height=%s minimum_height=%s scaling=%s",
+            width,
+            height,
+            self._content.winfo_reqwidth(),
+            self._content.winfo_reqheight(),
+            minimum_height,
+            round(float(self.tk.call("tk", "scaling")), 3),
         )
 
     def _begin_drag(self, event: tk.Event) -> None:
-        log_event(
-            logger,
-            logging.DEBUG,
-            "player.drag.started",
-            x=event.x,
-            y=event.y,
-        )
+        logger.debug("player.drag.started x=%s y=%s", event.x, event.y)
         self._drag_x = event.x
         self._drag_y = event.y
 
     def _drag(self, event: tk.Event) -> None:
-        self.geometry(
-            f"+{self.winfo_x() + event.x - self._drag_x}"
-            f"+{self.winfo_y() + event.y - self._drag_y}"
-        )
+        self.geometry(f"+{self.winfo_x() + event.x - self._drag_x}+{self.winfo_y() + event.y - self._drag_y}")
 
     def _minimize(self) -> None:
-        log_event(logger, logging.INFO, "player.minimized")
+        logger.info("player.minimized")
         self._user_minimized = True
         self.overrideredirect(False)
         self.iconify()
 
     def _on_map(self, _event: tk.Event) -> None:
         if self.state() == "normal" and self._user_minimized:
-            log_event(logger, logging.INFO, "player.restored")
+            logger.info("player.restored")
             self._user_minimized = False
             self.overrideredirect(True)
             self.attributes("-topmost", True)
             self.after_idle(self._enable_no_activate)
 
     @staticmethod
-    def _title_button(
-        parent: tk.Frame, text: str, command: Callable[[], None]
-    ) -> tk.Button:
+    def _title_button(parent: tk.Frame, text: str, command: Callable[[], None]) -> tk.Button:
         return tk.Button(
             parent,
             text=text,
@@ -907,9 +794,7 @@ class PlayerWindow(tk.Tk):
         )
 
     @staticmethod
-    def _small_button(
-        parent: tk.Frame, text: str, command: Callable[[], None]
-    ) -> tk.Button:
+    def _small_button(parent: tk.Frame, text: str, command: Callable[[], None]) -> tk.Button:
         return tk.Button(
             parent,
             text=text,

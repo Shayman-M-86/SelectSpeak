@@ -1,7 +1,7 @@
 import logging
 import re
 
-from ..logging_setup import log_event, text_preview
+from ..logging_setup import text_preview
 
 logger = logging.getLogger(__name__)
 
@@ -15,10 +15,11 @@ _NUMBERED_LINE = re.compile(r"^\s*(\d+)[.)]\s+(.+?)\s*$")
 _MARKDOWN_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$")
 _SEMICOLON = re.compile(r"\s*;\s*")
 _UNDERSCORES = re.compile(r"_+")
-_EMBEDDED_OBJECTS = re.compile("[\uFFFC\uFFFD]")
+_EMBEDDED_OBJECTS = re.compile("[\ufffc\ufffd]")
 _EMBEDDED_OBJECT_LINE = re.compile(r"(?m)^[ \t]*(?:[\uFFFC\uFFFD][ \t]*)+\n?")
 _TERMINAL_PUNCTUATION = frozenset(".?!:")
 DISPLAY_BULLET_PREFIX = "• "
+
 
 def prepare_for_speech(text: str) -> str:
     """Normalize copied structure and noisy paths into speech-friendly prose."""
@@ -41,24 +42,27 @@ def prepare_for_speech(text: str) -> str:
         line_break_count,
         paragraph_count,
     ) = _structure_lines(restored_bullets)
-    log_event(
-        logger,
-        logging.DEBUG,
-        "text.prepared_for_speech",
-        input_length=len(text),
-        output_length=len(result),
-        input_preview=text_preview(text),
-        output_preview=text_preview(result),
-        markdown_links_removed=markdown_link_count,
-        paths_shortened=(windows_path_count + posix_path_count + relative_path_count),
-        bullets_structured=bullet_count,
-        bullets_inferred=inferred_bullet_count,
-        markdown_headings_removed=heading_count,
-        line_breaks_structured=line_break_count,
-        paragraph_breaks_structured=paragraph_count,
-        semicolons_strengthened=semicolon_count,
-        underscores_replaced=underscore_count,
-        embedded_objects_removed=embedded_object_count,
+    logger.debug(
+        "text.prepared_for_speech input_length=%s output_length=%s "
+        "input_preview=%s output_preview=%s markdown_links_removed=%s "
+        "paths_shortened=%s bullets_structured=%s bullets_inferred=%s "
+        "markdown_headings_removed=%s line_breaks_structured=%s "
+        "paragraph_breaks_structured=%s semicolons_strengthened=%s "
+        "underscores_replaced=%s embedded_objects_removed=%s",
+        len(text),
+        len(result),
+        text_preview(text),
+        text_preview(result),
+        markdown_link_count,
+        windows_path_count + posix_path_count + relative_path_count,
+        bullet_count,
+        inferred_bullet_count,
+        heading_count,
+        line_break_count,
+        paragraph_count,
+        semicolon_count,
+        underscore_count,
+        embedded_object_count,
     )
     return result
 
@@ -113,10 +117,7 @@ def _structure_lines(text: str) -> tuple[str, int, int, int, int, int]:
             spoken_line = f"{DISPLAY_BULLET_PREFIX}{bullet_match.group(2)}"
             bullet_count += 1
         elif numbered_match:
-            spoken_line = (
-                f"{numbered_match.group(1)}. "
-                f"{_collapse_whitespace(numbered_match.group(2))}"
-            )
+            spoken_line = f"{numbered_match.group(1)}. {_collapse_whitespace(numbered_match.group(2))}"
             bullet_count += 1
         elif index in inferred_bullet_lines:
             spoken_line = f"{DISPLAY_BULLET_PREFIX}{line}"
@@ -126,9 +127,7 @@ def _structure_lines(text: str) -> tuple[str, int, int, int, int, int]:
 
         spoken_line = _collapse_whitespace(spoken_line)
         if spoken_line:
-            is_explicit_structure = bool(
-                heading_match or bullet_match or numbered_match
-            )
+            is_explicit_structure = bool(heading_match or bullet_match or numbered_match)
             if structured_multiline or is_explicit_structure:
                 spoken_line = _ensure_pause(spoken_line)
             if pending_paragraph_break and segments and segments[-1] != "":
@@ -170,10 +169,7 @@ def _infer_bullet_lines(lines: list[str]) -> set[int]:
         if len(block) < 3:
             return
         block_lines = [lines[index].strip() for index in block]
-        if any(
-            _BULLET_LINE.match(line) or _NUMBERED_LINE.match(line)
-            for line in block_lines
-        ):
+        if any(_BULLET_LINE.match(line) or _NUMBERED_LINE.match(line) for line in block_lines):
             return
 
         first_line = block_lines[0]
@@ -194,9 +190,7 @@ def _infer_bullet_lines(lines: list[str]) -> set[int]:
             inferred.update(block[1:])
         elif all(line[-1:] in ".?!" for line in block_lines):
             inferred.update(block)
-        elif all(
-            line[:1].isupper() and line[-1:] not in ".?!:" for line in block_lines
-        ):
+        elif all(line[:1].isupper() and line[-1:] not in ".?!:" for line in block_lines):
             inferred.update(block)
 
     for index, line in enumerate(lines):
