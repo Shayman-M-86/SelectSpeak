@@ -282,20 +282,31 @@ class PlayerWindow(tk.Tk):
         key: str,
         label: str,
         *,
-        loading: bool = False,
+        activity: str = "",
     ) -> None:
+        busy = bool(activity)
+        if activity == "installing":
+            button_text = "Voice: Installing Supertonic…"
+        elif activity:
+            button_text = f"Voice: Loading {label}…"
+        else:
+            button_text = f"Voice: {label} ▾"
         self._selected_voice_key.set(key)
         self._backend_button.config(
-            text=f"Voice: {label}…" if loading else f"Voice: {label} ▾",
-            state="disabled" if loading else "normal",
+            text=button_text,
+            state="disabled" if busy else "normal",
             fg=ACCENT if key == "supertonic" else DIM_FOREGROUND,
+        )
+        self._read_button.config(state="disabled" if busy else "normal")
+        self._play_button.config(
+            state="disabled" if busy or not self._reader_text else "normal"
         )
         self._resize(MIN_IDLE_HEIGHT)
         logger.info(
-            "player.voice.updated voice_key=%s voice_label=%s loading=%s",
+            "player.voice.updated voice_key=%s voice_label=%s activity=%s",
             key,
             label,
-            loading,
+            activity or "ready",
         )
 
     def _show_voice_menu(self) -> None:
@@ -314,8 +325,19 @@ class PlayerWindow(tk.Tk):
         self._status.config(text=f"Voice engine unavailable: {message}", fg=RED)
         self.show()
 
-    def show_backend_loading(self) -> None:
-        self._status.config(text="Voice engine is still loading…", fg=ACCENT)
+    def show_backend_loading(self, activity: str = "loading") -> None:
+        if activity == "installing":
+            message = (
+                "Installing Supertonic’s local voice model… "
+                "This may take a few minutes. Reading will be available when it is ready."
+            )
+        else:
+            message = "Loading the voice engine… Reading will be available when it is ready."
+        self._status.config(text=message, fg=ACCENT)
+        self.show()
+
+    def show_backend_ready(self, label: str) -> None:
+        self._status.config(text=f"✓  {label} is ready", fg=GREEN)
         self.show()
 
     def show_capture_started(self) -> None:

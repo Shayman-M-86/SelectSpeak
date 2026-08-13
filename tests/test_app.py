@@ -107,22 +107,23 @@ def test_delayed_clipboard_fallback_stops_speech_active_at_keypress() -> None:
 
 def test_hotkey_is_consumed_while_voice_backend_is_loading() -> None:
     class Player:
-        loading_shown = False
+        loading_activity = ""
 
         @staticmethod
         def call_soon(callback: Callable[[], None]) -> None:
             callback()
 
         @classmethod
-        def show_backend_loading(cls) -> None:
-            cls.loading_shown = True
+        def show_backend_loading(cls, activity: str) -> None:
+            cls.loading_activity = activity
 
     app = SelectSpeakApp()
     setattr(app, "_player", Player())
     app._backend_switching = True
+    app._backend_activity = "installing"
 
     assert app._on_hotkey_activation()
-    assert Player.loading_shown
+    assert Player.loading_activity == "installing"
 
 
 def test_stop_targets_the_speaker_that_started_the_active_request() -> None:
