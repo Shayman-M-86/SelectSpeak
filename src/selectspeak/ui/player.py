@@ -26,12 +26,15 @@ from .theme import (
     STATUS_WRAP_LENGTH,
     WINDOW_WIDTH,
 )
+from .window_state import foreground_window_is_fullscreen
 
 logger = logging.getLogger(__name__)
 
 _GWL_EXSTYLE = -20
 _WS_EX_NOACTIVATE = 0x08000000
+_WS_EX_TRANSPARENT = 0x00000020
 _SWP_REFRESH_FRAME_NO_ACTIVATE = 0x0037
+_VISIBLE_ALPHA = 0.95
 
 
 class PlayerWindow(tk.Tk):
@@ -82,11 +85,13 @@ class PlayerWindow(tk.Tk):
         self._drag_x = 0
         self._drag_y = 0
         self._user_minimized = False
+        self._playback_started_fullscreen = False
+        self._soft_hidden = False
 
         self.title(app_name)
         self.overrideredirect(True)
         self.attributes("-topmost", True)
-        self.attributes("-alpha", 0.95)
+        self.attributes("-alpha", _VISIBLE_ALPHA)
         self.configure(bg=BACKGROUND)
         self.resizable(False, False)
         self.update_idletasks()
@@ -141,12 +146,48 @@ class PlayerWindow(tk.Tk):
 
     def show(self) -> None:
         logger.info("player.show")
+        if self._soft_hidden:
+            self._set_click_through(False)
+            self.attributes("-alpha", _VISIBLE_ALPHA)
+            self._soft_hidden = False
         self.deiconify()
         self.lift()
 
     def hide(self) -> None:
+        if self.state() == "withdrawn":
+            logger.debug("player.hide.ignored_already_hidden")
+            return
         logger.info("player.hidden")
+        if self._soft_hidden:
+            self._set_click_through(False)
+            self.attributes("-alpha", _VISIBLE_ALPHA)
+            self._soft_hidden = False
         self.withdraw()
+
+    def _soft_hide(self) -> None:
+        """Hide visually without unmapping a window over a fullscreen app."""
+        if self.state() == "withdrawn" or self._soft_hidden:
+            return
+        logger.info("player.hidden mode=transparent_fullscreen")
+        self._set_click_through(True)
+        self.attributes("-alpha", 0.0)
+        self._soft_hidden = True
+
+    def _set_click_through(self, enabled: bool) -> None:
+        if os.name != "nt":
+            return
+        user32 = ctypes.windll.user32
+        client_handle = self.winfo_id()
+        window_handle = user32.GetParent(client_handle) or client_handle
+        style = user32.GetWindowLongPtrW(window_handle, _GWL_EXSTYLE)
+        updated = style | _WS_EX_NOACTIVATE
+        if enabled:
+            updated |= _WS_EX_TRANSPARENT
+        else:
+            updated &= ~_WS_EX_TRANSPARENT
+        if updated != style:
+            user32.SetWindowLongPtrW(window_handle, _GWL_EXSTYLE, updated)
+            user32.SetWindowPos(window_handle, 0, 0, 0, 0, _SWP_REFRESH_FRAME_NO_ACTIVATE)
 
     def _enable_no_activate(self) -> None:
         if os.name != "nt":
@@ -383,6 +424,7 @@ class PlayerWindow(tk.Tk):
                 fg=FOREGROUND,
             )
             self._stop_button.config(bg=RED, fg=BACKGROUND)
+            self._playback_started_fullscreen = foreground_window_is_fullscreen()
             self.show()
         elif speaking:
             self._stop_animation()
@@ -408,7 +450,9 @@ class PlayerWindow(tk.Tk):
             )
             self._stop_button.config(bg=BUTTON_BACKGROUND, fg=RED)
             if self._auto_hide:
-                self.after_idle(self.hide)
+                hide = self._soft_hide if self._playback_started_fullscreen else self.hide
+                self.after_idle(hide)
+            self._playback_started_fullscreen = False
 
     def highlight_word(self, position: int, length: int) -> None:
         generation = self._reader_generation
