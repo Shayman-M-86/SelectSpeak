@@ -16,13 +16,16 @@ _MARKDOWN_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$")
 _SEMICOLON = re.compile(r"\s*;\s*")
 _UNDERSCORES = re.compile(r"_+")
 _EMBEDDED_OBJECTS = re.compile("[\uFFFC\uFFFD]")
+_EMBEDDED_OBJECT_LINE = re.compile(r"(?m)^[ \t]*(?:[\uFFFC\uFFFD][ \t]*)+\n?")
 _TERMINAL_PUNCTUATION = frozenset(".?!:")
 DISPLAY_BULLET_PREFIX = "• "
 
 def prepare_for_speech(text: str) -> str:
     """Normalize copied structure and noisy paths into speech-friendly prose."""
     normalized = text.replace("\r\n", "\n").replace("\r", "\n").strip()
-    without_objects, embedded_object_count = _EMBEDDED_OBJECTS.subn("", normalized)
+    embedded_object_count = len(_EMBEDDED_OBJECTS.findall(normalized))
+    without_object_lines = _EMBEDDED_OBJECT_LINE.sub("", normalized)
+    without_objects = _EMBEDDED_OBJECTS.sub("", without_object_lines)
     without_links, markdown_link_count = _MARKDOWN_LINK.subn(r"\1", without_objects)
     shortened, windows_path_count = _WINDOWS_PATH.subn(_path_basename, without_links)
     shortened, posix_path_count = _POSIX_PATH.subn(_path_basename, shortened)
@@ -81,14 +84,20 @@ def _structure_lines(text: str) -> tuple[str, int, int, int, int, int]:
     heading_count = 0
     line_break_count = 0
     paragraph_count = 0
+    pending_paragraph_break = False
 
     lines = text.split("\n")
     inferred_bullet_lines = _infer_bullet_lines(lines)
     structured_multiline = sum(bool(line.strip()) for line in lines) > 1
     for index, line in enumerate(lines):
         if not line.strip():
-            if segments and any(remaining.strip() for remaining in lines[index + 1 :]):
+            if (
+                segments
+                and not pending_paragraph_break
+                and any(remaining.strip() for remaining in lines[index + 1 :])
+            ):
                 paragraph_count += 1
+                pending_paragraph_break = True
             continue
 
         if segments:
@@ -122,7 +131,10 @@ def _structure_lines(text: str) -> tuple[str, int, int, int, int, int]:
             )
             if structured_multiline or is_explicit_structure:
                 spoken_line = _ensure_pause(spoken_line)
+            if pending_paragraph_break and segments and segments[-1] != "":
+                segments.append("")
             segments.append(spoken_line)
+            pending_paragraph_break = False
 
     return (
         "\n".join(segments).strip(),
@@ -205,4 +217,3 @@ def _ensure_pause(text: str) -> str:
 
 def _collapse_whitespace(text: str) -> str:
     return re.sub(r"\s{2,}", " ", text).strip()
-

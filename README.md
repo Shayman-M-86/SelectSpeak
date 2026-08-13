@@ -106,6 +106,11 @@ with `ocr_hotkey`; optionally set `ocr_language` to a Windows language tag such
 as `"en-AU"`. When unset, SelectSpeak tries the foreground keyboard language,
 then English, then the Windows profile OCR languages.
 
+The native OCR layout analyzer uses recognized word rectangles to join ordinary
+visual wrapping while retaining likely paragraphs, headings, bullet rows,
+hanging indentation, and column changes. Paragraph spacing is preserved through
+speech normalization, giving the chunker meaningful structural boundaries.
+
 ## Start automatically
 
 Pass `-AddToStartup` to the installer. To remove the startup shortcut later,

@@ -83,7 +83,7 @@ def test_prepare_for_speech_recovers_flattened_unicode_bullets() -> None:
 
 def test_prepare_for_speech_turns_paragraph_breaks_into_pauses() -> None:
     assert prepare_for_speech("First thought\n\nSecond thought") == (
-        "First thought.\nSecond thought."
+        "First thought.\n\nSecond thought."
     )
 
 
@@ -162,7 +162,9 @@ def test_prepare_for_speech_strips_markdown_heading_and_structures_bullets() -> 
 - Studio tests: 55 passed"""
 
     assert prepare_for_speech(text) == (
-        "Validation.\n• Backend focused suite: 30 passed.\n• Studio tests: 55 passed."
+        "Validation.\n\n"
+        "• Backend focused suite: 30 passed.\n"
+        "• Studio tests: 55 passed."
     )
 
 

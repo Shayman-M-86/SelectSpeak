@@ -15,6 +15,12 @@ New-Item -ItemType Directory -Force -Path $outputRoot | Out-Null
 if ($LASTEXITCODE) { throw "CMake configuration failed with exit code $LASTEXITCODE" }
 & $cmake --build $buildRoot --config Release
 if ($LASTEXITCODE) { throw "Native build failed with exit code $LASTEXITCODE" }
+$ctest = Join-Path (Split-Path -Parent $cmake) "ctest.exe"
+if (-not (Test-Path -LiteralPath $ctest -PathType Leaf)) {
+    throw "CMake was found without its CTest executable: $ctest"
+}
+& $ctest --test-dir $buildRoot -C Release --output-on-failure
+if ($LASTEXITCODE) { throw "Native tests failed with exit code $LASTEXITCODE" }
 
 $bridge = Get-ChildItem -Recurse -LiteralPath $buildRoot `
     -Filter "selectspeak_input.dll" | Select-Object -First 1

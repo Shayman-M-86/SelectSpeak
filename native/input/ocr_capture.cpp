@@ -4,6 +4,7 @@
 #include <shellscalingapi.h>
 
 #include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Globalization.h>
 #include <winrt/Windows.Graphics.Imaging.h>
 #include <winrt/Windows.Media.Ocr.h>
@@ -18,6 +19,8 @@
 #include <string>
 #include <thread>
 #include <utility>
+
+#include "ocr_layout.h"
 
 #ifdef SELECTSPEAK_INPUT_EXPORTS
 #define INPUT_API extern "C" __declspec(dllexport)
@@ -621,7 +624,53 @@ std::wstring RecognizeBitmap(
     const std::wstring& configured_language,
     const std::wstring& foreground_language) {
     auto engine = CreateOcrEngine(configured_language, foreground_language);
-    return std::wstring(engine.RecognizeAsync(bitmap).get().Text());
+    auto result = engine.RecognizeAsync(bitmap).get();
+    std::vector<selectspeak::ocr::Line> layout_lines;
+    const auto recognized_lines = result.Lines();
+    for (std::uint32_t line_index = 0;
+         line_index < recognized_lines.Size(); ++line_index) {
+        const auto recognized_line = recognized_lines.GetAt(line_index);
+        selectspeak::ocr::Line line;
+        line.text = std::wstring(recognized_line.Text());
+        bool first_word = true;
+        double right = 0;
+        double bottom = 0;
+        const auto recognized_words = recognized_line.Words();
+        for (std::uint32_t word_index = 0;
+             word_index < recognized_words.Size(); ++word_index) {
+            const auto recognized_word = recognized_words.GetAt(word_index);
+            const auto rectangle = recognized_word.BoundingRect();
+            selectspeak::ocr::Word word{
+                std::wstring(recognized_word.Text()),
+                {
+                    rectangle.X,
+                    rectangle.Y,
+                    rectangle.Width,
+                    rectangle.Height,
+                },
+            };
+            if (first_word) {
+                line.bounds = word.bounds;
+                right = word.bounds.right();
+                bottom = word.bounds.bottom();
+                first_word = false;
+            } else {
+                line.bounds.left = std::min(line.bounds.left, word.bounds.left);
+                line.bounds.top = std::min(line.bounds.top, word.bounds.top);
+                right = std::max(right, word.bounds.right());
+                bottom = std::max(bottom, word.bounds.bottom());
+                line.bounds.width = right - line.bounds.left;
+                line.bounds.height = bottom - line.bounds.top;
+            }
+            line.words.push_back(std::move(word));
+        }
+        if (!first_word) {
+            layout_lines.push_back(std::move(line));
+        }
+    }
+    std::wstring reconstructed =
+        selectspeak::ocr::ReconstructLayout(std::move(layout_lines));
+    return reconstructed.empty() ? std::wstring(result.Text()) : reconstructed;
 }
 
 void SendResult(const std::wstring& text, unsigned int status) {

@@ -16,6 +16,42 @@ RUNTIME_OCR_DLL = (
     / "input"
     / "selectspeak_input.dll"
 )
+_OCR_TEST_CALLBACK = ctypes.CFUNCTYPE(
+    None,
+    ctypes.c_wchar_p,
+    ctypes.c_uint,
+    ctypes.c_void_p,
+)
+
+
+def _recognize_image(image: Image.Image) -> tuple[int, list[tuple[int, str]]]:
+    results: list[tuple[int, str]] = []
+    callback = _OCR_TEST_CALLBACK(
+        lambda text, status, _context: results.append((status, text or ""))
+    )
+    dll = ctypes.CDLL(str(RUNTIME_OCR_DLL))
+    dll.ocr_recognize_bgra.argtypes = [
+        ctypes.POINTER(ctypes.c_ubyte),
+        ctypes.c_uint,
+        ctypes.c_uint,
+        ctypes.c_uint,
+        ctypes.c_wchar_p,
+        _OCR_TEST_CALLBACK,
+        ctypes.c_void_p,
+    ]
+    dll.ocr_recognize_bgra.restype = ctypes.c_int
+    bgra = image.tobytes("raw", "BGRA")
+    pixels = (ctypes.c_ubyte * len(bgra)).from_buffer_copy(bgra)
+    return_code = dll.ocr_recognize_bgra(
+        pixels,
+        image.width,
+        image.height,
+        image.width * 4,
+        "en-US",
+        callback,
+        None,
+    )
+    return return_code, results
 
 
 class _FakeFunction:
@@ -103,28 +139,6 @@ def test_native_ocr_ignores_cancelled_and_empty_results(
     reason="built Windows input bridge is unavailable",
 )
 def test_built_bridge_recognizes_generated_text_without_clipboard() -> None:
-    callback_type = ctypes.CFUNCTYPE(
-        None,
-        ctypes.c_wchar_p,
-        ctypes.c_uint,
-        ctypes.c_void_p,
-    )
-    results: list[tuple[int, str]] = []
-    callback = callback_type(
-        lambda text, status, _context: results.append((status, text or ""))
-    )
-    dll = ctypes.CDLL(str(RUNTIME_OCR_DLL))
-    dll.ocr_recognize_bgra.argtypes = [
-        ctypes.POINTER(ctypes.c_ubyte),
-        ctypes.c_uint,
-        ctypes.c_uint,
-        ctypes.c_uint,
-        ctypes.c_wchar_p,
-        callback_type,
-        ctypes.c_void_p,
-    ]
-    dll.ocr_recognize_bgra.restype = ctypes.c_int
-
     image = Image.new("RGBA", (1200, 220), "white")
     draw = ImageDraw.Draw(image)
     font = ImageFont.truetype(r"C:\Windows\Fonts\segoeui.ttf", 72)
@@ -134,18 +148,46 @@ def test_built_bridge_recognizes_generated_text_without_clipboard() -> None:
         fill="black",
         font=font,
     )
-    bgra = image.tobytes("raw", "BGRA")
-    pixels = (ctypes.c_ubyte * len(bgra)).from_buffer_copy(bgra)
-
-    return_code = dll.ocr_recognize_bgra(
-        pixels,
-        image.width,
-        image.height,
-        image.width * 4,
-        "en-US",
-        callback,
-        None,
-    )
+    return_code, results = _recognize_image(image)
 
     assert return_code == 0
     assert results == [(1, "SelectSpeak native OCR works")]
+
+
+@pytest.mark.skipif(
+    sys.platform != "win32" or not RUNTIME_OCR_DLL.is_file(),
+    reason="built Windows input bridge is unavailable",
+)
+def test_built_bridge_reconstructs_visual_wraps_and_paragraphs() -> None:
+    image = Image.new("RGBA", (1400, 360), "white")
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.truetype(r"C:\Windows\Fonts\segoeui.ttf", 44)
+    draw.text(
+        (30, 20),
+        "This is a visual line that should join with",
+        fill="black",
+        font=font,
+    )
+    draw.text(
+        (30, 78),
+        "the continuation rather than force a pause.",
+        fill="black",
+        font=font,
+    )
+    draw.text(
+        (30, 205),
+        "Second paragraph starts after a larger gap.",
+        fill="black",
+        font=font,
+    )
+    return_code, results = _recognize_image(image)
+
+    assert return_code == 0
+    assert results == [
+        (
+            1,
+            "This is a visual line that should join with the continuation "
+            "rather than force a pause.\n\n"
+            "Second paragraph starts after a larger gap.",
+        )
+    ]
