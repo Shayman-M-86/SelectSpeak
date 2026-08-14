@@ -24,11 +24,16 @@ the toolchain and builds this bridge along with the rest of SelectSpeak:
 For native-only development, run:
 
 ```powershell
-.\native\build.ps1 -InstallPrerequisites
+.\native\build.ps1 -InstallPrerequisites -DevRuntime
 ```
 
-The script restores the pinned Speech SDK NuGet packages and creates the local,
-ignored `.runtime/native` directory. It does not bundle voice packages.
+The development variant restores the pinned Speech SDK NuGet packages and
+creates the complete local, ignored `.runtime/native` directory. A normal native
+build puts only `selectspeak_native.dll` there; the release installer uses NuGet
+to place the same three required SDK DLLs beside it during installation. Neither
+path downloads or bundles voice packages. The runtime is limited to Speech core,
+Embedded TTS, and ONNX Runtime; unrelated audio-device, codec, KWS, LU, and
+telemetry extensions are not deployed.
 Natural Voice is available only when both a compatible
 `MicrosoftWindows.Voice.*` package and the corresponding speech runtime are
 installed through Windows.

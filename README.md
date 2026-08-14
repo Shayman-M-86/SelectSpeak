@@ -23,13 +23,15 @@ SelectSpeak-Setup-0.1.0.exe
 The installer does not require administrator rights. It installs SelectSpeak
 to `%LOCALAPPDATA%\Programs\SelectSpeak`, adds it to the Start Menu, and offers
 optional desktop and sign-in startup shortcuts. SelectSpeak can be launched at
-the end of the installation.
+the end of the installation. An internet connection is required: setup uses its
+pinned NuGet client to install the Microsoft Speech SDK runtime into
+`SelectSpeak\native` before the application is launched.
 
 Quit SelectSpeak from its tray menu before installing an update. The stable
 installer identity lets a newer release upgrade the existing application in
 place while retaining the previously selected shortcut options.
 
-A self-contained portable folder is also produced for testing and portable use:
+A PyInstaller folder is produced as input to the installer:
 
 ```text
 dist/SelectSpeak/
@@ -39,8 +41,9 @@ dist/SelectSpeak/
 └── licenses/
 ```
 
-Run `SelectSpeak.exe`; Python, uv, CMake, and the repository are not required on
-the destination computer.
+It intentionally contains only SelectSpeak's native bridge. The installer adds
+the Speech SDK runtime, so this intermediate folder is not the user-facing
+portable distribution.
 
 SelectSpeak stores writable state outside the application folder:
 
@@ -243,19 +246,20 @@ uv run ty check --python-platform win32
 uv build
 ```
 
-To create both the portable Windows application and installer:
+To create the Windows application and installer:
 
 ```powershell
 .\packaging\build.ps1
 ```
 
-This rebuilds the native bridge, stages an explicit ten-file native allowlist,
-collects third-party notices, creates and verifies a PyInstaller `onedir` build,
-and compiles `dist\SelectSpeak-Setup-<version>.exe` with Inno Setup 6. The build
-also creates a SHA-256 checksum alongside the installer. No voice package or
-`.runtime` directory is included. During an iteration where the native bridge
-has already been rebuilt and tested, use `-SkipNativeBuild`. Use
-`-SkipInstaller` when only the portable folder is needed.
+This rebuilds and stages only the SelectSpeak native bridge, collects third-party
+notices, creates and verifies the PyInstaller installer source, and compiles
+`dist\SelectSpeak-Setup-<version>.exe` with Inno Setup 6. Setup contains the
+pinned NuGet client and package manifest, then obtains the pinned Microsoft
+Speech SDK DLLs during installation. The build also creates a SHA-256 checksum
+alongside the installer. No voice package, Speech SDK DLL, or `.runtime`
+directory is included in the installer. During an iteration where the native
+bridge has already been rebuilt and tested, use `-SkipNativeBuild`.
 
 Inno Setup is a release-build dependency. Install it with:
 
@@ -263,7 +267,7 @@ Inno Setup is a release-build dependency. Install it with:
 winget install --id JRSoftware.InnoSetup --exact
 ```
 
-When the portable folder already exists, the installer alone can be rebuilt and
+When the installer-source folder already exists, the installer alone can be rebuilt and
 tested with:
 
 ```powershell
@@ -289,7 +293,7 @@ src/selectspeak/speech/backends/
                             SAPI, Natural Voice, and Supertonic adapters
 src/selectspeak/ui/         Player window, diagnostics, theme, and tray
 native/CMakeLists.txt       One DLL target with a small namespaced C ABI
-native/build.ps1            One native build and runtime deployment path
+native/build.ps1            Native build; -DevRuntime stages local SDK DLLs
 native/natural_voice/       Natural Voice implementation module
 native/input/input_bridge.cpp
                             Stable C ABI forwarding layer
@@ -307,5 +311,7 @@ packaging/build_installer.ps1
                             Installer compiler and checksum generation
 packaging/smoke_test_installer.ps1
                             Install, upgrade, startup, and uninstall test
-packaging/stage_native.ps1  Explicit native runtime allowlist
+packaging/stage_native.ps1  Stages only the SelectSpeak-owned native bridge
+packaging/install_speech_runtime.ps1
+                            Installer-time pinned NuGet runtime deployment
 ```

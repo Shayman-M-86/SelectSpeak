@@ -54,11 +54,6 @@ if(SELECTSPEAK_ENABLE_NATURAL_VOICE)
         "${SPEECHSDK_ROOT}/build/native/include/c_api")
     target_link_libraries(selectspeak_native PRIVATE
         "${SPEECHSDK_ROOT}/build/native/x64/Release/Microsoft.CognitiveServices.Speech.core.lib")
-    add_custom_command(TARGET selectspeak_native POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "${SPEECHSDK_ROOT}/runtimes/win-x64/native"
-            "$<TARGET_FILE_DIR:selectspeak_native>"
-        COMMENT "Copying the Microsoft Speech SDK runtime")
 endif()
 
 if(BUILD_TESTING)

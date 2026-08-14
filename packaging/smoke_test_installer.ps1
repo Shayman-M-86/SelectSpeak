@@ -69,7 +69,8 @@ $installArguments = @(
 $install = Start-Process -FilePath $InstallerPath -ArgumentList $installArguments -Wait -PassThru
 if ($install.ExitCode) { throw "Silent installation failed with exit code $($install.ExitCode)." }
 
-& $python (Join-Path $PSScriptRoot "verify_dist.py") $installRoot
+& $python (Join-Path $PSScriptRoot "verify_dist.py") $installRoot `
+    --require-speech-runtime
 if ($LASTEXITCODE) { throw "The installed application layout is invalid." }
 $startMenuShortcut = Join-Path ([Environment]::GetFolderPath("Programs")) "SelectSpeak\SelectSpeak.lnk"
 if (-not (Test-Path -LiteralPath $startMenuShortcut -PathType Leaf)) {
@@ -119,7 +120,8 @@ $upgradeArguments = @(
 )
 $upgrade = Start-Process -FilePath $InstallerPath -ArgumentList $upgradeArguments -Wait -PassThru
 if ($upgrade.ExitCode) { throw "Silent upgrade failed with exit code $($upgrade.ExitCode)." }
-& $python (Join-Path $PSScriptRoot "verify_dist.py") $installRoot
+& $python (Join-Path $PSScriptRoot "verify_dist.py") $installRoot `
+    --require-speech-runtime
 if ($LASTEXITCODE) { throw "The upgraded application layout is invalid." }
 
 if ($KeepInstalled) {

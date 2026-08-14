@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [switch]$InstallPrerequisites,
-    [switch]$SkipNaturalVoice
+    [switch]$SkipNaturalVoice,
+    [switch]$DevRuntime
 )
 
 $ErrorActionPreference = "Stop"
@@ -18,6 +19,25 @@ $nugetSha256 = "0790BB7A0C898E44B70F2B65E3070B4DB8AF23897E38B8653D72D268B6E8BB11
 $cmake = Get-SelectSpeakCMake -InstallPrerequisites:$InstallPrerequisites
 
 New-Item -ItemType Directory -Force -Path $outputRoot | Out-Null
+$speechRuntimeFiles = @(
+    "Microsoft.CognitiveServices.Speech.core.dll",
+    "Microsoft.CognitiveServices.Speech.extension.embedded.tts.dll",
+    "Microsoft.CognitiveServices.Speech.extension.onnxruntime.dll"
+)
+$unusedSpeechRuntimeFiles = @(
+    "Microsoft.CognitiveServices.Speech.extension.audio.sys.dll",
+    "Microsoft.CognitiveServices.Speech.extension.codec.dll",
+    "Microsoft.CognitiveServices.Speech.extension.kws.dll",
+    "Microsoft.CognitiveServices.Speech.extension.kws.ort.dll",
+    "Microsoft.CognitiveServices.Speech.extension.lu.dll",
+    "Microsoft.CognitiveServices.Speech.extension.telemetry.dll"
+)
+foreach ($name in $speechRuntimeFiles + $unusedSpeechRuntimeFiles) {
+    $path = Join-Path $outputRoot $name
+    if (Test-Path -LiteralPath $path -PathType Leaf) {
+        Remove-Item -LiteralPath $path -Force
+    }
+}
 $configureArguments = @(
     "-S", $PSScriptRoot,
     "-B", $buildRoot,
@@ -68,14 +88,24 @@ $bridge = Get-ChildItem -Recurse -LiteralPath $buildRoot `
 if (-not $bridge) { throw "The build completed without producing the native DLL" }
 Copy-Item -LiteralPath $bridge.FullName -Destination $outputRoot -Force
 
-if (-not $SkipNaturalVoice) {
-    Get-ChildItem -Directory -LiteralPath $packagesRoot | ForEach-Object {
-        $nativeRuntime = Join-Path $_.FullName "runtimes\win-x64\native"
-        if (Test-Path -LiteralPath $nativeRuntime -PathType Container) {
-            Copy-Item -Path (Join-Path $nativeRuntime "*") `
-                -Destination $outputRoot -Recurse -Force
+if ($DevRuntime -and -not $SkipNaturalVoice) {
+    foreach ($name in $speechRuntimeFiles) {
+        $source = Get-ChildItem -Directory -LiteralPath $packagesRoot |
+            ForEach-Object {
+                Join-Path $_.FullName "runtimes\win-x64\native\$name"
+            } |
+            Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
+            Select-Object -First 1
+        if (-not $source) {
+            throw "NuGet restore did not provide the development runtime file: $name"
         }
+        Copy-Item -LiteralPath $source -Destination $outputRoot -Force
     }
 }
 
-Write-Host "SelectSpeak native runtime created at $outputRoot"
+$kind = if ($DevRuntime -and -not $SkipNaturalVoice) {
+    "bridge and development runtime"
+} else {
+    "bridge"
+}
+Write-Host "SelectSpeak $kind created at $outputRoot"

@@ -13,6 +13,15 @@
 #ifndef SetupIcon
   #define SetupIcon "..\build\packaging\SelectSpeak.ico"
 #endif
+#ifndef NuGetExe
+  #error NuGetExe must point to the pinned NuGet command-line executable
+#endif
+#ifndef RuntimeInstaller
+  #error RuntimeInstaller must point to install_speech_runtime.ps1
+#endif
+#ifndef RuntimePackages
+  #error RuntimePackages must point to the Natural Voice packages.config
+#endif
 
 [Setup]
 AppId={{A441CF57-CAEC-4C75-9E64-90EB3F806014}
@@ -73,6 +82,9 @@ Type: filesandordirs; Name: "{app}\licenses"
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#NuGetExe}"; Flags: dontcopy
+Source: "{#RuntimeInstaller}"; Flags: dontcopy
+Source: "{#RuntimePackages}"; Flags: dontcopy
 
 [Icons]
 Name: "{autoprograms}\SelectSpeak\SelectSpeak"; Filename: "{app}\SelectSpeak.exe"; WorkingDir: "{app}"
@@ -82,3 +94,36 @@ Name: "{userstartup}\SelectSpeak"; Filename: "{app}\SelectSpeak.exe"; WorkingDir
 
 [Run]
 Filename: "{app}\SelectSpeak.exe"; Description: "Launch SelectSpeak"; WorkingDir: "{app}"; Flags: nowait postinstall skipifsilent
+
+[Code]
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  PowerShell: String;
+  Parameters: String;
+  ResultCode: Integer;
+begin
+  if CurStep = ssInstall then
+  begin
+    ExtractTemporaryFile('nuget.exe');
+    ExtractTemporaryFile('install_speech_runtime.ps1');
+    ExtractTemporaryFile('packages.config');
+  end;
+
+  if CurStep = ssPostInstall then
+  begin
+    WizardForm.StatusLabel.Caption := 'Installing Microsoft Speech runtime...';
+    PowerShell := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
+    Parameters := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
+      ExpandConstant('{tmp}\install_speech_runtime.ps1') + '" -NuGetPath "' +
+      ExpandConstant('{tmp}\nuget.exe') + '" -PackagesConfig "' +
+      ExpandConstant('{tmp}\packages.config') + '" -Destination "' +
+      ExpandConstant('{app}\native') + '"';
+    if not Exec(PowerShell, Parameters, '', SW_HIDE,
+      ewWaitUntilTerminated, ResultCode) then
+      RaiseException('Could not start the Natural Voice runtime installer.');
+    if ResultCode <> 0 then
+      RaiseException(Format(
+        'Natural Voice runtime installation failed with exit code %d. ' +
+        'Check your internet connection and run setup again.', [ResultCode]));
+  end;
+end;

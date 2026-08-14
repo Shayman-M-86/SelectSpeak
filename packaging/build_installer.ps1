@@ -12,6 +12,11 @@ $portableRoot = if ($PortablePath) { $PortablePath } else { Join-Path $projectRo
 $outputRoot = if ($OutputPath) { $OutputPath } else { Join-Path $projectRoot "dist" }
 $icon = Join-Path $projectRoot "build\packaging\SelectSpeak.ico"
 $definition = Join-Path $PSScriptRoot "SelectSpeak.iss"
+$runtimeInstaller = Join-Path $PSScriptRoot "install_speech_runtime.ps1"
+$runtimePackages = Join-Path $projectRoot "native\natural_voice\packages.config"
+$nugetRoot = Join-Path $projectRoot ".cache\natural_voice\tools"
+$nuget = Join-Path $nugetRoot "nuget.exe"
+$nugetSha256 = "0790BB7A0C898E44B70F2B65E3070B4DB8AF23897E38B8653D72D268B6E8BB11"
 
 function Find-InnoCompiler {
     param([string]$RequestedPath)
@@ -52,6 +57,19 @@ if (-not (Test-Path -LiteralPath $portableRoot -PathType Container)) {
     throw "Portable distribution not found: $portableRoot"
 }
 
+New-Item -ItemType Directory -Path $nugetRoot -Force | Out-Null
+if (-not (Test-Path -LiteralPath $nuget -PathType Leaf)) {
+    [Net.ServicePointManager]::SecurityProtocol = `
+        [Net.ServicePointManager]::SecurityProtocol -bor `
+        [Net.SecurityProtocolType]::Tls12
+    Invoke-WebRequest `
+        -Uri "https://dist.nuget.org/win-x86-commandline/v6.12.1/nuget.exe" `
+        -OutFile $nuget
+}
+if ((Get-FileHash -Algorithm SHA256 -LiteralPath $nuget).Hash -ne $nugetSha256) {
+    throw "The NuGet executable did not match its pinned SHA-256 hash."
+}
+
 & $python (Join-Path $PSScriptRoot "verify_dist.py") $portableRoot
 if ($LASTEXITCODE) { throw "Portable distribution verification failed." }
 
@@ -81,6 +99,9 @@ $compiler = Find-InnoCompiler $IsccPath
 $portableRoot = (Resolve-Path -LiteralPath $portableRoot).Path
 $outputRoot = (Resolve-Path -LiteralPath $outputRoot).Path
 $icon = (Resolve-Path -LiteralPath $icon).Path
+$nuget = (Resolve-Path -LiteralPath $nuget).Path
+$runtimeInstaller = (Resolve-Path -LiteralPath $runtimeInstaller).Path
+$runtimePackages = (Resolve-Path -LiteralPath $runtimePackages).Path
 
 & $compiler /Qp `
     "/DAppVersion=$version" `
@@ -88,6 +109,9 @@ $icon = (Resolve-Path -LiteralPath $icon).Path
     "/DSourceDir=$portableRoot" `
     "/DOutputDir=$outputRoot" `
     "/DSetupIcon=$icon" `
+    "/DNuGetExe=$nuget" `
+    "/DRuntimeInstaller=$runtimeInstaller" `
+    "/DRuntimePackages=$runtimePackages" `
     $definition
 if ($LASTEXITCODE) { throw "Inno Setup failed with exit code $LASTEXITCODE" }
 

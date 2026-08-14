@@ -155,7 +155,8 @@ try {
 
     Write-Host "Building the SelectSpeak native bridge..." -ForegroundColor Cyan
     & (Join-Path $projectRoot "native\build.ps1") `
-        -InstallPrerequisites -SkipNaturalVoice:$SkipNaturalVoice
+        -InstallPrerequisites -SkipNaturalVoice:$SkipNaturalVoice `
+        -DevRuntime:$(-not $SkipNaturalVoice)
 
     $requiredFiles = @(
         $venvPython,

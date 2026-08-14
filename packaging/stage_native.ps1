@@ -27,16 +27,7 @@ if (-not (Test-Path -LiteralPath $sourceRoot -PathType Container)) {
 }
 
 $nativeFiles = @(
-    "selectspeak_native.dll",
-    "Microsoft.CognitiveServices.Speech.core.dll",
-    "Microsoft.CognitiveServices.Speech.extension.audio.sys.dll",
-    "Microsoft.CognitiveServices.Speech.extension.codec.dll",
-    "Microsoft.CognitiveServices.Speech.extension.embedded.tts.dll",
-    "Microsoft.CognitiveServices.Speech.extension.kws.dll",
-    "Microsoft.CognitiveServices.Speech.extension.kws.ort.dll",
-    "Microsoft.CognitiveServices.Speech.extension.lu.dll",
-    "Microsoft.CognitiveServices.Speech.extension.onnxruntime.dll",
-    "Microsoft.CognitiveServices.Speech.extension.telemetry.dll"
+    "selectspeak_native.dll"
 )
 
 $missing = @($nativeFiles | Where-Object {
