@@ -1,11 +1,38 @@
 from collections.abc import Callable
 
+from selectspeak import app as app_module
 from selectspeak.app import (
     SelectSpeakApp,
+    confirm_supertonic_install,
     is_repeat_of_active_speech,
     should_stop_clipboard_speech_immediately,
     was_speaking_at,
 )
+
+
+def test_supertonic_install_confirmation_uses_windows_yes_result(monkeypatch) -> None:
+    class User32:
+        @staticmethod
+        def MessageBoxW(*_arguments: object) -> int:
+            return app_module.MESSAGE_BOX_YES
+
+    class WindowsLibraries:
+        user32 = User32()
+
+    monkeypatch.setattr(app_module.ctypes, "windll", WindowsLibraries(), raising=False)
+
+    assert confirm_supertonic_install()
+
+
+def test_supertonic_install_is_required_if_either_payload_is_missing(monkeypatch) -> None:
+    app = SelectSpeakApp()
+    monkeypatch.setattr(app_module, "supertonic_dependencies_are_installed", lambda: True)
+    monkeypatch.setattr(app_module, "supertonic_model_is_installed", lambda _voice: False)
+
+    assert app._supertonic_install_required()
+
+    monkeypatch.setattr(app_module, "supertonic_model_is_installed", lambda _voice: True)
+    assert not app._supertonic_install_required()
 
 
 def test_same_text_while_speaking_requests_stop() -> None:

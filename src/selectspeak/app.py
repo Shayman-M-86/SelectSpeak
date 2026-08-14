@@ -16,8 +16,10 @@ from .settings import SettingsStore
 from .speech import Speaker, create_speaker
 from .speech.backends.natural import NaturalVoiceSpeaker, discover_natural_voices
 from .speech.debug import SpeechDebugEvent
+from .speech.feature_installer import launch_supertonic_installer
 from .speech.model_installation import supertonic_model_is_installed
 from .speech.normalization import prepare_for_speech
+from .speech.optional_dependencies import supertonic_dependencies_are_installed
 from .speech.voices import VoiceOption, build_voice_options, natural_voice_key
 from .ui.player import PlayerWindow
 from .ui.tray import TrayController
@@ -26,6 +28,9 @@ logger = logging.getLogger(__name__)
 
 BACKEND_INSTALLING = "installing"
 BACKEND_LOADING = "loading"
+MESSAGE_BOX_YES_NO = 0x00000004
+MESSAGE_BOX_ICON_QUESTION = 0x00000020
+MESSAGE_BOX_YES = 6
 
 
 def is_repeat_of_active_speech(*, speaking: bool, active_text: str, captured_text: str) -> bool:
@@ -38,6 +43,23 @@ def was_speaking_at(activated_at: float, speech_started_at: float, speech_ended_
 
 def should_stop_clipboard_speech_immediately(*, speaking: bool, source: str) -> bool:
     return speaking and source in {"clipboard", "clipboard_fallback"}
+
+
+def confirm_supertonic_install() -> bool:
+    """Ask before handing control to setup for the large optional component."""
+    windows_libraries = getattr(ctypes, "windll", None)
+    if windows_libraries is None:
+        return False
+    result = windows_libraries.user32.MessageBoxW(
+        None,
+        "Supertonic Neural Voice is not installed.\n\n"
+        "Setup will add its Python dependencies and local voice model, requiring "
+        "approximately 475 MB. SelectSpeak will restart when setup finishes.\n\n"
+        "Install Supertonic now?",
+        "Install Supertonic Neural Voice",
+        MESSAGE_BOX_YES_NO | MESSAGE_BOX_ICON_QUESTION,
+    )
+    return result == MESSAGE_BOX_YES
 
 
 class SelectSpeakApp:
@@ -225,6 +247,9 @@ class SelectSpeakApp:
         option = self._voice_options.get(key)
         if option is None:
             return
+        if option.backend == "supertonic" and self._supertonic_install_required():
+            self._request_supertonic_install(option)
+            return
         activity = self._voice_load_activity(option)
         with self._state_lock:
             if self._backend_switching:
@@ -249,6 +274,52 @@ class SelectSpeakApp:
             daemon=True,
             name=f"VoiceSelection-{option.backend}",
         ).start()
+
+    def _request_supertonic_install(self, option: VoiceOption) -> None:
+        current_key = self._selected_voice_key
+        if not confirm_supertonic_install():
+            current = self._voice_options[current_key]
+            self._player.set_voice_selection(current.key, current.short_label)
+            return
+        with self._state_lock:
+            if self._backend_switching:
+                return
+            self._backend_switching = True
+            self._backend_activity = BACKEND_INSTALLING
+        self.stop()
+        self._player.call_soon(
+            lambda: self._player.set_voice_selection(
+                option.key,
+                option.short_label,
+                activity=BACKEND_INSTALLING,
+            )
+        )
+        self._player.call_soon(lambda: self._player.show_backend_loading(BACKEND_INSTALLING))
+        threading.Thread(
+            target=self._launch_supertonic_setup,
+            args=(current_key,),
+            daemon=True,
+            name="SupertonicSetup",
+        ).start()
+
+    def _launch_supertonic_setup(self, current_key: str) -> None:
+        try:
+            launch_supertonic_installer()
+        except Exception as error:
+            logger.exception("supertonic.setup.launch_failed")
+            current = self._voice_options[current_key]
+            self._player.call_soon(
+                lambda: self._player.set_voice_selection(current.key, current.short_label)
+            )
+            self._player.call_soon(
+                lambda message=str(error): self._player.show_backend_error(message)
+            )
+            with self._state_lock:
+                self._backend_switching = False
+                self._backend_activity = ""
+            return
+        logger.info("supertonic.setup.launched")
+        self._player.call_soon(self.shutdown)
 
     def _load_voice(self, current_key: str, option: VoiceOption) -> None:
         try:
@@ -302,12 +373,17 @@ class SelectSpeakApp:
     def _voice_load_activity(self, option: VoiceOption) -> str:
         if option.backend != "supertonic":
             return BACKEND_LOADING
+        return BACKEND_INSTALLING if self._supertonic_install_required() else BACKEND_LOADING
+
+    def _supertonic_install_required(self) -> bool:
         try:
-            installed = supertonic_model_is_installed(self._config.supertonic_voice)
-            return BACKEND_LOADING if installed else BACKEND_INSTALLING
+            return not (
+                supertonic_dependencies_are_installed()
+                and supertonic_model_is_installed(self._config.supertonic_voice)
+            )
         except Exception:
-            logger.exception("supertonic.model.installation_state_failed")
-            return BACKEND_LOADING
+            logger.exception("supertonic.installation_state_failed")
+            return True
 
     def _configure_voice_options(self) -> None:
         try:

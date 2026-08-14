@@ -2,7 +2,10 @@
 param(
     [string]$PortablePath,
     [string]$OutputPath,
-    [string]$IsccPath
+    [string]$IsccPath,
+    [string]$SupertonicLayerPath,
+    [string]$SupertonicModelPath,
+    [switch]$EmbedSupertonicPayload
 )
 
 $ErrorActionPreference = "Stop"
@@ -14,6 +17,7 @@ $icon = Join-Path $projectRoot "build\packaging\SelectSpeak.ico"
 $definition = Join-Path $PSScriptRoot "SelectSpeak.iss"
 $runtimeInstaller = Join-Path $PSScriptRoot "install_speech_runtime.ps1"
 $runtimePackages = Join-Path $projectRoot "native\natural_voice\packages.config"
+$supertonicInstaller = Join-Path $PSScriptRoot "install_supertonic_payload.ps1"
 $nugetRoot = Join-Path $projectRoot ".cache\natural_voice\tools"
 $nuget = Join-Path $nugetRoot "nuget.exe"
 $nugetSha256 = "0790BB7A0C898E44B70F2B65E3070B4DB8AF23897E38B8653D72D268B6E8BB11"
@@ -79,6 +83,15 @@ if (-not $versionMatch.Success) {
     throw "Could not read the application version from pyproject.toml."
 }
 $version = $versionMatch.Groups["version"].Value
+$defaultLayerPath = Join-Path $projectRoot "dist\SelectSpeak-Supertonic-Dependencies-$version-win-x64.zip"
+$defaultModelPath = Join-Path $projectRoot "dist\SelectSpeak-Supertonic-Model-$version.zip"
+$SupertonicLayerPath = if ($SupertonicLayerPath) { $SupertonicLayerPath } else { $defaultLayerPath }
+$SupertonicModelPath = if ($SupertonicModelPath) { $SupertonicModelPath } else { $defaultModelPath }
+foreach ($payload in @($SupertonicLayerPath, $SupertonicModelPath, $supertonicInstaller)) {
+    if (-not (Test-Path -LiteralPath $payload -PathType Leaf)) {
+        throw "Required Supertonic installer payload not found: $payload"
+    }
+}
 $releaseVersion = $version.Split("-", 2)[0]
 $versionParts = @($releaseVersion.Split("."))
 if ($versionParts.Count -gt 4 -or $versionParts.Where({ $_ -notmatch '^\d+$' }).Count) {
@@ -102,17 +115,42 @@ $icon = (Resolve-Path -LiteralPath $icon).Path
 $nuget = (Resolve-Path -LiteralPath $nuget).Path
 $runtimeInstaller = (Resolve-Path -LiteralPath $runtimeInstaller).Path
 $runtimePackages = (Resolve-Path -LiteralPath $runtimePackages).Path
+$supertonicInstaller = (Resolve-Path -LiteralPath $supertonicInstaller).Path
+$SupertonicLayerPath = (Resolve-Path -LiteralPath $SupertonicLayerPath).Path
+$SupertonicModelPath = (Resolve-Path -LiteralPath $SupertonicModelPath).Path
+$layerHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $SupertonicLayerPath).Hash.ToLowerInvariant()
+$modelHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $SupertonicModelPath).Hash.ToLowerInvariant()
+$releaseBaseUrl = "https://github.com/Shayman-M-86/my-TTS/releases/download/v$version"
+$compilerArguments = @(
+    "/Qp",
+    "/DAppVersion=$version",
+    "/DAppNumericVersion=$numericVersion",
+    "/DSourceDir=$portableRoot",
+    "/DOutputDir=$outputRoot",
+    "/DSetupIcon=$icon",
+    "/DNuGetExe=$nuget",
+    "/DRuntimeInstaller=$runtimeInstaller",
+    "/DRuntimePackages=$runtimePackages",
+    "/DSupertonicInstaller=$supertonicInstaller",
+    "/DSupertonicLayerVersion=1",
+    "/DSupertonicModelRevision=724fb5abbf5502583fb520898d45929e62f02c0b",
+    "/DSupertonicLayerUrl=$releaseBaseUrl/$(Split-Path -Leaf $SupertonicLayerPath)",
+    "/DSupertonicLayerFileName=$(Split-Path -Leaf $SupertonicLayerPath)",
+    "/DSupertonicLayerSha256=$layerHash",
+    "/DSupertonicModelUrl=$releaseBaseUrl/$(Split-Path -Leaf $SupertonicModelPath)",
+    "/DSupertonicModelFileName=$(Split-Path -Leaf $SupertonicModelPath)",
+    "/DSupertonicModelSha256=$modelHash"
+)
+if ($EmbedSupertonicPayload) {
+    $compilerArguments += @(
+        "/DEmbedSupertonicPayload=1",
+        "/DSupertonicLayerArchive=$SupertonicLayerPath",
+        "/DSupertonicModelArchive=$SupertonicModelPath"
+    )
+}
+$compilerArguments += $definition
 
-& $compiler /Qp `
-    "/DAppVersion=$version" `
-    "/DAppNumericVersion=$numericVersion" `
-    "/DSourceDir=$portableRoot" `
-    "/DOutputDir=$outputRoot" `
-    "/DSetupIcon=$icon" `
-    "/DNuGetExe=$nuget" `
-    "/DRuntimeInstaller=$runtimeInstaller" `
-    "/DRuntimePackages=$runtimePackages" `
-    $definition
+& $compiler @compilerArguments
 if ($LASTEXITCODE) { throw "Inno Setup failed with exit code $LASTEXITCODE" }
 
 $installer = Join-Path $outputRoot "SelectSpeak-Setup-$version.exe"

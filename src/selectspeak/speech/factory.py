@@ -17,11 +17,22 @@ def create_speaker(
     if backend not in {"auto", "natural", "sapi", "supertonic"}:
         raise ValueError(f"Unknown speech backend: {config.speech_backend}")
     if backend == "supertonic":
-        from .backends.supertonic import SupertonicSpeaker
+        from .optional_dependencies import (
+            SupertonicDependenciesMissing,
+            activate_supertonic_dependencies,
+        )
 
-        speaker = SupertonicSpeaker(config.speech, word_callback, debug_callback)
-        logger.info("speaker.backend.selected backend=%s", backend)
-        return speaker
+        try:
+            activate_supertonic_dependencies()
+        except SupertonicDependenciesMissing:
+            logger.warning("speaker.supertonic.dependencies_missing; falling back to Windows speech")
+            backend = "auto"
+        else:
+            from .backends.supertonic import SupertonicSpeaker
+
+            speaker = SupertonicSpeaker(config.speech, word_callback, debug_callback)
+            logger.info("speaker.backend.selected backend=%s", backend)
+            return speaker
     if backend != "sapi":
         try:
             from .backends.natural import NaturalVoiceSpeaker

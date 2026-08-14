@@ -19,7 +19,7 @@ try {
     New-Item -ItemType Directory -Path $packagesRoot -Force | Out-Null
     & $NuGetPath install $PackagesConfig -OutputDirectory $packagesRoot `
         -Source "https://api.nuget.org/v3/index.json" `
-        -NonInteractive -NoHttpCache -DirectDownload -DisableParallelProcessing
+        -NonInteractive -DisableParallelProcessing
     if ($LASTEXITCODE) {
         throw "NuGet restore failed with exit code $LASTEXITCODE"
     }

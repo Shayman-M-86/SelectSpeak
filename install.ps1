@@ -150,7 +150,7 @@ try {
         & $uv python install $pythonVersion
     }
     Invoke-Checked "Creating the Python environment and installing dependencies..." {
-        & $uv sync --frozen --python $pythonVersion
+        & $uv sync --frozen --extra supertonic --python $pythonVersion
     }
 
     Write-Host "Building the SelectSpeak native bridge..." -ForegroundColor Cyan

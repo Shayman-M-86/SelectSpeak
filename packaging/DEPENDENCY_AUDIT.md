@@ -1,11 +1,11 @@
 # Runtime dependency audit
 
-The release keeps the direct imports used by the current application:
+The standard release keeps the direct imports used by the core application:
 
 - `pywin32` for the independent Windows SAPI backend and COM initialization.
 - `Pillow` and `pystray` for the tray icon.
-- `supertonic`, `numpy`, `onnxruntime`, `soundfile`, and the Supertonic download
-  dependencies for the optional local neural backend.
+- The Supertonic backend adapter remains in the core, but its third-party
+  imports stay lazy until the optional dependency layer is activated.
 
 No Python hotkey, clipboard, or OCR package remains. Those capabilities use the
 unified native Windows bridge. The release excludes development tools and the
@@ -31,14 +31,34 @@ installer was 39.29 MiB. The main contents of that directory were:
   library and extension modules.
 - SoundFile/libsndfile: approximately 2.5 MiB including CFFI.
 
-After the safe exclusions below, the verified PyInstaller directory is 104.11
-MiB (25.55 MiB or 19.7% smaller) and the installer is 34.08 MiB (5.21 MiB or
-13.3% smaller).
+After the first safe exclusions below, the verified PyInstaller directory was
+104.11 MiB and the installer was 34.08 MiB. Separating the complete neural stack
+reduced the final core directory to 32.43 MiB and the web installer to 14.33
+MiB. Relative to the original baseline, those are reductions of 97.23 MiB
+(75.0%) and 24.96 MiB (63.5%) respectively.
 
-The Natural Voice runtime installed during setup adds 15.30 MiB. A downloaded
-Supertonic 3 model measured 384.83 MiB in the user data cache; that model is not
-part of the installer, but it dominates disk usage after the optional backend
-has been used.
+The Natural Voice runtime installed during setup adds 15.30 MiB. The optional
+Supertonic dependency layer is 27.52 MiB compressed and 89.63 MiB installed.
+The curated model archive is 354.18 MiB compressed and 382.71 MiB installed.
+Neither optional archive is part of the 14.33 MiB setup executable; Setup
+downloads them only when its Supertonic component is selected.
+
+## Optional dependency layer
+
+The core build explicitly excludes `supertonic`, NumPy, ONNX Runtime, and
+Hugging Face Hub. Release packaging resolves their pinned wheel dependency
+closure into `SelectSpeak-Supertonic-Dependencies-<version>-win-x64.zip`, while
+omitting SoundFile, CFFI, and Xet because SelectSpeak neither saves audio nor
+requires the optional transfer accelerator. A manifest pins the layer format,
+CPython ABI, platform, package names, and versions.
+
+Setup verifies each release archive against the SHA-256 compiled into the
+installer, expands into a temporary sibling directory, validates required
+files, and atomically replaces the installed component. At startup the same
+`SelectSpeak.exe` adds this directory and its native-library folders to the
+running interpreter before the lazy Supertonic import. A frozen release probe
+confirmed that this external layer initializes NumPy 2.5.2, ONNX Runtime 1.28.0,
+Supertonic 1.3.1, and all four model sessions in process.
 
 ## Safe frozen-build exclusions
 
@@ -53,7 +73,5 @@ has been used.
   SelectSpeak uses dynamic SAPI dispatch and does not use that tooling or GUI.
 
 These exclusions preserve the SAPI, Natural Voice, Supertonic synthesis, tray,
-clipboard, hotkey, and OCR features. Removing ONNX Runtime or NumPy would remove
-Supertonic; removing the Microsoft Speech runtime would remove Natural Voice.
-Those larger reductions therefore require an explicit product decision, such
-as shipping separate lightweight and neural editions.
+clipboard, hotkey, and OCR features. Supertonic is now an installer-managed
+component rather than a separate edition or executable.

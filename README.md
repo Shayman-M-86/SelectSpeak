@@ -10,7 +10,7 @@ by a small native Windows bridge.
 ## Requirements
 
 - 64-bit Windows 10 version 1809 or later, or Windows 11
-- An internet connection the first time the optional Supertonic model is used
+- An internet connection during setup and when adding optional Supertonic support
 
 ## User installation
 
@@ -27,6 +27,14 @@ the end of the installation. An internet connection is required: setup uses its
 pinned NuGet client to install the Microsoft Speech SDK runtime into
 `SelectSpeak\native` before the application is launched.
 
+The standard installation leaves the neural Python stack and model out. Choose
+the optional **Supertonic Neural Voice** component for a full installation. If
+it is not selected initially, choosing Supertonic inside SelectSpeak downloads
+and reopens the same version of Setup with that component preselected. Setup
+installs the dependencies into `SelectSpeak\dependencies\supertonic`, installs
+the model into the user-data directory, and restarts SelectSpeak. No second
+application executable or system Python installation is used.
+
 Quit SelectSpeak from its tray menu before installing an update. The stable
 installer identity lets a newer release upgrade the existing application in
 place while retaining the previously selected shortcut options.
@@ -37,6 +45,7 @@ A PyInstaller folder is produced as input to the installer:
 dist/SelectSpeak/
 ├── SelectSpeak.exe
 ├── _internal/
+├── dependencies/                 # present only after Supertonic is selected
 ├── native/
 └── licenses/
 ```
@@ -51,7 +60,7 @@ SelectSpeak stores writable state outside the application folder:
 %LOCALAPPDATA%\SelectSpeak\
 ├── settings.json
 ├── logs\selectspeak.log
-└── models\supertonic3\
+└── models\supertonic3\           # present only after Supertonic is selected
 ```
 
 Settings use a versioned schema and persist the selected backend and Natural
@@ -253,13 +262,16 @@ To create the Windows application and installer:
 ```
 
 This rebuilds and stages only the SelectSpeak native bridge, collects third-party
-notices, creates and verifies the PyInstaller installer source, and compiles
-`dist\SelectSpeak-Setup-<version>.exe` with Inno Setup 6. Setup contains the
-pinned NuGet client and package manifest, then obtains the pinned Microsoft
-Speech SDK DLLs during installation. The build also creates a SHA-256 checksum
-alongside the installer. No voice package, Speech SDK DLL, or `.runtime`
-directory is included in the installer. During an iteration where the native
-bridge has already been rebuilt and tested, use `-SkipNativeBuild`.
+notices, creates and verifies the slim PyInstaller core, builds the versioned
+Supertonic dependency and model ZIPs, and compiles
+`dist\SelectSpeak-Setup-<version>.exe` with Inno Setup 6. Upload Setup, its
+`.sha256` file, and both ZIP archives together in the matching `v<version>`
+GitHub release. Setup contains
+the pinned NuGet client and package manifest, then obtains the pinned Microsoft
+Speech SDK DLLs during installation. It downloads the hash-pinned Supertonic
+ZIPs only when that component is selected. During an iteration where the native
+bridge and optional payloads already exist, use `-SkipNativeBuild` and
+`-SkipSupertonicPayload`.
 
 Inno Setup is a release-build dependency. Install it with:
 
@@ -309,9 +321,21 @@ packaging/SelectSpeak.iss   Per-user Inno Setup installer definition
 packaging/build.ps1         Portable and installer release build
 packaging/build_installer.ps1
                             Installer compiler and checksum generation
+packaging/build_supertonic_payload.py
+                            Versioned optional dependency and model archives
+packaging/install_supertonic_payload.ps1
+                            Atomic installer-time optional payload deployment
 packaging/smoke_test_installer.ps1
                             Install, upgrade, startup, and uninstall test
 packaging/stage_native.ps1  Stages only the SelectSpeak-owned native bridge
 packaging/install_speech_runtime.ps1
                             Installer-time pinned NuGet runtime deployment
 ```
+
+## Acknowledgements
+
+Thanks to
+[NaturalVoiceSAPIAdapter](https://github.com/gexgd0419/NaturalVoiceSAPIAdapter)
+and [TTS Anywhere](https://github.com/yosef0H4/TTS-anywhere) for sharing their
+work. Their exploration of Windows Natural Voices and text-to-speech integration
+helped inspire parts of SelectSpeak's independently developed implementation.

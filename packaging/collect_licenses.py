@@ -6,14 +6,9 @@ import sys
 from pathlib import Path
 
 PACKAGES = (
-    "certifi",
-    "huggingface-hub",
-    "numpy",
-    "onnxruntime",
     "pillow",
     "pystray",
     "pywin32",
-    "supertonic",
 )
 LICENSE_NAMES = ("license", "copying", "notice")
 

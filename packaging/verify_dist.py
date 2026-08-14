@@ -19,6 +19,10 @@ FORBIDDEN_BUNDLED_DEPENDENCIES = {
     "hf_xet.pyd",
     "mfc140u.dll",
     "win32ui.pyd",
+    "numpy",
+    "numpy.libs",
+    "onnxruntime",
+    "supertonic",
 }
 
 

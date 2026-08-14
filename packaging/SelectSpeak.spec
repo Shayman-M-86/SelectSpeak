@@ -13,9 +13,13 @@ analysis = Analysis(
         "pythoncom",
         "pywintypes",
         "win32com.client",
-        "onnxruntime.capi._pybind_state",
     ],
     excludes=[
+        # The neural engine is installed later as a versioned dependency layer.
+        "huggingface_hub",
+        "numpy",
+        "onnxruntime",
+        "supertonic",
         # SelectSpeak consumes Supertonic waveforms directly. Its save_audio()
         # helper is the only path that needs soundfile/libsndfile/cffi.
         "_soundfile",
@@ -42,11 +46,15 @@ analysis = Analysis(
 
 def keep_optional_artifact(entry):
     name = entry[0].replace("\\", "/").casefold()
+    basename = name.rsplit("/", 1)[-1]
     return not (
-        name == "_soundfile.pyd"
+        basename == "_soundfile.pyd"
         or name.startswith("_soundfile_data/")
-        or name == "hf_xet.pyd"
+        or basename == "hf_xet.pyd"
         or name.startswith("hf_xet/")
+        or basename == "mfc140u.dll"
+        or basename == "win32ui.pyd"
+        or basename.startswith("_avif.")
     )
 
 

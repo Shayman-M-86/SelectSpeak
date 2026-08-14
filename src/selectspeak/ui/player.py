@@ -369,8 +369,8 @@ class PlayerWindow(tk.Tk):
     def show_backend_loading(self, activity: str = "loading") -> None:
         if activity == "installing":
             message = (
-                "Installing Supertonic’s local voice model… "
-                "This may take a few minutes. Reading will be available when it is ready."
+                "Opening Setup to install Supertonic and its local voice model… "
+                "SelectSpeak will restart when installation finishes."
             )
         else:
             message = "Loading the voice engine… Reading will be available when it is ready."
