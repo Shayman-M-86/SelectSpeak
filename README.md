@@ -245,6 +245,7 @@ uv run ruff check .
 uv run ruff format --check .
 uv run pytest
 uv run ty check --python-platform win32
+.\build-tools\security\audit_dependencies.ps1
 uv build
 ```
 
@@ -253,6 +254,13 @@ To create the Windows application and installer:
 ```powershell
 .\build-tools\build.ps1
 ```
+
+GitHub Actions mirrors these checks on GitHub-hosted Windows runners. `CI` runs
+the lint, test, package, and dependency-security jobs for pull requests and every
+push to `main`. `Distribution` runs only when started manually, performs the
+complete build and installer smoke test, and retains the unsigned Setup,
+checksum, and optional Supertonic archives as one workflow artifact. It does not
+publish a release or sign files.
 
 This rebuilds and stages only the SelectSpeak native bridge, collects third-party
 notices, creates and verifies the slim PyInstaller core, builds the versioned

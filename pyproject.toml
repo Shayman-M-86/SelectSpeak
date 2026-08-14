@@ -12,7 +12,7 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
-    "pillow>=11.0",
+    "pillow>=12.3.0",
     "pystray>=0.19.5",
     "pywin32>=308; sys_platform == 'win32'",
 ]
@@ -37,6 +37,7 @@ build-backend = "hatchling.build"
 
 [dependency-groups]
 dev = [
+    "pip-audit>=2.10.0",
     "pyinstaller>=6.16",
     "pytest>=8.4",
     "ruff>=0.12",

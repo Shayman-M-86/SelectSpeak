@@ -51,8 +51,7 @@ def main() -> None:
     bundled_dependency_leaks = [
         path
         for path in root.rglob("*")
-        if path.name.casefold() in FORBIDDEN_BUNDLED_DEPENDENCIES
-        or path.name.casefold().startswith("_avif.")
+        if path.name.casefold() in FORBIDDEN_BUNDLED_DEPENDENCIES or path.name.casefold().startswith("_avif.")
     ]
     if bundled_dependency_leaks:
         raise SystemExit(f"Excluded dependency content found: {bundled_dependency_leaks}")

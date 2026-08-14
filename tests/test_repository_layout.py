@@ -2,6 +2,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parents[1]
 BUILD_TOOLS_ROOT = PROJECT_ROOT / "build-tools"
+WORKFLOWS_ROOT = PROJECT_ROOT / ".github" / "workflows"
 
 BUILD_GROUPS = {
     "app": {
@@ -13,6 +14,7 @@ BUILD_GROUPS = {
     "installer": {"SelectSpeak.iss", "build_installer.ps1", "smoke_test.ps1"},
     "native": {"build.ps1", "build_helpers.ps1"},
     "runtime": {"install_speech_runtime.ps1"},
+    "security": {"README.md", "audit_dependencies.ps1"},
     "supertonic": {"build_payload.py", "install_payload.ps1"},
     "tools": {
         "collect_licenses.py",
@@ -54,3 +56,10 @@ def test_root_entry_points_moved_to_scripts() -> None:
     assert (PROJECT_ROOT / "scripts" / "run.vbs").is_file()
     assert not (PROJECT_ROOT / "install.ps1").exists()
     assert not (PROJECT_ROOT / "run.vbs").exists()
+
+
+def test_github_workflows_cover_release_quality_gates() -> None:
+    assert {path.name for path in WORKFLOWS_ROOT.glob("*.yml")} == {
+        "ci.yml",
+        "distribution.yml",
+    }

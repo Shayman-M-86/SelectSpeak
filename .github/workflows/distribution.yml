@@ -1,0 +1,75 @@
+name: Distribution
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: distribution-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows-distribution:
+    name: Build unsigned Windows distribution
+    runs-on: windows-2022
+    timeout-minutes: 75
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.28"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install Python
+        run: uv python install 3.13
+
+      - name: Restore locked dependencies
+        run: uv sync --locked --extra supertonic
+
+      - name: Install pinned Inno Setup compiler
+        run: choco install innosetup --version=6.7.1 --yes --no-progress
+
+      - name: Download pinned Supertonic model
+        env:
+          MODEL_PATH: .build\supertonic-model-source
+        run: |
+          uv run python -c "import os; from supertonic.config import get_model_revision; from supertonic.loader import download_model; expected='724fb5abbf5502583fb520898d45929e62f02c0b'; actual=get_model_revision('supertonic-3'); assert actual == expected, f'Unexpected model revision: {actual}'; download_model(os.environ['MODEL_PATH'], 'supertonic-3')"
+
+      - name: Build portable app, optional payloads, and installer
+        run: .\build-tools\build.ps1 -SupertonicModelSource .\.build\supertonic-model-source
+
+      - name: Smoke-test installer lifecycle
+        run: .\build-tools\installer\smoke_test.ps1
+
+      - name: Upload unsigned distribution
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: selectspeak-windows-unsigned-${{ github.ref_name }}-${{ github.run_number }}
+          path: |
+            dist/SelectSpeak-Setup-*.exe
+            dist/SelectSpeak-Setup-*.exe.sha256
+            dist/SelectSpeak-Supertonic-Dependencies-*-win-x64.zip
+            dist/SelectSpeak-Supertonic-Model-*.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+      - name: Upload build diagnostics after failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: distribution-diagnostics-${{ github.run_id }}
+          path: |
+            .build/pyinstaller
+            .build/supertonic-frozen-probe.json
+          if-no-files-found: ignore
+          retention-days: 14

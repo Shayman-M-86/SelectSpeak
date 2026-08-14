@@ -1,7 +1,8 @@
 # Release checklist
 
-This checklist covers local release preparation. The trusted hosted build and
-code-signing workflow will be added separately.
+This checklist covers local release preparation and the trusted GitHub-hosted
+unsigned distribution build. Code signing and release publication remain
+separate approval steps.
 
 ## Repository
 
@@ -14,6 +15,8 @@ code-signing workflow will be added separately.
 ## Verification
 
 - [ ] Run Ruff lint and format checks, pytest, ty, and `uv build`.
+- [ ] Run `build-tools\security\audit_dependencies.ps1` and review its reports.
+- [ ] Confirm both jobs in the GitHub `CI` workflow pass.
 - [ ] Build and run the native tests.
 - [ ] Build the portable directory and installer from a clean checkout.
 - [ ] Confirm SelectSpeak-owned EXE and DLL product names and versions agree.
@@ -24,6 +27,10 @@ code-signing workflow will be added separately.
 ## Unsigned release
 
 - [ ] Publish the version tag.
+- [ ] Manually start `Distribution` from the intended version commit.
+- [ ] Confirm it completed on a GitHub-hosted Windows runner and passed its
+      installer smoke test.
+- [ ] Download and inspect the unsigned distribution workflow artifact.
 - [ ] Upload Setup, its `.sha256` file, and both matching Supertonic archives.
 - [ ] Mark the release and installer as unsigned until signing is operational.
 - [ ] Document functionality, requirements, downloads, known limitations, and
