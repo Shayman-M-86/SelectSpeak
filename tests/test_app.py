@@ -1,7 +1,7 @@
 from collections.abc import Callable
 
-from selectspeak import app as app_module
-from selectspeak.app import (
+from selectspeak.app import application as app_module
+from selectspeak.app.application import (
     SelectSpeakApp,
     confirm_supertonic_install,
     is_repeat_of_active_speech,
@@ -65,12 +65,8 @@ def test_hotkey_uses_speech_state_at_activation_before_capture_delay() -> None:
 
 
 def test_clipboard_speech_stops_before_selection_capture() -> None:
-    assert should_stop_clipboard_speech_immediately(
-        speaking=True, source="clipboard_fallback"
-    )
-    assert not should_stop_clipboard_speech_immediately(
-        speaking=True, source="selection"
-    )
+    assert should_stop_clipboard_speech_immediately(speaking=True, source="clipboard_fallback")
+    assert not should_stop_clipboard_speech_immediately(speaking=True, source="selection")
 
 
 def test_delayed_clipboard_fallback_stops_speech_active_at_keypress() -> None:

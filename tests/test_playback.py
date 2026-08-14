@@ -17,9 +17,7 @@ def test_completion_releases_waiter() -> None:
     request, _active = playback.submit("Read this")
     assert playback.begin(request.generation)
     result: list[bool] = []
-    waiter = threading.Thread(
-        target=lambda: result.append(playback.wait_until_done(request.generation))
-    )
+    waiter = threading.Thread(target=lambda: result.append(playback.wait_until_done(request.generation)))
     waiter.start()
 
     playback.complete(request.generation)

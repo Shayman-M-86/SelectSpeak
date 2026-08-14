@@ -7,14 +7,11 @@ from typing import Any
 
 import pytest
 from PIL import Image, ImageDraw, ImageFont
-
 from selectspeak.input import ocr_capture
 from selectspeak.input.ocr_capture import OcrCaptureHotkey
 from selectspeak.native import get_native_bridge
 
-RUNTIME_OCR_DLL = (
-    Path(__file__).parents[1] / ".runtime" / "native" / "selectspeak_native.dll"
-)
+RUNTIME_OCR_DLL = Path(__file__).parents[1] / ".runtime" / "native" / "selectspeak_native.dll"
 _OCR_TEST_CALLBACK = ctypes.CFUNCTYPE(
     None,
     ctypes.c_wchar_p,
@@ -25,9 +22,7 @@ _OCR_TEST_CALLBACK = ctypes.CFUNCTYPE(
 
 def _recognize_image(image: Image.Image) -> tuple[int, list[tuple[int, str]]]:
     results: list[tuple[int, str]] = []
-    callback = _OCR_TEST_CALLBACK(
-        lambda text, status, _context: results.append((status, text or ""))
-    )
+    callback = _OCR_TEST_CALLBACK(lambda text, status, _context: results.append((status, text or "")))
     dll = get_native_bridge(str(RUNTIME_OCR_DLL)).library
     dll.ss_ocr_recognize_bgra.argtypes = [
         ctypes.POINTER(ctypes.c_ubyte),

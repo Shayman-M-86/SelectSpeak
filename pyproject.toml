@@ -3,7 +3,14 @@ name = "selectspeak"
 version = "0.1.0"
 description = "Read selected Windows text aloud with a global hotkey."
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.11"
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+]
 dependencies = [
     "pillow>=11.0",
     "pystray>=0.19.5",
@@ -16,7 +23,13 @@ supertonic = [
 ]
 
 [project.scripts]
-selectspeak = "selectspeak:main"
+selectspeak = "selectspeak.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/Shayman-M-86/my-TTS"
+Issues = "https://github.com/Shayman-M-86/my-TTS/issues"
+Privacy = "https://github.com/Shayman-M-86/my-TTS/blob/main/PRIVACY.md"
+Security = "https://github.com/Shayman-M-86/my-TTS/security/policy"
 
 [build-system]
 requires = ["hatchling"]
@@ -38,8 +51,11 @@ line-length = 110
 select = ["E", "F", "I", "UP"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/selectspeak"]
+packages = ["src/python/selectspeak"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = ["src/python"]
 testpaths = ["tests"]
+
+[tool.ty.environment]
+root = ["./src/python"]

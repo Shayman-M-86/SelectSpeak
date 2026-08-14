@@ -1,0 +1,23 @@
+SelectSpeak installation and privacy notice
+
+SelectSpeak processes selected text, clipboard text, OCR images, and speech on
+this computer. It does not send that content to the SelectSpeak project and does
+not include advertising, analytics, telemetry, or automatic log uploads.
+
+Setup downloads pinned Microsoft Speech SDK runtime components from NuGet.org
+and installs three DLLs inside the SelectSpeak application folder. It does not
+install a system-wide Speech SDK.
+
+If you select the optional Supertonic Neural Voice component, Setup installs
+approximately 475 MB of local dependencies and model data. Hash-verified files
+are used from beside Setup when available; otherwise they are downloaded from
+the matching SelectSpeak GitHub release. Selecting Supertonic later may reopen
+this same installer.
+
+The standard installation writes the application under your Local AppData
+Programs folder. Settings, local logs, and optional models are stored under
+Local AppData\SelectSpeak. Normal uninstall preserves that user-data folder so
+upgrades do not erase settings or models; it can be removed manually.
+
+Full policy:
+https://github.com/Shayman-M-86/my-TTS/blob/main/PRIVACY.md

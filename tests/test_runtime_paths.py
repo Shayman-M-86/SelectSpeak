@@ -1,6 +1,10 @@
 from pathlib import Path
 
-from selectspeak import runtime_paths
+from selectspeak.config import paths as runtime_paths
+
+
+def test_development_app_directory_is_the_repository_root() -> None:
+    assert runtime_paths.app_dir() == Path(__file__).resolve().parents[1]
 
 
 def test_user_paths_live_under_local_app_data(

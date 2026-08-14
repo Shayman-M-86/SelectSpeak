@@ -2,7 +2,6 @@ from typing import Any
 
 import numpy as np
 import pytest
-
 from selectspeak.config import AppConfig
 from selectspeak.speech.backends.supertonic import (
     SupertonicSpeaker,
@@ -53,9 +52,7 @@ def test_estimated_boundaries_handle_empty_inputs(text: str, duration: float) ->
 
 def test_edge_silence_is_trimmed_with_small_safety_padding() -> None:
     sample_rate = 1000
-    audio = np.concatenate(
-        (np.zeros(400), np.full(500, 0.5), np.zeros(600))
-    ).astype(np.float32)
+    audio = np.concatenate((np.zeros(400), np.full(500, 0.5), np.zeros(600))).astype(np.float32)
 
     normalized, leading, spoken = normalize_edge_silence(audio, sample_rate)
 
@@ -145,12 +142,8 @@ def test_supertonic_uses_one_stream_and_only_pauses_at_sentence_boundaries() -> 
     assert len(synthesis_events) == 2
     assert [event for event, _ in player.events].count("start") == 1
     assert [event for event, _ in player.events].count("finish") == 1
-    assert [value for event, value in player.events if event == "silence"] == [
-        pytest.approx(0.1)
-    ]
-    first_feed = next(
-        index for index, (event, _) in enumerate(player.events) if event == "feed"
-    )
+    assert [value for event, value in player.events if event == "silence"] == [pytest.approx(0.1)]
+    first_feed = next(index for index, (event, _) in enumerate(player.events) if event == "feed")
     assert first_feed < len(player.events) - 1
 
 

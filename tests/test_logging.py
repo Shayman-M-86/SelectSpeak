@@ -2,7 +2,11 @@ import json
 import logging
 
 from selectspeak.config import AppConfig
-from selectspeak.logging_setup import JsonLineFormatter, configure_logging
+from selectspeak.infrastructure.logging import JsonLineFormatter, configure_logging
+
+
+def test_logging_is_disabled_by_default() -> None:
+    assert not AppConfig().logging_enabled
 
 
 def test_json_line_formatter_emits_record_metadata() -> None:

@@ -2,13 +2,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-
-from selectspeak import native
 from selectspeak.native import (
     NativeBridge,
     NativeBridgeError,
     find_native_dll,
 )
+from selectspeak.native import bindings as native
 
 
 def test_find_native_dll_accepts_an_explicit_path(tmp_path: Path) -> None:
@@ -24,7 +23,7 @@ def test_find_native_dll_reports_build_guidance(
     monkeypatch.delenv("SELECTSPEAK_NATIVE_DLL", raising=False)
     monkeypatch.setattr(Path, "is_file", lambda _path: False)
 
-    with pytest.raises(NativeBridgeError, match="native/build.ps1"):
+    with pytest.raises(NativeBridgeError, match="build-tools/native/build.ps1"):
         find_native_dll("Z:/not-present/selectspeak_native.dll")
 
 

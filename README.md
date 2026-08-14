@@ -7,6 +7,10 @@ replay, clipboard mode, word highlighting, and hotkey rebinding. Global
 shortcut registration, selection capture, and shortcut recording are handled
 by a small native Windows bridge.
 
+Project policies: [privacy](PRIVACY.md), [security](SECURITY.md),
+[contributing](CONTRIBUTING.md), [code of conduct](CODE_OF_CONDUCT.md), and
+[code signing](docs/CODE_SIGNING_POLICY.md).
+
 ## Requirements
 
 - 64-bit Windows 10 version 1809 or later, or Windows 11
@@ -25,7 +29,9 @@ to `%LOCALAPPDATA%\Programs\SelectSpeak`, adds it to the Start Menu, and offers
 optional desktop and sign-in startup shortcuts. SelectSpeak can be launched at
 the end of the installation. An internet connection is required: setup uses its
 pinned NuGet client to install the Microsoft Speech SDK runtime into
-`SelectSpeak\native` before the application is launched.
+`SelectSpeak\native` before the application is launched. Before files are
+installed, Setup displays a notice describing this download, optional
+Supertonic downloads, local data storage, and the privacy policy.
 
 The standard installation leaves the neural Python stack and model out. Choose
 the optional **Supertonic Neural Voice** component for a full installation. If
@@ -74,7 +80,7 @@ manually when a complete data reset is wanted.
 Open PowerShell in the project folder and run:
 
 ```powershell
-.\install.ps1
+.\scripts\install.ps1
 ```
 
 This developer setup script requires WinGet. It provisions `uv`, a managed
@@ -87,58 +93,44 @@ when updating an existing installation.
 To install, start SelectSpeak, and add it to Windows startup in one command:
 
 ```powershell
-.\install.ps1 -Launch -AddToStartup
+.\scripts\install.ps1 -Launch -AddToStartup
 ```
 
-Use `-SkipNaturalVoice` only if you want the SAPI fallback without the optional
-direct Natural Voice bridge. Use `-SkipSupertonicModel` to defer the model
-download until Supertonic is first selected. Use `-SkipChecks` to omit developer
-checks during installation.
+This developer setup script requires WinGet. It provisions uv, a managed Python 3.13 installation, all required Python packages, Visual C++ Build Tools and CMake when needed, and builds the native bridge. It also downloads the local Supertonic ONNX voice model, then verifies the installation by running the test, lint, and type-check suites. The script is safe to run again when updating an existing installation.
 
-The input bridge tries UI Automation first, then uses `SendInput`, clipboard
-sequence polling, and an eager multi-format clipboard snapshot as its fallback.
-The normal capture and OCR shortcuts share one native message thread. OCR owns
-only the frozen-screen selector and Windows' local recognition work. The bridge
-uses `RegisterHotKey` during normal operation and installs a low-level keyboard
-hook only while recording a new shortcut.
+To install SelectSpeak, launch it, and add it to Windows startup in one command:
 
-Set `SELECTSPEAK_NATIVE_DLL` to use the unified native DLL at another location.
+.\scripts\install.ps1 -Launch -AddToStartup
 
-### Direct Natural Voice backend
+Use -SkipNaturalVoice if you only want the SAPI backend and do not want to build the optional direct Natural Voice integration. Use -SkipSupertonicModel to defer downloading the model until Supertonic is first selected. Use -SkipChecks to omit developer checks during installation.
 
-The in-house bridge bypasses SAPI and streams PCM plus exact word-boundary
-events from Microsoft's embedded Speech SDK. The root installer builds this
-bridge by default. Compatible Narrator Natural Voices installed through Windows
-Settings are discovered dynamically; otherwise SelectSpeak automatically falls
-back to SAPI.
-The bridge reads the credential matching the current Windows speech runtime in
-memory, so newly installed compatible voice-package versions can be discovered
-and probed without accepting configured credentials or hard-coding a legacy
-credential in SelectSpeak.
+The input bridge attempts UI Automation first, then falls back to SendInput, clipboard sequence polling, and an eager multi-format clipboard snapshot. Normal text capture and OCR shortcuts share a single native message thread. OCR is responsible only for the frozen-screen selector and Windows' local text-recognition functionality. The bridge uses RegisterHotKey during normal operation and temporarily installs a low-level keyboard hook only while recording a new shortcut.
 
-`AppConfig.speech_backend` defaults to `"auto"`: SelectSpeak uses the bridge
-when it is present and usable, otherwise it retains the current SAPI backend.
-Set it to `"natural"` to require the bridge, `"sapi"` to disable it, or
-`"supertonic"` to start with the neural engine selected. You may also set
-`AppConfig.native_dll` can also point to an alternate unified DLL path.
+Set SELECTSPEAK_NATIVE_DLL to use the unified native DLL from another location.
 
-Supertonic defaults to its `F4` voice at 8 inference steps. The voice,
-language, quality steps, and speed are configurable through the
-`supertonic_voice`, `supertonic_language`, `supertonic_steps`, and
-`supertonic_speed` fields in `AppConfig`.
+Direct Natural Voice backend
 
-This depends on an unofficial, version-sensitive interface to Microsoft's
-installed voice packages. The build pins Speech SDK 1.41.1 for compatibility;
-the SDK and voice-model redistribution terms are separate from this project's
-source license. See `native/natural_voice/THIRD_PARTY_NOTICES.md`.
+SelectSpeak includes an optional native backend for compatible Microsoft Narrator Natural Voices. It communicates directly with Microsoft's locally installed speech components, allowing SelectSpeak to stream PCM audio and receive accurate word-boundary events without routing synthesis through SAPI.
+
+The development setup builds this backend by default. Compatible Natural Voices installed through Windows Settings are discovered dynamically. If the backend or a compatible voice is unavailable, SelectSpeak automatically falls back to SAPI.
+
+To remain compatible with different installed Windows speech-runtime and voice-package versions, the bridge obtains the runtime information required by Microsoft's locally installed speech components from the installed speech extension at runtime. The bridge keeps this information in memory only; it does not persist, log, upload, or transmit it. The backend does not require the user to supply external speech-service credentials.
+
+This integration uses internal, version-sensitive Windows speech interfaces rather than a stable public Microsoft API. It may require maintenance when Microsoft changes the speech runtime or voice-package implementation.
+
+AppConfig.speech_backend defaults to "auto": SelectSpeak uses the Natural Voice backend when it is available and compatible, otherwise it uses SAPI. Set it to "natural" to require the Natural Voice backend, "sapi" to disable it, or "supertonic" to start with the neural engine selected. AppConfig.native_dll can also point to an alternate unified DLL path.
+
+Supertonic defaults to its F4 voice at 8 inference steps. Voice, language, quality steps, and speed can be configured through the supertonic_voice, supertonic_language, supertonic_steps, and supertonic_speed fields in AppConfig.
+
+The Natural Voice integration currently targets Speech SDK 1.41.1 for compatibility with the supported Windows speech components. Microsoft Speech SDK and voice-package licensing terms are separate from this project's source license. See src/native/natural_voice/THIRD_PARTY_NOTICES.md.
 
 ## Development run
 
-Double-click `run.vbs` to launch without a console window. It uses the
-project-local Python environment created by `install.ps1`, so `uv` does not
+Double-click `scripts/run.vbs` to launch without a console window. It uses the
+project-local Python environment created by `scripts/install.ps1`, so `uv` does not
 need to be on the launcher's `PATH`.
 
-Developers can also run `uv run main.py` or `uv run selectspeak`.
+Developers can also run `uv run python -m selectspeak` or `uv run selectspeak`.
 
 Press `Alt+D` to freeze the current desktop and drag around text. SelectSpeak
 recognizes the selected pixels locally with `Windows.Media.Ocr`, passes the text
@@ -156,12 +148,12 @@ speech normalization, giving the chunker meaningful structural boundaries.
 ## Start automatically
 
 Select **Start SelectSpeak when I sign in** while running the Windows installer.
-For a developer checkout, pass `-AddToStartup` to `install.ps1`. To remove that
+For a developer checkout, pass `-AddToStartup` to `scripts/install.ps1`. To remove that
 development shortcut later,
 run:
 
 ```powershell
-.\install.ps1 -RemoveFromStartup
+.\scripts\install.ps1 -RemoveFromStartup
 ```
 
 ## Controls
@@ -191,7 +183,7 @@ run:
 
 ## Text processing
 
-Before speech starts, `text_processing.py` converts copied structure into
+Before speech starts, the speech-normalization pipeline converts copied structure into
 speech-friendly prose. It removes Markdown link destinations while keeping
 their labels, shortens long filesystem paths to their filenames, separates
 bulleted and numbered points with sentence pauses, strengthens semicolon
@@ -228,7 +220,7 @@ starting it again; closing the player window only hides the existing process.
 
 ## Debug log
 
-Logging is controlled by `AppConfig` in `src/selectspeak/config.py` and writes to
+Logging is controlled by `AppConfig` in `src/python/selectspeak/config/models.py` and writes to
 `%LOCALAPPDATA%\SelectSpeak\logs\selectspeak.log` by default. The entry point
 configures logging once; individual modules use their ordinary
 `logging.getLogger(__name__)` logger and let records propagate to that central
@@ -237,13 +229,14 @@ handler.
 The structured JSON Lines diagnostic switch is:
 
 ```python
-logging_enabled: bool = True
+logging_enabled: bool = False
 log_file: str = ""  # defaults to %LOCALAPPDATA%\SelectSpeak\logs\selectspeak.log
 ```
 
-The diagnostic log can contain selected or clipboard text previews, so treat
-it as potentially sensitive. Set `logging_enabled` back to `False` when the
-trace is complete.
+Logging is disabled for a new profile. If enabled for troubleshooting, the
+diagnostic log can contain selected or clipboard text previews, so treat it as
+potentially sensitive and disable it again when the trace is complete. Logs are
+stored locally and are never uploaded automatically.
 
 ## Development
 
@@ -258,7 +251,7 @@ uv build
 To create the Windows application and installer:
 
 ```powershell
-.\packaging\build.ps1
+.\build-tools\build.ps1
 ```
 
 This rebuilds and stages only the SelectSpeak native bridge, collects third-party
@@ -283,8 +276,8 @@ When the installer-source folder already exists, the installer alone can be rebu
 tested with:
 
 ```powershell
-.\packaging\build_installer.ps1
-.\packaging\smoke_test_installer.ps1
+.\build-tools\installer\build_installer.ps1
+.\build-tools\installer\smoke_test.ps1
 ```
 
 The smoke test uses an isolated installation directory, starts the installed
@@ -294,43 +287,56 @@ that its isolated user settings remain intact.
 ## Project structure
 
 ```text
-install.ps1                 Complete first-time setup and upgrade script
-main.py                     Root entry point
-run.vbs                     Console-free launcher using the local environment
-src/selectspeak/app.py      Application lifecycle and coordination
-src/selectspeak/native.py   Versioned owner for the single native DLL
-src/selectspeak/input/      Capture, clipboard, hotkeys, and native input
-src/selectspeak/speech/     Speech contracts, processing, and playback
-src/selectspeak/speech/backends/
-                            SAPI, Natural Voice, and Supertonic adapters
-src/selectspeak/ui/         Player window, diagnostics, theme, and tray
-native/CMakeLists.txt       One DLL target with a small namespaced C ABI
-native/build.ps1            Native build; -DevRuntime stages local SDK DLLs
-native/natural_voice/       Natural Voice implementation module
-native/input/input_bridge.cpp
-                            Stable C ABI forwarding layer
-native/input/input_runtime.h
-                            Internal interface shared with OCR
-native/input/hotkeys/      Message window, hotkeys, input lifecycle,
-                            and shortcut recording
-native/input/selection/    UI Automation and clipboard selection capture
-native/input/ocr/          Windows OCR selection and layout reconstruction
-native/build_helpers.ps1    Shared C++ toolchain discovery and installation
-packaging/SelectSpeak.spec  PyInstaller onedir definition
-packaging/SelectSpeak.iss   Per-user Inno Setup installer definition
-packaging/build.ps1         Portable and installer release build
-packaging/build_installer.ps1
-                            Installer compiler and checksum generation
-packaging/build_supertonic_payload.py
-                            Versioned optional dependency and model archives
-packaging/install_supertonic_payload.ps1
-                            Atomic installer-time optional payload deployment
-packaging/smoke_test_installer.ps1
-                            Install, upgrade, startup, and uninstall test
-packaging/stage_native.ps1  Stages only the SelectSpeak-owned native bridge
-packaging/install_speech_runtime.ps1
-                            Installer-time pinned NuGet runtime deployment
+src/                        Product source, grouped by implementation language
+├── python/selectspeak/     Installable Python application package and entry point
+│   ├── app/                Application lifecycle and startup coordination
+│   ├── audio/              Playback-session coordination
+│   ├── config/             Configuration models, settings, and runtime paths
+│   ├── infrastructure/     Cross-cutting logging infrastructure
+│   ├── native/             Python bindings for the unified native bridge
+│   ├── input/              Capture, clipboard, hotkeys, and OCR integration
+│   ├── speech/             Speech contracts, engines, processing, and playback
+│   └── ui/                 Player window, diagnostics, theme, and tray
+└── native/                 C++ bridge source, CMake project, input, and voices
+
+build-tools/                Source-controlled build and release tooling
+├── build.ps1               Complete Windows release entry point
+├── app/                    PyInstaller definition and Windows app metadata
+├── installer/              Inno Setup definition, compiler wrapper, smoke test
+├── native/                 Native build and toolchain scripts
+├── runtime/                Installer-time Microsoft Speech runtime deployment
+├── supertonic/             Optional dependency/model payload tooling
+└── tools/                  Staging, notices, icons, and verification utilities
+
+scripts/                    Developer and user convenience launchers
+├── install.ps1             Complete development setup and upgrade script
+└── run.vbs                 Console-free development launcher
+
+docs/                       Engineering, release, signing, and installer notices
+.build/                     Ignored generated intermediate files
+dist/                       Ignored distributable applications and installers
 ```
+
+## Privacy and security
+
+Selected text, clipboard contents, OCR images, and generated speech remain on
+the local computer. SelectSpeak has no telemetry or advertising. Setup makes
+disclosed network requests for its pinned Microsoft Speech runtime and, when
+selected, optional Supertonic files. See the full [privacy policy](PRIVACY.md)
+and [security policy](SECURITY.md).
+
+## Code signing policy
+
+The project's roles, release rules, privacy reference, and current signing
+status are documented in the [code signing policy](docs/CODE_SIGNING_POLICY.md).
+SelectSpeak is not yet claiming that its releases are signed. If enrollment is
+approved, signed releases will carry the statement: “Free code signing provided
+by SignPath.io, certificate by SignPath Foundation.”
+
+## License
+
+SelectSpeak is released under the [MIT License](LICENSE). Third-party components
+and models remain subject to their respective licences and notices.
 
 ## Acknowledgements
 

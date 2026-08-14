@@ -6,9 +6,7 @@ from selectspeak.speech.segments import AdaptiveSpeechChunker, split_speech_segm
 
 
 def test_prepare_for_speech_turns_each_copied_line_into_a_pause() -> None:
-    assert prepare_for_speech("  hello\r\n   there\nfriend  ") == (
-        "hello.\nthere.\nfriend."
-    )
+    assert prepare_for_speech("  hello\r\n   there\nfriend  ") == ("hello.\nthere.\nfriend.")
 
 
 def test_prepare_for_speech_accepts_empty_text() -> None:
@@ -58,10 +56,7 @@ def test_prepare_for_speech_structures_bullet_points_and_semicolons() -> None:
 • Deploy the build"""
 
     assert prepare_for_speech(text) == (
-        "Tasks:\n"
-        "• Start the server.\n"
-        "• Run the tests. inspect the logs.\n"
-        "• Deploy the build."
+        "Tasks:\n• Start the server.\n• Run the tests. inspect the logs.\n• Deploy the build."
     )
 
 
@@ -70,21 +65,15 @@ def test_prepare_for_speech_structures_numbered_points() -> None:
 2) Run the checks
 3. Publish the result"""
 
-    assert prepare_for_speech(text) == (
-        "1. Build the package.\n2. Run the checks.\n3. Publish the result."
-    )
+    assert prepare_for_speech(text) == ("1. Build the package.\n2. Run the checks.\n3. Publish the result.")
 
 
 def test_prepare_for_speech_recovers_flattened_unicode_bullets() -> None:
-    assert prepare_for_speech("Checks: • Lint • Test • Build") == (
-        "Checks:\n• Lint.\n• Test.\n• Build."
-    )
+    assert prepare_for_speech("Checks: • Lint • Test • Build") == ("Checks:\n• Lint.\n• Test.\n• Build.")
 
 
 def test_prepare_for_speech_turns_paragraph_breaks_into_pauses() -> None:
-    assert prepare_for_speech("First thought\n\nSecond thought") == (
-        "First thought.\n\nSecond thought."
-    )
+    assert prepare_for_speech("First thought\n\nSecond thought") == ("First thought.\n\nSecond thought.")
 
 
 def test_prepare_for_speech_structures_plain_multiline_validation() -> None:
@@ -162,9 +151,7 @@ def test_prepare_for_speech_strips_markdown_heading_and_structures_bullets() -> 
 - Studio tests: 55 passed"""
 
     assert prepare_for_speech(text) == (
-        "Validation.\n\n"
-        "• Backend focused suite: 30 passed.\n"
-        "• Studio tests: 55 passed."
+        "Validation.\n\n• Backend focused suite: 30 passed.\n• Studio tests: 55 passed."
     )
 
 
@@ -177,9 +164,7 @@ def test_strip_display_bullet_prefix_preserves_highlight_offset() -> None:
 
 
 def test_prepare_for_speech_removes_rich_clipboard_object_markers() -> None:
-    assert prepare_for_speech("First point.\n\ufffc\nSecond point.") == (
-        "First point.\nSecond point."
-    )
+    assert prepare_for_speech("First point.\n\ufffc\nSecond point.") == ("First point.\nSecond point.")
 
 
 def test_speech_segments_split_sentences_and_preserve_display_offsets() -> None:
@@ -193,10 +178,7 @@ def test_speech_segments_split_sentences_and_preserve_display_offsets() -> None:
         "Third point.",
         "Fourth sentence?",
     ]
-    displayed_segments = [
-        text[segment.offset : segment.offset + len(segment.text)]
-        for segment in segments
-    ]
+    displayed_segments = [text[segment.offset : segment.offset + len(segment.text)] for segment in segments]
     assert displayed_segments == [
         "First sentence.",
         "Second sentence!",
@@ -235,9 +217,7 @@ def test_adaptive_chunker_combines_a_tiny_opener_with_the_next_thought() -> None
     second = chunker.next_chunk(target_characters=300)
 
     assert first is not None
-    assert first.text == (
-        "Hi there. This next sentence is deliberately much longer than the first."
-    )
+    assert first.text == ("Hi there. This next sentence is deliberately much longer than the first.")
     assert second is None
 
 
@@ -259,17 +239,13 @@ def test_adaptive_chunker_prefers_punctuation_regardless_of_runway() -> None:
 
 
 def test_adaptive_chunker_groups_later_complete_sentences() -> None:
-    chunker = AdaptiveSpeechChunker(
-        "First sentence. Second sentence. Third sentence. Fourth sentence."
-    )
+    chunker = AdaptiveSpeechChunker("First sentence. Second sentence. Third sentence. Fourth sentence.")
 
     first = chunker.next_chunk(target_characters=100)
     later = chunker.next_chunk(target_characters=25)
 
     assert first is not None
-    assert first.text == (
-        "First sentence. Second sentence. Third sentence. Fourth sentence."
-    )
+    assert first.text == ("First sentence. Second sentence. Third sentence. Fourth sentence.")
     assert later is None
 
 

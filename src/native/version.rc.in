@@ -1,0 +1,30 @@
+#include <windows.h>
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION @SELECTSPEAK_VERSION_COMMAS@,0
+ PRODUCTVERSION @SELECTSPEAK_VERSION_COMMAS@,0
+ FILEFLAGSMASK 0x3fL
+ FILEFLAGS 0x0L
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_DLL
+ FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "SelectSpeak Project\0"
+            VALUE "FileDescription", "SelectSpeak native bridge\0"
+            VALUE "FileVersion", "@SELECTSPEAK_VERSION@\0"
+            VALUE "InternalName", "selectspeak_native\0"
+            VALUE "LegalCopyright", "Copyright (c) 2026 SelectSpeak contributors\0"
+            VALUE "OriginalFilename", "selectspeak_native.dll\0"
+            VALUE "ProductName", "SelectSpeak\0"
+            VALUE "ProductVersion", "@SELECTSPEAK_VERSION@\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END

@@ -12,7 +12,7 @@ env/
 venv/
 
 # Build and tool output
-build/
+.build/
 dist/
 .coverage
 .pytest_cache/

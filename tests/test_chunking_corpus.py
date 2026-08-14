@@ -49,18 +49,14 @@ def simulate_chunks(text: str) -> tuple[str, list[SpeechSegment], list[int]]:
 
 
 def _canonical_spoken_text(text: str) -> str:
-    without_display_bullets = re.sub(
-        rf"(?m)^{re.escape(DISPLAY_BULLET_PREFIX)}", "", text
-    )
+    without_display_bullets = re.sub(rf"(?m)^{re.escape(DISPLAY_BULLET_PREFIX)}", "", text)
     return " ".join(without_display_bullets.split())
 
 
 def test_chunking_corpus_contains_one_hundred_distinct_examples() -> None:
     examples = load_chunking_examples()
 
-    assert [identifier for identifier, _ in examples] == [
-        f"{index:03d}" for index in range(1, 101)
-    ]
+    assert [identifier for identifier, _ in examples] == [f"{index:03d}" for index in range(1, 101)]
     assert len({text for _, text in examples}) == 100
 
 
@@ -77,9 +73,7 @@ def test_chunking_corpus_preserves_text_and_safe_sizes() -> None:
             problems.append(f"{identifier}: produced no chunks")
             continue
         if max(len(chunk.text) for chunk in chunks) > HARD_MAX_CHUNK_CHARACTERS:
-            problems.append(
-                f"{identifier}: exceeded {HARD_MAX_CHUNK_CHARACTERS} chars"
-            )
+            problems.append(f"{identifier}: exceeded {HARD_MAX_CHUNK_CHARACTERS} chars")
         if "\n" not in prepared and len(prepared) > HARD_MAX_CHUNK_CHARACTERS:
             first_length = len(chunks[0].text)
             if first_length < MIN_STARTUP_CHUNK_CHARACTERS:
@@ -87,9 +81,7 @@ def test_chunking_corpus_preserves_text_and_safe_sizes() -> None:
         elif len(prepared) > HARD_MAX_CHUNK_CHARACTERS:
             first_line = prepared.splitlines()[0].removeprefix(DISPLAY_BULLET_PREFIX)
             if chunks[0].text != first_line:
-                problems.append(
-                    f"{identifier}: tiny start was not an intentional line boundary"
-                )
+                problems.append(f"{identifier}: tiny start was not an intentional line boundary")
         if targets != sorted(targets):
             problems.append(f"{identifier}: targets did not grow ({targets})")
 
@@ -110,11 +102,7 @@ def test_chunking_corpus_uses_whitespace_only_without_safe_punctuation() -> None
                 start, min(len(prepared), start + HARD_MAX_CHUNK_CHARACTERS)
             )
             if index == 0:
-                marks = [
-                    position
-                    for position in marks
-                    if position - start >= MIN_STARTUP_CHUNK_CHARACTERS
-                ]
+                marks = [position for position in marks if position - start >= MIN_STARTUP_CHUNK_CHARACTERS]
             if marks:
                 problems.append(
                     f"{identifier}: chunk {index + 1} ended on whitespace "

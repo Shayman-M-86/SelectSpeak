@@ -2,9 +2,8 @@ import json
 from pathlib import Path
 
 import pytest
-
 from selectspeak.config import AppConfig
-from selectspeak.settings import SETTINGS_SCHEMA_VERSION, SettingsError, SettingsStore
+from selectspeak.config.settings import SETTINGS_SCHEMA_VERSION, SettingsError, SettingsStore
 
 
 def test_settings_round_trip_every_persistent_category(tmp_path: Path) -> None:
