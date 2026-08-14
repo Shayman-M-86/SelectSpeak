@@ -2,6 +2,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+
 from selectspeak.config import AppConfig
 from selectspeak.speech.backends.supertonic import (
     SupertonicSpeaker,

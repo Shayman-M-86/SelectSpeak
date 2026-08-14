@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
+
 from selectspeak.config import AppConfig
 from selectspeak.config.settings import SETTINGS_SCHEMA_VERSION, SettingsError, SettingsStore
 

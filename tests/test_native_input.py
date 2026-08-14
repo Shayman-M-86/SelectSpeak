@@ -2,6 +2,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+
 from selectspeak.native import (
     NativeBridge,
     NativeBridgeError,

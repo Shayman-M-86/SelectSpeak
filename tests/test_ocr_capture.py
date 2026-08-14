@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 from PIL import Image, ImageDraw, ImageFont
+
 from selectspeak.input import ocr_capture
 from selectspeak.input.ocr_capture import OcrCaptureHotkey
 from selectspeak.native import get_native_bridge
