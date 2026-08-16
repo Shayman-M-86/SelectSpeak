@@ -51,6 +51,7 @@ GitHub-hosted automation lives in `.github/workflows/`:
   locked Python and NuGet dependency audits for pull requests and pushes to
   `main`. Audit reports are retained as workflow artifacts.
 - `distribution.yml` performs the complete unsigned Windows release build and
-  installer smoke test only when manually dispatched. It uploads Setup, its
-  checksum, and both matching Supertonic payload archives without publishing a
-  GitHub release.
+  installer smoke test only when manually dispatched from the matching version
+  tag. It uploads Setup, its checksum, and both matching Supertonic payload
+  archives as a workflow artifact, then creates an unsigned draft GitHub Release
+  for manual review and publication.

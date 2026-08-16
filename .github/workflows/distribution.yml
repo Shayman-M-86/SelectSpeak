@@ -15,12 +15,36 @@ jobs:
     name: Build unsigned Windows distribution
     runs-on: windows-2022
     timeout-minutes: 75
+    outputs:
+      version: ${{ steps.release_version.outputs.version }}
 
     steps:
       - name: Check out source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+
+      - name: Validate release tag
+        id: release_version
+        shell: pwsh
+        run: |
+          if ("${{ github.ref_type }}" -ne "tag") {
+            throw "Start Distribution from a version tag such as v0.1.0."
+          }
+          $metadata = Get-Content pyproject.toml -Raw
+          $match = [regex]::Match(
+            $metadata,
+            '(?m)^version\s*=\s*"(?<version>[^"]+)"'
+          )
+          if (-not $match.Success) {
+            throw "Could not read the application version from pyproject.toml."
+          }
+          $version = $match.Groups["version"].Value
+          $expectedTag = "v$version"
+          if ("${{ github.ref_name }}" -cne $expectedTag) {
+            throw "Release tag must be $expectedTag for project version $version."
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
 
       - name: Install uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
@@ -73,3 +97,86 @@ jobs:
             .build/supertonic-frozen-probe.json
           if-no-files-found: ignore
           retention-days: 14
+
+  draft-release:
+    name: Create unsigned draft release
+    needs: windows-distribution
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: write
+
+    steps:
+      - name: Download verified distribution
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ARTIFACT_NAME: selectspeak-windows-unsigned-${{ github.ref_name }}-${{ github.run_number }}
+        run: gh run download "$GITHUB_RUN_ID" --name "$ARTIFACT_NAME" --dir release-assets
+
+      - name: Create unsigned draft release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_VERSION: ${{ needs.windows-distribution.outputs.version }}
+        run: |
+          $assetRoot = Join-Path $PWD "release-assets"
+          $expectedAssets = @(
+            "SelectSpeak-Setup-$env:RELEASE_VERSION.exe",
+            "SelectSpeak-Setup-$env:RELEASE_VERSION.exe.sha256",
+            "SelectSpeak-Supertonic-Dependencies-$env:RELEASE_VERSION-win-x64.zip",
+            "SelectSpeak-Supertonic-Model-$env:RELEASE_VERSION.zip"
+          )
+          $assets = foreach ($name in $expectedAssets) {
+            $path = Join-Path $assetRoot $name
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "Release asset not found: $path"
+            }
+            (Resolve-Path -LiteralPath $path).Path
+          }
+          $unexpectedAssets = @(
+            Get-ChildItem -LiteralPath $assetRoot -File -Recurse |
+              Where-Object { $_.Name -notin $expectedAssets }
+          )
+          if ($unexpectedAssets.Count) {
+            throw "Unexpected release assets: $($unexpectedAssets.FullName -join ', ')"
+          }
+
+          & gh release view $env:RELEASE_TAG *> $null
+          if ($LASTEXITCODE -eq 0) {
+            throw "A GitHub Release already exists for $env:RELEASE_TAG."
+          }
+
+          $notes = @"
+          This is an **unsigned** SelectSpeak release. Windows may display an
+          Unknown publisher or Microsoft Defender SmartScreen warning.
+
+          SelectSpeak requires 64-bit Windows 10 version 1809 or later, or
+          Windows 11. Setup requires an internet connection for the pinned
+          Microsoft Speech SDK runtime. Supertonic is an optional local neural
+          voice component and requires its two matching ZIP assets below.
+
+          Before publishing this draft, review the generated assets and checksum,
+          complete the unsigned release checklist, and document changes and known
+          limitations. Do not describe this release as signed.
+
+          Code-signing policy:
+          https://github.com/${{ github.repository }}/blob/$env:RELEASE_TAG/docs/CODE_SIGNING_POLICY.md
+          "@
+          $notesPath = Join-Path $PWD "release-notes.md"
+          $notes | Set-Content -LiteralPath $notesPath -Encoding utf8
+
+          $arguments = @("release", "create", $env:RELEASE_TAG)
+          $arguments += $assets
+          $arguments += @(
+            "--draft",
+            "--verify-tag",
+            "--title", "SelectSpeak $env:RELEASE_VERSION (Unsigned)",
+            "--notes-file", $notesPath
+          )
+          & gh @arguments
+          if ($LASTEXITCODE) {
+            throw "Draft release creation failed with exit code $LASTEXITCODE."
+          }

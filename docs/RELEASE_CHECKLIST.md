@@ -1,8 +1,8 @@
 # Release checklist
 
 This checklist covers local release preparation and the trusted GitHub-hosted
-unsigned distribution build. Code signing and release publication remain
-separate approval steps.
+unsigned distribution build. Code signing and publication of the generated
+draft release remain separate approval steps.
 
 ## Repository
 
@@ -27,12 +27,15 @@ separate approval steps.
 ## Unsigned release
 
 - [ ] Publish the version tag.
-- [ ] Manually start `Distribution` from the intended version commit.
+- [ ] Manually start `Distribution` from the matching `v<version>` tag.
 - [ ] Confirm it completed on a GitHub-hosted Windows runner and passed its
       installer smoke test.
 - [ ] Download and inspect the unsigned distribution workflow artifact.
-- [ ] Upload Setup, its `.sha256` file, and both matching Supertonic archives.
-- [ ] Mark the release and installer as unsigned until signing is operational.
-- [ ] Document functionality, requirements, downloads, known limitations, and
-      the code signing policy on the release page.
+- [ ] Confirm the draft release contains Setup, its `.sha256` file, and both
+      matching Supertonic archives.
+- [ ] Confirm the draft release and installer are marked as unsigned until
+      signing is operational.
+- [ ] Complete the draft release notes with functionality, requirements,
+      downloads, known limitations, and the code signing policy.
+- [ ] Publish the reviewed draft release.
 - [ ] Test installation from the published assets on a clean supported system.

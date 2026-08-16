@@ -257,17 +257,19 @@ To create the Windows application and installer:
 
 GitHub Actions mirrors these checks on GitHub-hosted Windows runners. `CI` runs
 the lint, test, package, and dependency-security jobs for pull requests and every
-push to `main`. `Distribution` runs only when started manually, performs the
-complete build and installer smoke test, and retains the unsigned Setup,
-checksum, and optional Supertonic archives as one workflow artifact. It does not
-publish a release or sign files.
+push to `main`. `Distribution` runs only when started manually from the matching
+`v<version>` tag. It performs the complete build and installer smoke test,
+retains the unsigned Setup, checksum, and optional Supertonic archives as one
+workflow artifact, and creates an unsigned draft GitHub Release containing the
+same four files. Review and publish that draft manually. The workflow does not
+sign files.
 
 This rebuilds and stages only the SelectSpeak native bridge, collects third-party
 notices, creates and verifies the slim PyInstaller core, builds the versioned
 Supertonic dependency and model ZIPs, and compiles
-`dist\SelectSpeak-Setup-<version>.exe` with Inno Setup 6. Upload Setup, its
-`.sha256` file, and both ZIP archives together in the matching `v<version>`
-GitHub release. Setup contains
+`dist\SelectSpeak-Setup-<version>.exe` with Inno Setup 6. The draft release keeps
+Setup, its `.sha256` file, and both ZIP archives together under the matching
+`v<version>` tag. Setup contains
 the pinned NuGet client and package manifest, then obtains the pinned Microsoft
 Speech SDK DLLs during installation. It downloads the hash-pinned Supertonic
 ZIPs only when that component is selected. During an iteration where the native
