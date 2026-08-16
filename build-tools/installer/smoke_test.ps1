@@ -35,7 +35,10 @@ if (Get-Process "SelectSpeak" -ErrorAction SilentlyContinue) {
 $developerInstance = Get-CimInstance Win32_Process | Where-Object {
     $_.Name -in @("python.exe", "pythonw.exe") -and
     $_.CommandLine -and
-    $_.CommandLine.Contains("-m selectspeak", [StringComparison]::OrdinalIgnoreCase)
+    $_.CommandLine.IndexOf(
+        "-m selectspeak",
+        [StringComparison]::OrdinalIgnoreCase
+    ) -ge 0
 }
 if ($developerInstance) {
     throw "Quit the running SelectSpeak developer instance before the installer smoke test."
@@ -116,9 +119,8 @@ if (-not $started) {
     Stop-Process -Id $application.Id -ErrorAction SilentlyContinue
     throw "The installed application did not complete startup."
 }
-Stop-Process -Id $application.Id -ErrorAction SilentlyContinue
-Wait-Process -Id $application.Id -Timeout 15 -ErrorAction SilentlyContinue
-if (Get-Process -Id $application.Id -ErrorAction SilentlyContinue) {
+Stop-Process -InputObject $application -Force -ErrorAction SilentlyContinue
+if (-not $application.WaitForExit(15000)) {
     throw "The installed application did not stop before the upgrade test."
 }
 
