@@ -1,6 +1,6 @@
 """SelectSpeak Windows text-to-speech application."""
 
-__version__ = "0.1.0"
+__version__ = "0.1.2"
 
 
 def main() -> None:

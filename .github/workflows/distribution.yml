@@ -29,7 +29,7 @@ jobs:
         shell: pwsh
         run: |
           if ("${{ github.ref_type }}" -ne "tag") {
-            throw "Start Distribution from a version tag such as v0.1.0."
+            throw "Start Distribution from a tag matching the project version."
           }
           $metadata = Get-Content pyproject.toml -Raw
           $match = [regex]::Match(

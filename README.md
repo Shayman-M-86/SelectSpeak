@@ -21,7 +21,7 @@ Project policies: [privacy](PRIVACY.md), [security](SECURITY.md),
 Download and run:
 
 ```text
-SelectSpeak-Setup-0.1.0.exe
+SelectSpeak-Setup-0.1.2.exe
 ```
 
 The installer does not require administrator rights. It installs SelectSpeak
@@ -131,6 +131,18 @@ project-local Python environment created by `scripts/install.ps1`, so `uv` does 
 need to be on the launcher's `PATH`.
 
 Developers can also run `uv run python -m selectspeak` or `uv run selectspeak`.
+
+To update every source-controlled release-version field before building a new
+release, run:
+
+```powershell
+.\scripts\bump_version.ps1
+```
+
+The script displays the current version and prompts for the new one. For an
+unattended update, pass it directly, for example
+`.\scripts\bump_version.ps1 -Version 0.1.3`. Commit the resulting changes before
+creating the matching `v<version>` tag.
 
 Press `Alt+D` to freeze the current desktop and drag around text. SelectSpeak
 recognizes the selected pixels locally with `Windows.Media.Ocr`, passes the text
