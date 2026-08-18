@@ -2,30 +2,51 @@ import ctypes
 import logging
 import os
 import tkinter as tk
+import tkinter.font as tkfont
 from collections.abc import Callable
 from queue import Empty, SimpleQueue
 
 from ..speech.debug import SpeechDebugEvent
 from ..speech.voices import VoiceOption
 from .debug_panel import SpeechDebugPanelModel
+from .dwm import apply_native_frame, enable_shadow, top_level_handle
 from .theme import (
-    ACCENT,
-    BACKGROUND,
-    BUTTON_BACKGROUND,
-    BUTTON_BORDER,
-    CHUNK_COLOURS,
-    DIM_FOREGROUND,
-    FOREGROUND,
-    GREEN,
+    BODY_SIZE,
+    CAPTION_ICON_SIZE,
+    CAPTION_SIZE,
+    FONT_FAMILY,
+    FONT_FAMILY_DISPLAY,
+    FONT_FAMILY_FALLBACK,
+    ICON_ACCEPT,
+    ICON_APP,
+    ICON_CHEVRON_DOWN,
+    ICON_CLOSE,
+    ICON_FAMILY,
+    ICON_FAMILY_FALLBACK,
+    ICON_KEYBOARD,
+    ICON_MINIMIZE,
+    ICON_PAUSE,
+    ICON_PLAY,
+    ICON_REPLAY,
+    ICON_SIZE,
+    ICON_STOP,
+    ICON_WARNING,
     MIN_DEBUG_READING_HEIGHT,
     MIN_IDLE_HEIGHT,
     MIN_READING_HEIGHT,
-    READER_BACKGROUND,
-    RED,
-    SPINNER,
+    MONO_FAMILY,
+    MONO_FAMILY_FALLBACK,
+    PARAGRAPH_GAP,
+    PROGRESS_INTERVAL_MS,
+    PROGRESS_THICKNESS,
+    PROGRESS_WIDTH,
     STATUS_WRAP_LENGTH,
+    SUBTITLE_SIZE,
     WINDOW_WIDTH,
+    load_palette,
+    resolve_font_family,
 )
+from .widgets import CaptionButton, FluentButton, SubtleButton
 from .window_state import foreground_window_is_fullscreen
 
 logger = logging.getLogger(__name__)
@@ -34,7 +55,8 @@ _GWL_EXSTYLE = -20
 _WS_EX_NOACTIVATE = 0x08000000
 _WS_EX_TRANSPARENT = 0x00000020
 _SWP_REFRESH_FRAME_NO_ACTIVATE = 0x0037
-_VISIBLE_ALPHA = 0.95
+# Fluent overlays are opaque; DWM supplies the depth via shadow, not alpha.
+_VISIBLE_ALPHA = 1.0
 
 
 class PlayerWindow(tk.Tk):
@@ -78,7 +100,7 @@ class PlayerWindow(tk.Tk):
         self._on_resume = on_resume
         self._on_stop = on_stop
         self._animation_job: str | None = None
-        self._animation_frame = 0
+        self._animation_offset = 0
         self._reader_generation = 0
         self._reader_text = ""
         self._callbacks: SimpleQueue[Callable[[], None]] = SimpleQueue()
@@ -88,21 +110,36 @@ class PlayerWindow(tk.Tk):
         self._playback_started_fullscreen = False
         self._soft_hidden = False
 
+        self._palette = load_palette()
+        self._init_fonts()
+
         self.title(app_name)
         self.overrideredirect(True)
         self.attributes("-topmost", True)
         self.attributes("-alpha", _VISIBLE_ALPHA)
-        self.configure(bg=BACKGROUND)
+        self.configure(bg=self._palette.background)
         self.resizable(False, False)
         self.update_idletasks()
         self._enable_no_activate()
+        self._apply_native_frame()
 
         self.bind("<ButtonPress-1>", self._begin_drag)
         self.bind("<B1-Motion>", self._drag)
         self.bind("<Map>", self._on_map)
 
-        self._content = tk.Frame(self, bg=BACKGROUND, padx=10, pady=8)
-        self._content.pack(fill="both", expand=True)
+        palette = self._palette
+        # A 1px stroke around the whole surface, as Fluent flyouts have.
+        self._border = tk.Frame(self, bg=palette.control_border, highlightthickness=0, bd=0)
+        self._border.pack(fill="both", expand=True)
+        self._content = tk.Frame(
+            self._border,
+            bg=palette.background,
+            padx=16,
+            pady=12,
+            highlightthickness=0,
+            bd=0,
+        )
+        self._content.pack(fill="both", expand=True, padx=1, pady=1)
         self._build_title_row(self._content)
         self._build_status(self._content)
         self._build_reader(self._content)
@@ -125,7 +162,7 @@ class PlayerWindow(tk.Tk):
         logger.info(
             "player.created app_name=%s hotkey=%s initial_mode=%s "
             "auto_hide=%s width=%s height=%s requested_width=%s "
-            "requested_height=%s scaling=%s",
+            "requested_height=%s scaling=%s theme=%s",
             app_name,
             hotkey,
             "auto",
@@ -135,7 +172,47 @@ class PlayerWindow(tk.Tk):
             self._content.winfo_reqwidth(),
             self._content.winfo_reqheight(),
             round(float(self.tk.call("tk", "scaling")), 3),
+            "dark" if self._palette.dark else "light",
         )
+
+    def _init_fonts(self) -> None:
+        """Resolve the Segoe families once, then align Tk's own named fonts.
+
+        Menus and dialogs read the named fonts, so setting them here is what
+        makes the voice menu match the rest of the window.
+        """
+        body = resolve_font_family(self, FONT_FAMILY, FONT_FAMILY_FALLBACK)
+        display = resolve_font_family(self, FONT_FAMILY_DISPLAY, body)
+        icons = resolve_font_family(self, ICON_FAMILY, ICON_FAMILY_FALLBACK)
+        mono = resolve_font_family(self, MONO_FAMILY, MONO_FAMILY_FALLBACK)
+
+        self._font_body = (body, BODY_SIZE)
+        self._font_caption = (body, CAPTION_SIZE)
+        self._font_caption_strong = (body, CAPTION_SIZE, "bold")
+        self._font_title = (display, SUBTITLE_SIZE, "bold")
+        self._font_icon = (icons, ICON_SIZE)
+        self._font_caption_icon = (icons, CAPTION_ICON_SIZE)
+        self._font_mono = (mono, CAPTION_SIZE)
+
+        for name in ("TkDefaultFont", "TkTextFont", "TkMenuFont"):
+            try:
+                tkfont.nametofont(name).configure(family=body, size=BODY_SIZE)
+            except tk.TclError:
+                logger.debug("player.font.unavailable name=%s", name)
+        logger.debug("player.fonts.resolved body=%s display=%s icons=%s", body, display, icons)
+
+    def _apply_native_frame(self) -> None:
+        """Ask DWM for rounded corners and a shadow on the frameless window."""
+        try:
+            handle = top_level_handle(self.winfo_id())
+            apply_native_frame(
+                handle,
+                dark=self._palette.dark,
+                border_colour=self._palette.control_border,
+            )
+            enable_shadow(handle)
+        except Exception:
+            logger.exception("player.native_frame.failed")
 
     def call_soon(self, callback: Callable[[], None]) -> None:
         self._callbacks.put(callback)
@@ -224,43 +301,36 @@ class PlayerWindow(tk.Tk):
     def set_hotkey(self, hotkey: str) -> None:
         logger.info("player.hotkey.updated hotkey=%s", hotkey)
         self._hotkey = hotkey
-        self._hotkey_button.config(text=hotkey.upper())
+        self._hotkey_button.config(text=self._shortcut_label(hotkey))
 
     def set_clipboard_mode(self, enabled: bool) -> None:
         logger.info("player.capture_mode.updated mode=%s", "clipboard" if enabled else "auto")
         self._clipboard_mode = enabled
-        if enabled:
-            self._clipboard_button.config(
-                text="Mode: Clipboard",
-                fg=ACCENT,
-                font=("Segoe UI", 7, "bold"),
-            )
-        else:
-            self._clipboard_button.config(
-                text="Mode: Auto",
-                fg=DIM_FOREGROUND,
-                font=("Segoe UI", 7),
-            )
+        self._clipboard_button.config(text=f"Source: {'Clipboard' if enabled else 'Automatic'}")
+        self._clipboard_button.set_active(
+            enabled,
+            font=self._font_caption_strong if enabled else self._font_caption,
+        )
         self.show_idle_hint()
 
     def set_auto_hide(self, enabled: bool) -> None:
         self._auto_hide = enabled
-        self._auto_hide_button.config(
-            text=f"Auto hide: {'On' if enabled else 'Off'}",
-            fg=ACCENT if enabled else DIM_FOREGROUND,
-            font=("Segoe UI", 7, "bold" if enabled else "normal"),
+        self._auto_hide_button.config(text=f"Auto-hide: {'On' if enabled else 'Off'}")
+        self._auto_hide_button.set_active(
+            enabled,
+            font=self._font_caption_strong if enabled else self._font_caption,
         )
         logger.info("player.auto_hide.updated enabled=%s", enabled)
 
     def set_debug_enabled(self, enabled: bool) -> None:
         self._debug_enabled = enabled
-        self._debug_button.config(
-            text=f"Debug: {'On' if enabled else 'Off'}",
-            fg=ACCENT if enabled else DIM_FOREGROUND,
-            font=("Segoe UI", 7, "bold" if enabled else "normal"),
+        self._debug_button.config(text=f"Diagnostics: {'On' if enabled else 'Off'}")
+        self._debug_button.set_active(
+            enabled,
+            font=self._font_caption_strong if enabled else self._font_caption,
         )
         if enabled:
-            self._debug_frame.pack(fill="x", pady=(0, 5), before=self._control_row)
+            self._debug_frame.pack(fill="x", pady=(0, 10), before=self._control_row)
             self._render_debug_metrics()
             self._apply_chunk_tags()
         else:
@@ -316,7 +386,8 @@ class PlayerWindow(tk.Tk):
         if selected is not None:
             self.set_voice_selection(selected.key, selected.short_label)
         else:
-            self._backend_button.config(text="Voice: Unavailable", state="disabled")
+            self._voice_button.config(text="Voice unavailable")
+            self._voice_button.configure_state(enabled=False)
 
     def set_voice_selection(
         self,
@@ -327,19 +398,20 @@ class PlayerWindow(tk.Tk):
     ) -> None:
         busy = bool(activity)
         if activity == "installing":
-            button_text = "Voice: Installing Supertonic…"
+            button_text = "Installing Supertonic…"
         elif activity:
-            button_text = f"Voice: Loading {label}…"
+            button_text = f"Loading {label}…"
         else:
-            button_text = f"Voice: {label} ▾"
+            button_text = f"Voice: {label}  {ICON_CHEVRON_DOWN}"
         self._selected_voice_key.set(key)
-        self._backend_button.config(
-            text=button_text,
-            state="disabled" if busy else "normal",
-            fg=ACCENT if key == "supertonic" else DIM_FOREGROUND,
+        self._voice_button.config(text=button_text)
+        self._voice_button.configure_state(enabled=not busy)
+        self._voice_button.set_active(
+            key == "supertonic" and not busy,
+            font=self._font_caption_strong if key == "supertonic" and not busy else self._font_caption,
         )
-        self._read_button.config(state="disabled" if busy else "normal")
-        self._play_button.config(state="disabled" if busy or not self._reader_text else "normal")
+        self._read_button.configure_state(enabled=not busy)
+        self._play_button.configure_state(enabled=not busy and bool(self._reader_text))
         self._resize(MIN_IDLE_HEIGHT)
         logger.info(
             "player.voice.updated voice_key=%s voice_label=%s activity=%s",
@@ -354,52 +426,60 @@ class PlayerWindow(tk.Tk):
             return
         try:
             self._voice_menu.tk_popup(
-                self._backend_button.winfo_rootx(),
-                self._backend_button.winfo_rooty() + self._backend_button.winfo_height(),
+                self._voice_button.winfo_rootx(),
+                self._voice_button.winfo_rooty() + self._voice_button.winfo_height(),
             )
         finally:
             self._voice_menu.grab_release()
 
     def show_backend_error(self, message: str) -> None:
-        self._status.config(text=f"Voice engine unavailable: {message}", fg=RED)
+        self._set_status(f"Voice engine unavailable: {message}", self._palette.danger, ICON_WARNING)
         self.show()
 
     def show_backend_loading(self, activity: str = "loading") -> None:
         if activity == "installing":
             message = (
-                "Opening Setup to install Supertonic and its local voice model… "
+                "Opening Setup to install Supertonic and its local voice model. "
                 "SelectSpeak will restart when installation finishes."
             )
         else:
-            message = "Loading the voice engine… Reading will be available when it is ready."
-        self._status.config(text=message, fg=ACCENT)
+            message = "Loading the voice engine. Reading will be available when it is ready."
+        self._set_status(message, self._palette.accent, "")
         self.show()
 
     def show_backend_ready(self, label: str) -> None:
-        self._status.config(text=f"✓  {label} is ready", fg=GREEN)
+        self._set_status(f"{label} is ready", self._palette.success, ICON_ACCEPT)
         self.show()
 
     def show_capture_started(self) -> None:
         logger.info("player.hotkey_capture.started")
-        self._status.config(text="⌨  Press keys…  (Esc to cancel)", fg=ACCENT)
-        self._hotkey_button.config(text="…")
+        self._set_status(
+            "Press the keys for your shortcut, or Esc to cancel",
+            self._palette.accent,
+            ICON_KEYBOARD,
+        )
+        self._hotkey_button.config(text="Listening…")
 
     def show_capture_preview(self, hotkey: str) -> None:
         logger.debug("player.hotkey_capture.preview hotkey=%s", hotkey)
-        self._status.config(text=f"⌨  {hotkey.upper()}", fg=ACCENT)
-        self._hotkey_button.config(text=hotkey.upper())
+        self._set_status(self._shortcut_label(hotkey), self._palette.accent, ICON_KEYBOARD)
+        self._hotkey_button.config(text=self._shortcut_label(hotkey))
 
     def show_capture_complete(self, hotkey: str) -> None:
         logger.info("player.hotkey_capture.completed hotkey=%s", hotkey)
         self.set_hotkey(hotkey)
-        self._status.config(text=f"✓  Hotkey set to  {hotkey.upper()}", fg=GREEN)
+        self._set_status(
+            f"Shortcut set to {self._shortcut_label(hotkey)}",
+            self._palette.success,
+            ICON_ACCEPT,
+        )
         self.after(2000, self.show_idle_hint)
 
     def show_idle_hint(self) -> None:
         target = "clipboard" if self._clipboard_mode else "selection or clipboard"
         logger.debug("player.idle_hint.shown target=%s hotkey=%s", target, self._hotkey)
-        self._status.config(text=f"Press {self._hotkey.upper()} to read {target}", fg=DIM_FOREGROUND)
-        self._hotkey_button.config(text=self._hotkey.upper())
+        self._set_status(self._idle_hint(), self._palette.text_secondary, "")
+        self._hotkey_button.config(text=self._shortcut_label(self._hotkey))
 
     def set_playback(self, *, speaking: bool, paused: bool = False, text: str = "") -> None:
         logger.info(
@@ -408,45 +488,46 @@ class PlayerWindow(tk.Tk):
             paused,
             len(text),
         )
+        palette = self._palette
         if speaking and not paused:
             self._start_animation()
             if text != self._reader_text or not self._reader_frame.winfo_ismapped():
                 self._show_reader(text)
             else:
-                self._reader.tag_config("current", background=BUTTON_BACKGROUND)
-            self._play_button.config(
-                text="⏸ Pause",
-                command=self._on_pause,
-                state="normal",
-                bg=BUTTON_BACKGROUND,
-                fg=FOREGROUND,
-            )
-            self._stop_button.config(bg=RED, fg=BACKGROUND)
+                self._reader.tag_config(
+                    "current",
+                    background=palette.highlight_background,
+                    foreground=palette.highlight_foreground,
+                )
+            self._play_button.set_text("Pause")
+            self._play_button.set_icon(ICON_PAUSE)
+            self._play_button.set_command(self._on_pause)
+            self._play_button.configure_state(enabled=True)
+            self._stop_button.configure_state(enabled=True)
             self._playback_started_fullscreen = foreground_window_is_fullscreen()
             self.show()
         elif speaking:
             self._stop_animation()
-            self._reader.tag_config("current", background=READER_BACKGROUND)
-            self._play_button.config(
-                text="▶ Resume",
-                command=self._on_resume,
-                state="normal",
-                bg=BUTTON_BACKGROUND,
-                fg=GREEN,
+            # Dim the highlight while paused so it reads as inactive.
+            self._reader.tag_config(
+                "current",
+                background=palette.subtle_background,
+                foreground=palette.text_primary,
             )
-            self._stop_button.config(bg=RED, fg=BACKGROUND)
+            self._play_button.set_text("Resume")
+            self._play_button.set_icon(ICON_PLAY)
+            self._play_button.set_command(self._on_resume)
+            self._play_button.configure_state(enabled=True)
+            self._stop_button.configure_state(enabled=True)
         else:
             self._stop_animation()
-            hint = "Done  •  Press hotkey to read again" if text else self._idle_hint()
+            hint = "Finished. Press the shortcut to read again." if text else self._idle_hint()
             self._hide_reader(hint)
-            self._play_button.config(
-                text="▶ Replay",
-                command=self._on_play,
-                state="normal" if text else "disabled",
-                bg=BUTTON_BACKGROUND,
-                fg=FOREGROUND,
-            )
-            self._stop_button.config(bg=BUTTON_BACKGROUND, fg=RED)
+            self._play_button.set_text("Replay")
+            self._play_button.set_icon(ICON_REPLAY)
+            self._play_button.set_command(self._on_play)
+            self._play_button.configure_state(enabled=bool(text))
+            self._stop_button.configure_state(enabled=False)
             if self._auto_hide:
                 hide = self._soft_hide if self._playback_started_fullscreen else self.hide
                 self.after_idle(hide)
@@ -479,83 +560,160 @@ class PlayerWindow(tk.Tk):
         self.call_soon(update)
 
     def _build_title_row(self, parent: tk.Frame) -> None:
-        row = tk.Frame(parent, bg=BACKGROUND)
+        palette = self._palette
+        row = tk.Frame(parent, bg=palette.background)
         row.pack(fill="x")
         tk.Label(
             row,
-            text=f"🔊 {self._app_name}",
-            bg=BACKGROUND,
-            fg=ACCENT,
-            font=("Segoe UI", 9, "bold"),
-        ).pack(side="left")
-        self._animation_label = tk.Label(
+            text=ICON_APP,
+            bg=palette.background,
+            fg=palette.accent,
+            font=self._font_icon,
+        ).pack(side="left", padx=(0, 8))
+        tk.Label(
             row,
-            text="",
-            bg=BACKGROUND,
-            fg=GREEN,
-            font=("Segoe UI", 9),
-            width=2,
-            anchor="w",
+            text=self._app_name,
+            bg=palette.background,
+            fg=palette.text_primary,
+            font=self._font_title,
+        ).pack(side="left")
+
+        # Caption buttons sit flush with the window edge, as Windows draws them.
+        CaptionButton(
+            row,
+            palette=palette,
+            icon=ICON_CLOSE,
+            command=self.hide,
+            icon_font=self._font_caption_icon,
+            close=True,
+        ).pack(side="right", padx=(0, 0))
+        CaptionButton(
+            row,
+            palette=palette,
+            icon=ICON_MINIMIZE,
+            command=self._minimize,
+            icon_font=self._font_caption_icon,
+        ).pack(side="right")
+
+        # Indeterminate progress: a bar that travels along an unfilled track
+        # while audio plays, the way a Win11 ProgressBar reads.
+        self._progress = tk.Canvas(
+            row,
+            width=PROGRESS_WIDTH,
+            height=PROGRESS_THICKNESS,
+            bg=palette.subtle_background,
+            highlightthickness=0,
+            bd=0,
         )
-        self._animation_label.pack(side="left", padx=(4, 0))
-        self._title_button(row, "✕", self.hide).pack(side="right")
-        self._title_button(row, "–", self._minimize).pack(side="right")
+        self._progress_bar = self._progress.create_rectangle(
+            0,
+            0,
+            0,
+            PROGRESS_THICKNESS,
+            fill=palette.accent,
+            width=0,
+        )
+
+    def _set_status(self, text: str, colour: str, icon: str) -> None:
+        self._status_icon.config(text=icon, fg=colour)
+        if icon:
+            if not self._status_icon.winfo_ismapped():
+                self._status_icon.pack(side="left", padx=(0, 8), anchor="n")
+        else:
+            self._status_icon.pack_forget()
+        self._status.config(text=text, fg=colour)
 
     def _build_status(self, parent: tk.Frame) -> None:
+        palette = self._palette
+        self._status_row = tk.Frame(parent, bg=palette.background)
+        self._status_row.pack(fill="x", pady=(10, 12))
+        self._status_icon = tk.Label(
+            self._status_row,
+            text="",
+            bg=palette.background,
+            fg=palette.text_secondary,
+            font=self._font_icon,
+        )
         self._status = tk.Label(
-            parent,
+            self._status_row,
             text=self._idle_hint(),
-            bg=BACKGROUND,
-            fg=DIM_FOREGROUND,
-            font=("Segoe UI", 8),
+            bg=palette.background,
+            fg=palette.text_secondary,
+            font=self._font_body,
             wraplength=STATUS_WRAP_LENGTH,
             justify="left",
             anchor="w",
         )
-        self._status.pack(fill="x", pady=(3, 5))
+        self._status.pack(side="left", fill="x", expand=True)
 
     def _build_reader(self, parent: tk.Frame) -> None:
-        self._reader_frame = tk.Frame(parent, bg=READER_BACKGROUND)
+        palette = self._palette
+        # The reader is a Fluent "card": a subtle fill inside a 1px stroke.
+        self._reader_frame = tk.Frame(parent, bg=palette.control_border, highlightthickness=0, bd=0)
+        self._reader_inner = tk.Frame(self._reader_frame, bg=palette.card_background)
+        self._reader_inner.pack(fill="both", expand=True, padx=1, pady=1)
         self._reader = tk.Text(
-            self._reader_frame,
+            self._reader_inner,
             height=9,
-            bg=READER_BACKGROUND,
-            fg=FOREGROUND,
-            font=("Segoe UI", 9),
+            bg=palette.card_background,
+            fg=palette.text_primary,
+            font=self._font_body,
             wrap="word",
             relief="flat",
             bd=0,
             state="disabled",
-            padx=6,
-            pady=5,
+            padx=12,
+            pady=10,
             cursor="arrow",
+            # Every line spacing option inflates some display lines but not
+            # others: spacing1/spacing3 pad the first and last line of a
+            # paragraph, and spacing2 pads only the lines inside a wrap. Tk
+            # paints a tag's background across the whole display line box, so
+            # any of them would make the spoken-word highlight change size
+            # depending on where the word fell. Keeping all three at zero makes
+            # every line box exactly one line tall; the air between paragraphs
+            # comes from a blank line instead, which is itself a normal line.
+            spacing1=0,
+            spacing2=0,
+            spacing3=0,
+            selectbackground=palette.highlight_background,
+            selectforeground=palette.highlight_foreground,
+            insertwidth=0,
         )
         self._reader.tag_config(
             "structured_line",
-            lmargin1=8,
-            lmargin2=8,
-            spacing1=3,
-            spacing3=5,
+            lmargin1=0,
+            lmargin2=0,
         )
         self._reader.tag_config(
             "bullet_line",
-            lmargin1=8,
-            lmargin2=24,
+            lmargin1=0,
+            lmargin2=18,
+        )
+        # Paragraph air, applied only to the blank lines already present in the
+        # text. A line holding no words can be padded freely because no word
+        # highlight is ever painted across it.
+        self._reader.tag_config(
+            "separator",
+            spacing3=PARAGRAPH_GAP,
         )
         self._reader.tag_config(
             "current",
-            background=BUTTON_BACKGROUND,
-            foreground="#ffffff",
+            background=palette.highlight_background,
+            foreground=palette.highlight_foreground,
         )
         self._reader.pack(fill="both", expand=True)
-        self._debug_frame = tk.Frame(parent, bg=READER_BACKGROUND, padx=6, pady=4)
+
+        self._debug_frame = tk.Frame(parent, bg=palette.control_border, highlightthickness=0, bd=0)
+        debug_inner = tk.Frame(self._debug_frame, bg=palette.subtle_background, padx=12, pady=8)
+        debug_inner.pack(fill="both", expand=True, padx=1, pady=1)
         self._debug_metrics = tk.Label(
-            self._debug_frame,
-            text="Speech diagnostics waiting for chunks…",
+            debug_inner,
+            text="Waiting for speech chunks…",
             height=2,
-            bg=READER_BACKGROUND,
-            fg=DIM_FOREGROUND,
-            font=("Consolas", 7),
+            bg=palette.subtle_background,
+            fg=palette.text_secondary,
+            font=self._font_mono,
             justify="left",
             anchor="w",
         )
@@ -570,70 +728,117 @@ class PlayerWindow(tk.Tk):
         on_toggle_debug: Callable[[], None],
         on_capture_hotkey: Callable[[], None],
     ) -> None:
-        self._control_row = tk.Frame(parent, bg=BACKGROUND)
+        palette = self._palette
+        self._control_row = tk.Frame(parent, bg=palette.background)
         # Reserve the controls at the bottom so an expanding reader or debug
         # panel can never push playback controls outside the client area.
         self._control_row.pack(side="bottom", fill="x")
 
-        read_wrapper = tk.Frame(self._control_row, bg=BUTTON_BORDER, padx=1, pady=1)
-        read_wrapper.pack(side="left", padx=(0, 6))
-        self._read_button = self._control_button(read_wrapper, "▶ Read", GREEN, self._on_read)
-        self._read_button.pack()
+        # Read is the primary action, so it takes the accent style; the rest
+        # are standard buttons, matching how Windows ranks dialog actions.
+        self._read_button = FluentButton(
+            self._control_row,
+            palette=palette,
+            text="Read",
+            icon=ICON_PLAY,
+            icon_font=self._font_icon,
+            text_font=self._font_body,
+            command=self._on_read,
+            accent=True,
+        )
+        self._read_button.pack(side="left", padx=(0, 8))
 
-        play_wrapper = tk.Frame(self._control_row, bg=BUTTON_BORDER, padx=1, pady=1)
-        play_wrapper.pack(side="left", padx=(0, 6))
-        self._play_button = self._control_button(play_wrapper, "▶ Replay", FOREGROUND, self._on_play)
-        self._play_button.pack()
+        self._play_button = FluentButton(
+            self._control_row,
+            palette=palette,
+            text="Replay",
+            icon=ICON_REPLAY,
+            icon_font=self._font_icon,
+            text_font=self._font_body,
+            command=self._on_play,
+        )
+        self._play_button.pack(side="left", padx=(0, 8))
+        # Nothing has been read yet, so replaying and stopping are unavailable.
+        self._play_button.configure_state(enabled=False)
 
-        stop_wrapper = tk.Frame(self._control_row, bg=BUTTON_BORDER, padx=1, pady=1)
-        stop_wrapper.pack(side="left")
-        self._stop_button = self._control_button(stop_wrapper, "■ Stop", RED, self._on_stop)
-        self._stop_button.pack()
+        self._stop_button = FluentButton(
+            self._control_row,
+            palette=palette,
+            text="Stop",
+            icon=ICON_STOP,
+            icon_font=self._font_icon,
+            text_font=self._font_body,
+            command=self._on_stop,
+            danger=True,
+        )
+        self._stop_button.pack(side="left")
+        self._stop_button.configure_state(enabled=False)
 
-        self._hotkey_button = self._small_button(self._control_row, self._hotkey.upper(), on_capture_hotkey)
-        self._hotkey_button.pack(side="right")
-        self._clipboard_button = self._small_button(self._control_row, "Mode: Auto", on_toggle_clipboard)
-        self._clipboard_button.pack(side="right", padx=(0, 4))
-        backend_label = "Supertonic" if self._speech_backend == "supertonic" else "Windows"
         self._voice_menu = tk.Menu(
             self,
             tearoff=False,
-            bg=BUTTON_BACKGROUND,
-            fg=FOREGROUND,
-            activebackground=ACCENT,
-            activeforeground=BACKGROUND,
-            disabledforeground=DIM_FOREGROUND,
+            bg=palette.card_background,
+            fg=palette.text_primary,
+            activebackground=palette.control_background_hover,
+            activeforeground=palette.text_primary,
+            disabledforeground=palette.text_secondary,
+            selectcolor=palette.accent,
             relief="flat",
-            bd=1,
-            font=("Segoe UI", 9),
+            bd=0,
+            activeborderwidth=0,
+            font=self._font_body,
         )
-        self._backend_button = self._small_button(
-            self._control_row,
-            f"Voice: {backend_label} ▾",
+
+        # Settings sit in their own group, separated from the transport
+        # controls by a vertical rule so the two roles do not read as one bar.
+        settings = tk.Frame(self._control_row, bg=palette.background)
+        settings.pack(side="right")
+        tk.Frame(self._control_row, bg=palette.divider, width=1).pack(
+            side="right", fill="y", padx=12, pady=4
+        )
+
+        # Secondary settings read right-to-left in the order they are packed.
+        self._hotkey_button = self._subtle_button(
+            settings, self._shortcut_label(self._hotkey), on_capture_hotkey
+        )
+        self._hotkey_button.pack(side="right")
+        self._clipboard_button = self._subtle_button(
+            settings, "Source: Automatic", on_toggle_clipboard
+        )
+        self._clipboard_button.pack(side="right")
+        backend_label = "Supertonic" if self._speech_backend == "supertonic" else "Windows"
+        self._voice_button = self._subtle_button(
+            settings,
+            f"Voice: {backend_label}  {ICON_CHEVRON_DOWN}",
             self._show_voice_menu,
         )
-        self._backend_button.config(fg=ACCENT if self._speech_backend == "supertonic" else DIM_FOREGROUND)
-        self._backend_button.pack(side="right", padx=(0, 4))
-        self._auto_hide_button = self._small_button(
-            self._control_row,
-            f"Auto hide: {'On' if self._auto_hide else 'Off'}",
+        self._voice_button.set_active(
+            self._speech_backend == "supertonic",
+            font=self._font_caption_strong
+            if self._speech_backend == "supertonic"
+            else self._font_caption,
+        )
+        self._voice_button.pack(side="right")
+        self._auto_hide_button = self._subtle_button(
+            settings,
+            f"Auto-hide: {'On' if self._auto_hide else 'Off'}",
             on_toggle_auto_hide,
         )
-        self._auto_hide_button.config(
-            fg=ACCENT if self._auto_hide else DIM_FOREGROUND,
-            font=("Segoe UI", 7, "bold" if self._auto_hide else "normal"),
+        self._auto_hide_button.set_active(
+            self._auto_hide,
+            font=self._font_caption_strong if self._auto_hide else self._font_caption,
         )
-        self._auto_hide_button.pack(side="right", padx=(0, 4))
-        self._debug_button = self._small_button(
-            self._control_row,
-            f"Debug: {'On' if self._debug_enabled else 'Off'}",
+        self._auto_hide_button.pack(side="right")
+        self._debug_button = self._subtle_button(
+            settings,
+            f"Diagnostics: {'On' if self._debug_enabled else 'Off'}",
             on_toggle_debug,
         )
-        self._debug_button.config(
-            fg=ACCENT if self._debug_enabled else DIM_FOREGROUND,
-            font=("Segoe UI", 7, "bold" if self._debug_enabled else "normal"),
+        self._debug_button.set_active(
+            self._debug_enabled,
+            font=self._font_caption_strong if self._debug_enabled else self._font_caption,
         )
-        self._debug_button.pack(side="right", padx=(0, 4))
+        self._debug_button.pack(side="right")
 
     def _show_reader(self, text: str) -> None:
         logger.debug("player.reader.shown text_length=%s", len(text))
@@ -655,19 +860,29 @@ class PlayerWindow(tk.Tk):
                         f"{line_number}.0",
                         f"{line_number}.end",
                     )
+            else:
+                self._reader.tag_add(
+                    "separator",
+                    f"{line_number}.0",
+                    f"{line_number}.end+1c",
+                )
         self._reader.tag_remove("current", "1.0", "end")
-        self._reader.tag_config("current", background=BUTTON_BACKGROUND)
+        self._reader.tag_config(
+            "current",
+            background=self._palette.highlight_background,
+            foreground=self._palette.highlight_foreground,
+        )
         self._reader.config(state="disabled")
         if not self._reader_frame.winfo_ismapped():
-            self._status.pack_forget()
+            self._status_row.pack_forget()
             self._reader_frame.pack(
                 fill="both",
                 expand=True,
-                pady=(3, 5),
+                pady=(10, 12),
                 before=self._control_row,
             )
         if self._debug_enabled and not self._debug_frame.winfo_ismapped():
-            self._debug_frame.pack(fill="x", pady=(0, 5), before=self._control_row)
+            self._debug_frame.pack(fill="x", pady=(0, 10), before=self._control_row)
         # Measure only after every speaking-mode panel has been inserted.
         self._resize(MIN_DEBUG_READING_HEIGHT if self._debug_enabled else MIN_READING_HEIGHT)
         self._control_row.lift()
@@ -682,6 +897,8 @@ class PlayerWindow(tk.Tk):
     def _apply_chunk_tags(self, active: SpeechDebugEvent | None = None) -> None:
         if not self._debug_enabled or not self._reader_text:
             return
+        palette = self._palette
+        chunk_colours = palette.chunk_colours
         self._reader.config(state="normal")
         self._reader.tag_remove("debug_active_chunk", "1.0", "end")
         for index, event in self._debug.chunks.items():
@@ -689,14 +906,18 @@ class PlayerWindow(tk.Tk):
             self._reader.tag_config(
                 tag,
                 underline=True,
-                foreground=CHUNK_COLOURS[index % len(CHUNK_COLOURS)],
+                foreground=chunk_colours[index % len(chunk_colours)],
             )
             self._reader.tag_add(
                 tag,
                 f"1.0+{event.text_offset}c",
                 f"1.0+{event.text_offset + event.text_length}c",
             )
-        self._reader.tag_config("debug_active_chunk", background="#3b4261", foreground="#ffffff")
+        self._reader.tag_config(
+            "debug_active_chunk",
+            background=palette.subtle_background,
+            foreground=palette.text_primary,
+        )
         if active and active.chunk_index is not None:
             self._reader.tag_add(
                 "debug_active_chunk",
@@ -712,7 +933,7 @@ class PlayerWindow(tk.Tk):
         text, is_underrun = self._debug.metrics(event)
         self._debug_metrics.config(
             text=text,
-            fg=RED if is_underrun else DIM_FOREGROUND,
+            fg=self._palette.danger if is_underrun else self._palette.text_secondary,
         )
         self.update_idletasks()
         if (
@@ -728,20 +949,30 @@ class PlayerWindow(tk.Tk):
         self._reader_generation += 1
         self._reader_frame.pack_forget()
         self._debug_frame.pack_forget()
-        self._status.config(text=hint, fg=DIM_FOREGROUND)
-        self._status.pack(fill="x", pady=(3, 5), before=self._control_row)
+        self._set_status(hint, self._palette.text_secondary, "")
+        self._status_row.pack(fill="x", pady=(10, 12), before=self._control_row)
         self._resize(MIN_IDLE_HEIGHT)
 
     def _start_animation(self) -> None:
         logger.debug("player.animation.started")
         self._stop_animation()
-        self._animation_frame = 0
+        self._animation_offset = 0
+        self._progress.pack(side="left", padx=(12, 0))
         self._animation_tick()
 
     def _animation_tick(self) -> None:
-        self._animation_label.config(text=SPINNER[self._animation_frame % len(SPINNER)])
-        self._animation_frame += 1
-        self._animation_job = self.after(80, self._animation_tick)
+        # A short bar sweeping left to right, as an indeterminate Win11 bar does.
+        span = PROGRESS_WIDTH + PROGRESS_WIDTH // 2
+        start = self._animation_offset - PROGRESS_WIDTH // 2
+        self._progress.coords(
+            self._progress_bar,
+            max(0, start),
+            0,
+            min(PROGRESS_WIDTH, start + PROGRESS_WIDTH // 2),
+            PROGRESS_THICKNESS,
+        )
+        self._animation_offset = (self._animation_offset + 2) % span
+        self._animation_job = self.after(PROGRESS_INTERVAL_MS, self._animation_tick)
 
     def _stop_animation(self) -> None:
         if self._animation_job:
@@ -751,12 +982,35 @@ class PlayerWindow(tk.Tk):
                 pass
             self._animation_job = None
             logger.debug("player.animation.stopped")
-        if hasattr(self, "_animation_label"):
-            self._animation_label.config(text="")
+        if hasattr(self, "_progress"):
+            self._progress.coords(self._progress_bar, 0, 0, 0, PROGRESS_THICKNESS)
+            # Remove the track entirely when idle; a bare rail reads as broken.
+            self._progress.pack_forget()
+
+    def _shortcut_label(self, hotkey: str) -> str:
+        """Format a hotkey the way Windows writes shortcuts: Ctrl+Shift+S."""
+        names = {
+            "ctrl": "Ctrl",
+            "control": "Ctrl",
+            "alt": "Alt",
+            "shift": "Shift",
+            "win": "Win",
+            "cmd": "Win",
+            "esc": "Esc",
+            "space": "Space",
+        }
+        parts = [part.strip() for part in hotkey.split("+") if part.strip()]
+        return "+".join(
+            names.get(part.casefold(), part.upper() if len(part) == 1 else part.title())
+            for part in parts
+        )
 
     def _idle_hint(self) -> str:
-        target = "clipboard" if self._clipboard_mode else "selection or clipboard"
-        return f"Press {self._hotkey.upper()} to read {target}  •  {self._ocr_hotkey.upper()} for OCR"
+        target = "your selection or clipboard" if not self._clipboard_mode else "your clipboard"
+        return (
+            f"Press {self._shortcut_label(self._hotkey)} to read {target}, "
+            f"or {self._shortcut_label(self._ocr_hotkey)} to capture text on screen."
+        )
 
     def _drain_callbacks(self) -> None:
         drained = 0
@@ -820,53 +1074,15 @@ class PlayerWindow(tk.Tk):
             self.overrideredirect(True)
             self.attributes("-topmost", True)
             self.after_idle(self._enable_no_activate)
+            self.after_idle(self._apply_native_frame)
 
-    @staticmethod
-    def _title_button(parent: tk.Frame, text: str, command: Callable[[], None]) -> tk.Button:
-        return tk.Button(
+    def _subtle_button(
+        self, parent: tk.Frame, text: str, command: Callable[[], None]
+    ) -> SubtleButton:
+        return SubtleButton(
             parent,
+            palette=self._palette,
             text=text,
-            bg=BACKGROUND,
-            fg=DIM_FOREGROUND,
-            relief="flat",
-            bd=0,
-            font=("Segoe UI", 9),
-            cursor="hand2",
-            activebackground=READER_BACKGROUND,
-            activeforeground=FOREGROUND,
             command=command,
-        )
-
-    @staticmethod
-    def _control_button(
-        parent: tk.Frame, text: str, foreground: str, command: Callable[[], None]
-    ) -> tk.Button:
-        return tk.Button(
-            parent,
-            text=text,
-            bg=BUTTON_BACKGROUND,
-            fg=foreground,
-            activebackground=BUTTON_BORDER,
-            activeforeground=foreground,
-            relief="flat",
-            bd=0,
-            padx=10,
-            pady=3,
-            font=("Segoe UI", 8, "bold"),
-            cursor="hand2",
-            command=command,
-        )
-
-    @staticmethod
-    def _small_button(parent: tk.Frame, text: str, command: Callable[[], None]) -> tk.Button:
-        return tk.Button(
-            parent,
-            text=text,
-            bg=BACKGROUND,
-            fg=DIM_FOREGROUND,
-            relief="flat",
-            bd=0,
-            cursor="hand2",
-            font=("Segoe UI", 7),
-            command=command,
+            font=self._font_caption,
         )
