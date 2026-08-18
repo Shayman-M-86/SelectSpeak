@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 
 <Window
-    x:Class="PresenterProbe.Views.PlayerWindow"
+    x:Class="SelectSpeak.UI.Views.PlayerWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
@@ -38,6 +38,7 @@
 
             <ProgressBar
     x:Name="ActivityBar"
+    Visibility="Collapsed"
     Width="72"
     Height="3"
     VerticalAlignment="Center"
@@ -101,7 +102,7 @@
 
     <Grid
         Grid.Row="2"
-        Padding="8,3,8,4">
+        Padding="8,3,8,5">
 
         <!--  Transport on the left, settings pushed to the right edge.  -->
         <StackPanel
@@ -145,15 +146,13 @@
 
         </StackPanel>
 
-        <!--  Subtle style: no fill at rest, background appears on hover.
-              Zero padding so Width and Height give an exact square.  -->
+        <!--  Height comes from the shared style; only Width and the zeroed
+              padding are specific to this one, to keep it square.  -->
         <Button
             x:Name="SettingsButton"
             Style="{StaticResource TransportButtonStyle}"
             HorizontalAlignment="Right"
-            VerticalAlignment="Center"
             Width="26"
-            Height="26"
             Padding="0">
             <FontIcon Glyph="&#xE713;" FontSize="14" />
         </Button>

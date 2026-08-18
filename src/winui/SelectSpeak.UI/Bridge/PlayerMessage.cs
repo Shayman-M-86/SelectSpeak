@@ -1,4 +1,4 @@
-namespace PresenterProbe.Bridge;
+namespace SelectSpeak.UI.Bridge;
 
 /// <summary>
 /// One message from the Python backend.

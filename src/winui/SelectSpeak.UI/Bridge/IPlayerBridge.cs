@@ -1,7 +1,7 @@
 using System;
 using System.Threading.Tasks;
 
-namespace PresenterProbe.Bridge;
+namespace SelectSpeak.UI.Bridge;
 
 /// <summary>
 /// The boundary between this WinUI frontend and the Python backend.

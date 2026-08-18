@@ -3,7 +3,7 @@ using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Windows.Graphics;
 
-namespace PresenterProbe.Windowing;
+namespace SelectSpeak.UI.Windowing;
 
 /// <summary>
 /// How the player window behaves, so the view never deals with a presenter or
@@ -57,7 +57,6 @@ public sealed class WindowController : IDisposable
         // Alt+F4 and the system menu alike.
         _appWindow.Closing += (_, args) =>
         {
-            FocusLog.Write("close button -> hide", _overlay.Handle);
             args.Cancel = true;
             Hide();
         };
@@ -86,14 +85,12 @@ public sealed class WindowController : IDisposable
         // The frame is repainted by the show itself, from an activation flag
         // that nothing updates, so the caption is corrected afterwards.
         _overlay.PaintCaptionInactive();
-        FocusLog.Write("Show()", _overlay.Handle);
     }
 
     public void Hide()
     {
         _appWindow.Hide();
         IsHidden = true;
-        FocusLog.Write("Hide()", _overlay.Handle);
     }
 
     public void Dispose() => _overlay.Dispose();

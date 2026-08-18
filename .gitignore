@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .python-version
+/src/winui/SelectSpeak.UI/.build/
 
 # Environments and local configuration
 .env
@@ -25,7 +26,3 @@ Thumbs.db
 .vscode/*.log
 selectspeak.log
 .runtime/
-/src/winui/SelectSpeak.UI/bin
-/src/winui/SelectSpeak.UI/obj
-/src/winui/PresenterProbe/bin
-/src/winui/PresenterProbe/obj

@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Rebuild PresenterProbe and relaunch it.
+    Rebuild SelectSpeak.UI and relaunch it.
 
 .DESCRIPTION
     WinUI 3 has no XAML hot reload outside Visual Studio, so every XAML change
@@ -19,13 +19,13 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$project = Join-Path $PSScriptRoot 'PresenterProbe.csproj'
-$exe = Join-Path $PSScriptRoot '.build\bin\Debug\net8.0-windows10.0.19041.0\win-x64\PresenterProbe.exe'
+$project = Join-Path $PSScriptRoot 'SelectSpeak.UI.csproj'
+$exe = Join-Path $PSScriptRoot '.build\bin\Debug\net8.0-windows10.0.19041.0\win-x64\SelectSpeak.UI.exe'
 
 # The app locks its own output; the XAML compiler and MSBuild node reuse keep
 # separate processes alive that lock the intermediate assembly. All three have
 # to go, or the build "succeeds" against a stale binary.
-Get-Process -Name 'PresenterProbe', 'XamlCompiler' -ErrorAction SilentlyContinue | ForEach-Object {
+Get-Process -Name 'SelectSpeak.UI', 'XamlCompiler' -ErrorAction SilentlyContinue | ForEach-Object {
     Write-Host "stopping $($_.ProcessName) (pid $($_.Id))" -ForegroundColor DarkGray
     Stop-Process -Id $_.Id -Force
 }

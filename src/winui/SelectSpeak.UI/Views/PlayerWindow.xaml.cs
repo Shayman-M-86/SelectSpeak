@@ -2,10 +2,10 @@ using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
-using PresenterProbe.Bridge;
-using PresenterProbe.Windowing;
+using SelectSpeak.UI.Bridge;
+using SelectSpeak.UI.Windowing;
 
-namespace PresenterProbe.Views;
+namespace SelectSpeak.UI.Views;
 
 /// <summary>
 /// The player window. It owns what appears inside the window; how the window
@@ -18,10 +18,11 @@ public sealed partial class PlayerWindow : Window
     private const string PauseGlyph = "";
     private const string PlayGlyph = "";
 
+    private readonly IPlayerBridge _bridge;
     private readonly WindowController _controller;
     private bool _playing;
 
-    public PlayerWindow()
+    public PlayerWindow(IPlayerBridge bridge)
     {
         this.InitializeComponent();
 
@@ -32,6 +33,12 @@ public sealed partial class PlayerWindow : Window
         SetTitleBar(AppTitleBar);
 
         _controller = new WindowController(this);
+
+        _bridge = bridge;
+        // Pipe messages arrive on a background thread, so every render hops
+        // back to the UI thread before touching a control.
+        _bridge.MessageReceived += message =>
+            DispatcherQueue.TryEnqueue(() => Apply(message));
 
     }
 
@@ -70,12 +77,11 @@ public sealed partial class PlayerWindow : Window
         StopButton.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
 
     /// <summary>
-    /// Toggle playback locally.
-    ///
-    /// Once the bridge is connected this should send an intent and let the
-    /// backend report the new state back, rather than deciding it here.
+    /// Report the user's intent. The backend decides what happens and sends
+    /// back a set_playback message; the UI never changes its own state here.
     /// </summary>
-    private void OnPlayPause(object sender, RoutedEventArgs e) => SetPlaying(!_playing);
+    private async void OnPlayPause(object sender, RoutedEventArgs e) =>
+        await _bridge.SendAsync("toggle_playback");
 
     /// <summary>
     /// Put the transport button and activity bar into the playing or paused
@@ -105,6 +111,9 @@ public sealed partial class PlayerWindow : Window
             PlayPauseLabel.ClearValue(TextBlock.ForegroundProperty);
         }
 
+        // Collapse the bar when idle rather than only stopping it: a stopped
+        // ProgressBar still draws its track, which reads as a stray line.
         ActivityBar.IsIndeterminate = playing;
+        ActivityBar.Visibility = playing ? Visibility.Visible : Visibility.Collapsed;
     }
 }
