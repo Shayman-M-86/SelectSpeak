@@ -42,6 +42,12 @@ public sealed class WindowController : IDisposable
         _appWindow.Resize(new SizeInt32(720, 470));
 
         _overlay = new OverlayWindow(window);
+        // Clicking the player must not pull focus from the app being read.
+        //
+        // This is also why the window looks permanently unfocused: Mica has
+        // separate active and inactive appearances and follows the foreground
+        // window, and a no-activate window is never the foreground window. The
+        // flat backdrop and greyed caption are the cost of not stealing focus.
         _overlay.EnableNoActivate();
         _overlay.ApplyDwmChrome(dark: true);
         _overlay.RegisterAltHotkey(ToggleVirtualKey, Toggle);

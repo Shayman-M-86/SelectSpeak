@@ -6,6 +6,21 @@
             <ResourceDictionary.MergedDictionaries>
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
             </ResourceDictionary.MergedDictionaries>
+
+            <!--  Transport buttons: no fill until hover, and dulled content at
+                  rest so the controls sit back until pointed at.  -->
+            <Style x:Key="TransportButtonStyle" TargetType="Button"
+                   BasedOn="{StaticResource SubtleButtonStyle}">
+                <Setter Property="Foreground"
+                        Value="{ThemeResource TextFillColorSecondaryBrush}" />
+                <Setter Property="Padding" Value="11,2" />
+            </Style>
+
+            <!--  Stop shares the transport style; its colours come from the
+                  SubtleButtonForeground* resources set on the button itself,
+                  because those are what the visual states read.  -->
+            <Style x:Key="StopButtonStyle" TargetType="Button"
+                   BasedOn="{StaticResource TransportButtonStyle}" />
         </ResourceDictionary>
     </Application.Resources>
 </Application>
