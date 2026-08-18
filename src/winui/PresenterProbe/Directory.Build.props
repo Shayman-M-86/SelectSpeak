@@ -1,0 +1,11 @@
+<Project>
+  <!--
+    Generated output goes in .build/ so that everything else in this folder is
+    source. BaseIntermediateOutputPath has to be set before the SDK targets are
+    imported, which is why it lives here rather than in the .csproj.
+  -->
+  <PropertyGroup>
+    <BaseOutputPath>$(MSBuildThisFileDirectory).build\bin\</BaseOutputPath>
+    <BaseIntermediateOutputPath>$(MSBuildThisFileDirectory).build\obj\</BaseIntermediateOutputPath>
+  </PropertyGroup>
+</Project>

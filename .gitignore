@@ -25,3 +25,7 @@ Thumbs.db
 .vscode/*.log
 selectspeak.log
 .runtime/
+/src/winui/SelectSpeak.UI/bin
+/src/winui/SelectSpeak.UI/obj
+/src/winui/PresenterProbe/bin
+/src/winui/PresenterProbe/obj
