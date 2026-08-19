@@ -23,6 +23,7 @@ from ..speech.model_installation import supertonic_model_is_installed
 from ..speech.normalization import prepare_for_speech
 from ..speech.optional_dependencies import supertonic_dependencies_are_installed
 from ..speech.voices import VoiceOption, build_voice_options, natural_voice_key
+from ..ui.hints import shortcut_label
 from ..ui.player import PlayerWindow
 from ..ui.tray import TrayController
 from ..ui.winui_bridge import WinUiPlayer, winui_executable
@@ -123,6 +124,7 @@ class SelectSpeakApp:
             on_toggle_debug=self.toggle_speech_debug,
             on_capture_hotkey=self.start_hotkey_capture,
             on_set_hotkey=self.set_hotkey,
+            on_set_ocr_hotkey=self.set_ocr_hotkey,
             on_select_voice=self.select_voice,
         )
         player.start()
@@ -722,7 +724,9 @@ class SelectSpeakApp:
             to_windows_hotkey(hotkey)
         except ValueError:
             logger.warning("hotkey.set.rejected hotkey=%s", hotkey)
-            self._player.set_hotkey(self._hotkeys.hotkey)
+            self._reject_hotkey(
+                f"{shortcut_label(hotkey)} is not a shortcut that can be bound."
+            )
             return
         self._apply_hotkey(hotkey)
 
@@ -732,7 +736,9 @@ class SelectSpeakApp:
             self._hotkeys.rebind(hotkey)
         except Exception:
             logger.exception("hotkey.rebind.failed hotkey=%s", hotkey)
-            self._player.show_idle_hint()
+            self._reject_hotkey(
+                f"{shortcut_label(hotkey)} is already in use by another application."
+            )
             return
         self._player.show_capture_complete(hotkey)
         self._tray.update_hotkey(hotkey)
@@ -741,6 +747,64 @@ class SelectSpeakApp:
             config = self._config
         self._save_settings(config)
         logger.info("hotkey.rebind.completed hotkey=%s", hotkey)
+
+    def set_ocr_hotkey(self, hotkey: str) -> None:
+        """Bind the capture shortcut the user confirmed in the settings dialog.
+
+        The read shortcut's counterpart: same validation, same rejection
+        behaviour, so a bad combination leaves the existing binding alone.
+        """
+        logger.info("ocr_hotkey.set.requested hotkey=%s", hotkey)
+        try:
+            to_windows_hotkey(hotkey)
+        except ValueError:
+            logger.warning("ocr_hotkey.set.rejected hotkey=%s", hotkey)
+            self._reject_hotkey(
+                f"{shortcut_label(hotkey)} is not a shortcut that can be bound.",
+                ocr=True,
+            )
+            return
+        self._apply_ocr_hotkey(hotkey)
+
+    def _apply_ocr_hotkey(self, hotkey: str) -> None:
+        logger.info("ocr_hotkey.rebind.requested hotkey=%s", hotkey)
+        if self._ocr_capture is None:
+            logger.warning("ocr_hotkey.rebind.unavailable hotkey=%s", hotkey)
+            self._reject_hotkey(
+                "Screen capture is unavailable, so its shortcut cannot be changed.",
+                ocr=True,
+            )
+            return
+        try:
+            self._ocr_capture.rebind(hotkey)
+        except Exception:
+            logger.exception("ocr_hotkey.rebind.failed hotkey=%s", hotkey)
+            # The previous shortcut is still bound, so report that rather than
+            # leaving the settings window showing one that was never taken.
+            self._reject_hotkey(
+                f"{shortcut_label(hotkey)} is already in use by another application.",
+                ocr=True,
+            )
+            return
+        self._player.set_ocr_hotkey(hotkey)
+        with self._state_lock:
+            self._config = replace(self._config, ocr_hotkey=hotkey)
+            config = self._config
+        self._save_settings(config)
+        logger.info("ocr_hotkey.rebind.completed hotkey=%s", hotkey)
+
+    def _reject_hotkey(self, message: str, *, ocr: bool = False) -> None:
+        """Explain a shortcut that would not bind, and restore the one in use.
+
+        Both shortcuts revert to their current binding on failure, so the row
+        is put back first and the reason shown second; without the message the
+        settings window just snaps back and looks broken.
+        """
+        if ocr:
+            self._player.set_ocr_hotkey(self._config.ocr_hotkey)
+        else:
+            self._player.set_hotkey(self._hotkeys.hotkey)
+        self._player.show_hotkey_error(message)
 
     def _cancel_hotkey_capture(self) -> None:
         logger.info("hotkey.capture.cancelled")

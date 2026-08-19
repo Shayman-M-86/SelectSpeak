@@ -213,8 +213,24 @@
                                 Style="{ThemeResource CaptionTextBlockStyle}"
                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                         </StackPanel>
+                        <Button
+                            x:Name="OcrHotkeyButton"
+                            Grid.Column="1"
+                            Content="Change"
+                            VerticalAlignment="Center"
+                            Click="OnCaptureOcrHotkey" />
                     </Grid>
                 </Border>
+
+                <!--  Shown when a shortcut will not bind. A rejected one
+                      reverts to the previous binding, which looks like the
+                      button did nothing unless it says why.  -->
+                <InfoBar
+                    x:Name="HotkeyError"
+                    Margin="0,8,0,0"
+                    IsOpen="False"
+                    IsClosable="True"
+                    Severity="Warning" />
 
                 <TextBlock Text="Advanced" Style="{StaticResource SettingGroupStyle}" />
 

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using SelectSpeak.UI.Bridge;
@@ -67,6 +68,13 @@ public sealed partial class SettingsWindow : Window
         {
             VoiceError.Message = message.Text ?? "This voice could not be used.";
             VoiceError.IsOpen = true;
+            return;
+        }
+
+        if (message.Type == "hotkey_error")
+        {
+            HotkeyError.Message = message.Text ?? "That shortcut could not be used.";
+            HotkeyError.IsOpen = true;
             return;
         }
 
@@ -186,7 +194,22 @@ public sealed partial class SettingsWindow : Window
     /// Windows itself would otherwise claim. The backend hears about it once,
     /// on Confirm, and remains the only thing that binds it.
     /// </summary>
-    private async void OnCaptureHotkey(object sender, RoutedEventArgs e)
+    private void OnCaptureHotkey(object sender, RoutedEventArgs e) =>
+        _ = RecordShortcutAsync(HotkeyValue, "set_hotkey");
+
+    private void OnCaptureOcrHotkey(object sender, RoutedEventArgs e) =>
+        _ = RecordShortcutAsync(OcrHotkeyValue, "set_ocr_hotkey");
+
+    /// <summary>
+    /// Record a shortcut and report the one the user confirmed.
+    ///
+    /// Both shortcuts record identically, differing only in which value the
+    /// dialog opens on and which intent carries the result, so the recording
+    /// itself lives here once. The guard is shared deliberately: the hook
+    /// swallows keys system-wide, and two dialogs competing for it would leave
+    /// the keyboard captured by whichever closed last.
+    /// </summary>
+    private async Task RecordShortcutAsync(TextBlock display, string intent)
     {
         if (_recording)
         {
@@ -196,13 +219,16 @@ public sealed partial class SettingsWindow : Window
         _recording = true;
         try
         {
+            // A fresh attempt, so any complaint about the last one is stale.
+            HotkeyError.IsOpen = false;
+
             // The dialog owns the keyboard hook for as long as it is open, so
             // the backend is not involved until there is a result to report.
-            var chosen = await new HotkeyDialog().ShowAsync(this, HotkeyValue.Text);
+            var chosen = await new HotkeyDialog().ShowAsync(this, display.Text);
             if (chosen is not null)
             {
                 await _bridge.SendAsync(
-                    "set_hotkey",
+                    intent,
                     new Dictionary<string, string> { ["hotkey"] = chosen });
             }
         }

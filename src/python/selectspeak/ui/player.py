@@ -304,6 +304,18 @@ class PlayerWindow(tk.Tk):
         self._hotkey = hotkey
         self._hotkey_button.config(text=self._shortcut_label(hotkey))
 
+    def show_hotkey_error(self, message: str) -> None:
+        """Report a shortcut that would not bind, where the status line shows it."""
+        logger.warning("player.hotkey.rejected message=%s", message)
+        self._set_status(message, self._palette.danger, ICON_WARNING)
+
+    def set_ocr_hotkey(self, hotkey: str) -> None:
+        logger.info("player.ocr_hotkey.updated hotkey=%s", hotkey)
+        self._ocr_hotkey = hotkey
+        # No button carries this one, but the idle hint names it, so the hint
+        # is reissued to pick up the new shortcut.
+        self.show_idle_hint()
+
     def set_clipboard_mode(self, enabled: bool) -> None:
         logger.info("player.capture_mode.updated mode=%s", "clipboard" if enabled else "auto")
         self._clipboard_mode = enabled

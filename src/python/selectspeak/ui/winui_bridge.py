@@ -95,7 +95,11 @@ class WinUiPlayer:
     """
 
     # Which field carries the value, for the intents that report one.
-    _VALUE_FIELDS = {"set_hotkey": "hotkey", "select_voice": "voice"}
+    _VALUE_FIELDS = {
+        "set_hotkey": "hotkey",
+        "set_ocr_hotkey": "hotkey",
+        "select_voice": "voice",
+    }
 
     def __init__(
         self,
@@ -118,6 +122,7 @@ class WinUiPlayer:
         on_toggle_debug: Callable[[], None] | None = None,
         on_capture_hotkey: Callable[[], None] | None = None,
         on_set_hotkey: Callable[[str], None] | None = None,
+        on_set_ocr_hotkey: Callable[[str], None] | None = None,
         on_select_voice: Callable[[str], None] | None = None,
     ) -> None:
         self._app_name = app_name
@@ -145,6 +150,7 @@ class WinUiPlayer:
         # confirmed, which is why this intent carries a value.
         self._valued_handlers: dict[str, Callable[[str], None] | None] = {
             "set_hotkey": on_set_hotkey,
+            "set_ocr_hotkey": on_set_ocr_hotkey,
             "select_voice": on_select_voice,
         }
         self._callbacks: SimpleQueue[Callable[[], None]] = SimpleQueue()
@@ -373,6 +379,20 @@ class WinUiPlayer:
         self.send_settings()
         # The player names the shortcut too, so it changes with the binding.
         self.send_shortcut()
+
+    def set_ocr_hotkey(self, hotkey: str) -> None:
+        # Only the settings window shows this one, so there is no player label
+        # to refresh alongside it.
+        self._ocr_hotkey = hotkey
+        self.send_settings()
+
+    def show_hotkey_error(self, message: str) -> None:
+        """Report a shortcut that would not bind, in the settings window.
+
+        A rejected shortcut reverts to the previous one, so without this the
+        row silently snaps back and looks like the button did nothing.
+        """
+        self._send("hotkey_error", text=message)
 
     def set_clipboard_mode(self, enabled: bool) -> None:
         self._clipboard_mode = enabled

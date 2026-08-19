@@ -72,6 +72,36 @@ class OcrCaptureHotkey:
             "native_windows_ocr",
         )
 
+    def rebind(self, hotkey: str) -> None:
+        """Move the capture shortcut to a new combination.
+
+        The native side registers one shortcut at a time, so this stops before
+        it starts again. A rejected registration leaves nothing bound, so the
+        previous shortcut is restored rather than left dead; if that fails too
+        the error is raised, because there is no working binding left to keep.
+        """
+        previous = self.hotkey
+        if hotkey == previous:
+            return
+
+        logger.info(
+            "ocr_hotkey.rebind.started previous_hotkey=%s new_hotkey=%s",
+            previous,
+            hotkey,
+        )
+        was_started = self._started
+        self.stop()
+        self.hotkey = hotkey
+        try:
+            if was_started:
+                self.start()
+        except OcrCaptureError:
+            logger.exception("ocr_hotkey.rebind.failed hotkey=%s", hotkey)
+            self.hotkey = previous
+            self.start()
+            raise
+        logger.info("ocr_hotkey.rebind.completed hotkey=%s", hotkey)
+
     def cancel(self) -> None:
         if self._started:
             self._dll.ss_ocr_cancel()

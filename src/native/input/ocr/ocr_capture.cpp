@@ -79,15 +79,19 @@ struct OverlayContext {
     Screenshot* screenshot = nullptr;
     Selection selection;
     HDC screenshot_dc = nullptr;
+    HDC shaded_dc = nullptr;
     HDC frame_dc = nullptr;
-    HDC shade_dc = nullptr;
+    HBITMAP shaded_bitmap = nullptr;
     HBITMAP frame_bitmap = nullptr;
-    HBITMAP shade_bitmap = nullptr;
     HGDIOBJ old_screenshot = nullptr;
+    HGDIOBJ old_shaded = nullptr;
     HGDIOBJ old_frame = nullptr;
-    HGDIOBJ old_shade = nullptr;
     int border_width = kSelectionBorderDips;
     bool show_hint = true;
+    // What the last frame drew, so the next one can repaint just the pixels
+    // that actually change rather than the whole virtual screen.
+    RECT painted{};
+    bool painted_valid = false;
 
     ~OverlayContext() {
         if (screenshot_dc != nullptr) {
@@ -96,14 +100,14 @@ struct OverlayContext {
         if (frame_dc != nullptr) {
             SelectObject(frame_dc, old_frame);
         }
-        if (shade_dc != nullptr) {
-            SelectObject(shade_dc, old_shade);
+        if (shaded_dc != nullptr) {
+            SelectObject(shaded_dc, old_shaded);
         }
         if (frame_bitmap != nullptr) {
             DeleteObject(frame_bitmap);
         }
-        if (shade_bitmap != nullptr) {
-            DeleteObject(shade_bitmap);
+        if (shaded_bitmap != nullptr) {
+            DeleteObject(shaded_bitmap);
         }
         if (screenshot_dc != nullptr) {
             DeleteDC(screenshot_dc);
@@ -111,8 +115,8 @@ struct OverlayContext {
         if (frame_dc != nullptr) {
             DeleteDC(frame_dc);
         }
-        if (shade_dc != nullptr) {
-            DeleteDC(shade_dc);
+        if (shaded_dc != nullptr) {
+            DeleteDC(shaded_dc);
         }
     }
 };
@@ -216,38 +220,117 @@ void DrawHint(OverlayContext& context) {
 }
 
 bool InitializeOverlayFrame(OverlayContext& context) {
+    const int width = context.screenshot->width;
+    const int height = context.screenshot->height;
+
     HDC screen = GetDC(nullptr);
     context.screenshot_dc = CreateCompatibleDC(screen);
+    context.shaded_dc = CreateCompatibleDC(screen);
     context.frame_dc = CreateCompatibleDC(screen);
-    context.shade_dc = CreateCompatibleDC(screen);
-    context.frame_bitmap = CreateCompatibleBitmap(
-        screen, context.screenshot->width, context.screenshot->height);
-    context.shade_bitmap = CreateCompatibleBitmap(screen, 1, 1);
+    context.shaded_bitmap = CreateCompatibleBitmap(screen, width, height);
+    context.frame_bitmap = CreateCompatibleBitmap(screen, width, height);
+    HDC shade_dc = CreateCompatibleDC(screen);
+    HBITMAP shade_bitmap = CreateCompatibleBitmap(screen, 1, 1);
     ReleaseDC(nullptr, screen);
-    if (context.screenshot_dc == nullptr || context.frame_dc == nullptr ||
-        context.shade_dc == nullptr || context.frame_bitmap == nullptr ||
-        context.shade_bitmap == nullptr) {
+    if (context.screenshot_dc == nullptr || context.shaded_dc == nullptr ||
+        context.frame_dc == nullptr || context.shaded_bitmap == nullptr ||
+        context.frame_bitmap == nullptr || shade_dc == nullptr ||
+        shade_bitmap == nullptr) {
+        if (shade_dc != nullptr) {
+            DeleteDC(shade_dc);
+        }
+        if (shade_bitmap != nullptr) {
+            DeleteObject(shade_bitmap);
+        }
         return false;
     }
 
     context.old_screenshot = SelectObject(
         context.screenshot_dc, context.screenshot->bitmap);
+    context.old_shaded = SelectObject(context.shaded_dc, context.shaded_bitmap);
     context.old_frame = SelectObject(context.frame_dc, context.frame_bitmap);
-    context.old_shade = SelectObject(context.shade_dc, context.shade_bitmap);
-    SetPixel(context.shade_dc, 0, 0, RGB(0, 0, 0));
+
+    // The dimmed desktop is built once here rather than per frame. It never
+    // changes: dragging only decides how much of the bright screenshot shows
+    // through it, which is a copy rather than a blend. This mirrors what
+    // PowerToys gets from a static geometry whose hole is the only thing that
+    // moves, and it is the difference between blending the whole virtual
+    // screen on every mouse move and not blending at all while dragging.
+    HGDIOBJ old_shade = SelectObject(shade_dc, shade_bitmap);
+    SetPixel(shade_dc, 0, 0, RGB(0, 0, 0));
+    BitBlt(context.shaded_dc, 0, 0, width, height, context.screenshot_dc, 0, 0,
+           SRCCOPY);
+    BLENDFUNCTION blend{AC_SRC_OVER, 0, kOverlayShadeAlpha, 0};
+    AlphaBlend(context.shaded_dc, 0, 0, width, height, shade_dc, 0, 0, 1, 1,
+               blend);
+    SelectObject(shade_dc, old_shade);
+    DeleteObject(shade_bitmap);
+    DeleteDC(shade_dc);
+
+    // The first frame is the fully dimmed screen; later frames repaint only
+    // what the selection touched.
+    BitBlt(context.frame_dc, 0, 0, width, height, context.shaded_dc, 0, 0,
+           SRCCOPY);
     return true;
 }
 
-void PaintOverlay(HWND window, OverlayContext& context) {
-    BitBlt(context.frame_dc, 0, 0, context.screenshot->width,
-           context.screenshot->height, context.screenshot_dc, 0, 0, SRCCOPY);
-    BLENDFUNCTION blend{AC_SRC_OVER, 0, kOverlayShadeAlpha, 0};
-    AlphaBlend(context.frame_dc, 0, 0, context.screenshot->width,
-               context.screenshot->height, context.shade_dc, 0, 0, 1, 1,
-               blend);
-    if (context.selection.dragging) {
-        DrawSelection(context, NormalizedSelection(context));
+// The area a selection touches, including its border and a pixel of slack.
+RECT SelectionBounds(const OverlayContext& context, const RECT& selected) {
+    const int margin = context.border_width + 1;
+    return {
+        selected.left - margin,
+        selected.top - margin,
+        selected.right + margin,
+        selected.bottom + margin,
+    };
+}
+
+// Put the dimmed backdrop back over everything the last frame brightened, so
+// the frame buffer is clean again without rebuilding all of it.
+void RestoreShade(OverlayContext& context, const RECT& area) {
+    RECT clipped{
+        std::max<LONG>(area.left, 0),
+        std::max<LONG>(area.top, 0),
+        std::min<LONG>(area.right, context.screenshot->width),
+        std::min<LONG>(area.bottom, context.screenshot->height),
+    };
+    if (!HasArea(clipped)) {
+        return;
     }
+    BitBlt(context.frame_dc, clipped.left, clipped.top,
+           clipped.right - clipped.left, clipped.bottom - clipped.top,
+           context.shaded_dc, clipped.left, clipped.top, SRCCOPY);
+}
+
+// Invalidate what the next frame will change: the area the selection is
+// leaving plus the area it is arriving at. Passing nullptr here instead would
+// repaint the whole virtual screen, which on a multi-monitor desktop is
+// millions of pixels per mouse move.
+void InvalidateSelection(HWND window, const OverlayContext& context,
+                         const RECT& selected) {
+    RECT dirty = SelectionBounds(context, selected);
+    if (context.painted_valid) {
+        UnionRect(&dirty, &dirty, &context.painted);
+    }
+    InvalidateRect(window, &dirty, FALSE);
+}
+
+void PaintOverlay(HWND window, OverlayContext& context) {
+    // Only the selection changes between frames, so the previous one is undone
+    // and the new one drawn. Nothing else is touched, and nothing is blended:
+    // the dimmed copy was built once when the overlay opened.
+    if (context.painted_valid) {
+        RestoreShade(context, context.painted);
+        context.painted_valid = false;
+    }
+
+    if (context.selection.dragging) {
+        const RECT selected = NormalizedSelection(context);
+        DrawSelection(context, selected);
+        context.painted = SelectionBounds(context, selected);
+        context.painted_valid = true;
+    }
+
     if (context.show_hint) {
         DrawHint(context);
     }
@@ -297,12 +380,20 @@ LRESULT CALLBACK OverlayProcedure(HWND window, UINT message, WPARAM wparam,
         context->selection.current = context->selection.start;
         context->selection.dragging = true;
         SetCapture(window);
-        InvalidateRect(window, nullptr, FALSE);
+        // The hint is gone from this click onwards, so the dimmed backdrop is
+        // put back over the text that was already drawn into the frame. Later
+        // frames never touch this area again.
+        RestoreShade(*context, kHintRect);
+        InvalidateRect(window, &kHintRect, FALSE);
+        InvalidateSelection(window, *context, NormalizedSelection(*context));
         return 0;
     case WM_MOUSEMOVE:
         if (context->selection.dragging) {
             context->selection.current = ClampedPoint(window, lparam);
-            InvalidateRect(window, nullptr, FALSE);
+            InvalidateSelection(window, *context, NormalizedSelection(*context));
+            // Draw now rather than waiting for the queue to drain, so the
+            // rectangle keeps up with the pointer instead of trailing it.
+            UpdateWindow(window);
         }
         return 0;
     case WM_LBUTTONUP:
