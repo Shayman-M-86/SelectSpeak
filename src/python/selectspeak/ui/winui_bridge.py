@@ -26,7 +26,8 @@ import win32event
 import win32file
 import win32pipe
 
-from .hints import shortcut_label
+from ..speech.voices import VoiceOption
+from .hints import shortcut_label, voice_error_summary
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +95,7 @@ class WinUiPlayer:
     """
 
     # Which field carries the value, for the intents that report one.
-    _VALUE_FIELDS = {"set_hotkey": "hotkey"}
+    _VALUE_FIELDS = {"set_hotkey": "hotkey", "select_voice": "voice"}
 
     def __init__(
         self,
@@ -117,6 +118,7 @@ class WinUiPlayer:
         on_toggle_debug: Callable[[], None] | None = None,
         on_capture_hotkey: Callable[[], None] | None = None,
         on_set_hotkey: Callable[[str], None] | None = None,
+        on_select_voice: Callable[[str], None] | None = None,
     ) -> None:
         self._app_name = app_name
         self._pipe_name = pipe_name
@@ -143,6 +145,7 @@ class WinUiPlayer:
         # confirmed, which is why this intent carries a value.
         self._valued_handlers: dict[str, Callable[[str], None] | None] = {
             "set_hotkey": on_set_hotkey,
+            "select_voice": on_select_voice,
         }
         self._callbacks: SimpleQueue[Callable[[], None]] = SimpleQueue()
         self._pipe: int | None = None
@@ -159,6 +162,8 @@ class WinUiPlayer:
         self._auto_hide = auto_hide
         self._debug_enabled = debug_enabled
         self._voice_label = ""
+        self._voice_key = ""
+        self._voice_options: tuple[VoiceOption, ...] = ()
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -270,12 +275,23 @@ class WinUiPlayer:
         if speaking:
             if text and text != self._reader_text:
                 self.set_reader_text(text)
+            # Reading is under way, so the player comes back - otherwise a
+            # window auto-hide put away at the end of the last read would stay
+            # hidden through this one. Not while pausing: that is a window
+            # already on screen, and hiding it by hand should stick.
+            if not paused:
+                self.show()
         else:
             # Finished or stopped, so the reader goes back to its resting
             # state. The backend still passes the text it was reading, but
             # there is nothing being read any more.
             self.set_reader_text("")
         self._send("set_playback", speaking=speaking, paused=paused)
+
+        # Playback has ended, so the player has nothing left to show. Pausing
+        # keeps it up, because reading is still in progress.
+        if not speaking and self._auto_hide:
+            self.hide()
 
     # -- messages the application layer sends ------------------------------
     #
@@ -293,7 +309,13 @@ class WinUiPlayer:
         """No-op: see show_backend_loading."""
 
     def show_backend_error(self, message: str) -> None:
-        """No-op: see show_backend_loading."""
+        """Report a voice that would not load, in the settings window.
+
+        Selecting one that fails reverts to the previous voice, so without this
+        the picker silently snaps back and looks broken rather than reporting a
+        real failure.
+        """
+        self._send("voice_error", text=voice_error_summary(message))
 
     def show_capture_started(self) -> None:
         """No-op: the settings window runs its own recording dialog."""
@@ -330,6 +352,13 @@ class WinUiPlayer:
             "hotkey": shortcut_label(self._hotkey),
             "ocr_hotkey": shortcut_label(self._ocr_hotkey),
             "voice": self._voice_label,
+            "voice_key": self._voice_key,
+            # The whole list travels with the settings, so the picker can be
+            # rebuilt from any one message rather than needing them in order.
+            "voices": [
+                {"key": option.key, "label": option.label, "group": option.group}
+                for option in self._voice_options
+            ],
         }
 
     def send_settings(self) -> None:
@@ -357,15 +386,28 @@ class WinUiPlayer:
         self._debug_enabled = enabled
         self.send_settings()
 
-    def set_voice_options(self, options: object, selected_key: str) -> None:
-        """Accepted so the application layer can call it; no picker yet."""
+    def set_voice_options(self, options: tuple[VoiceOption, ...], selected_key: str) -> None:
+        self._voice_options = options
+        selected = next(
+            (option for option in options if option.key == selected_key),
+            options[0] if options else None,
+        )
+        if selected is not None:
+            self._voice_key = selected.key
+            self._voice_label = selected.short_label
+        self.send_settings()
 
     def set_voice_selection(self, key: str, label: str, *, activity: str = "") -> None:
-        # Loading and installing have nowhere to show themselves yet, so only a
-        # settled selection is reported.
-        if not activity:
-            self._voice_label = label
-            self.send_settings()
+        """Record the chosen voice, whether or not it has finished loading.
+
+        Selecting one reports it twice: once while the engine loads, and again
+        when it is ready. Both must be recorded - ignoring the first leaves the
+        old key in place, so the next settings push snaps the picker back to
+        the previous voice while the new one is still loading.
+        """
+        self._voice_key = key
+        self._voice_label = label
+        self.send_settings()
 
     def update_speech_debug(self, event: object) -> None:
         """Accepted so the application layer can call it; no panel yet."""

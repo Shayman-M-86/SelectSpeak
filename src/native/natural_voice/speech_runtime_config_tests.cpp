@@ -40,6 +40,17 @@ int main()
                            "UTF-16 runtime configuration");
 
     passed &= !read_speech_runtime_config({1, 2, 3}).has_value();
+
+    // Older voice packages take the legacy key rather than the installed
+    // licence, so it has to remain in the list and has to come last: trying it
+    // first would hand newer packages a credential they reject.
+    const auto candidates = speech_runtime_config_candidates();
+    if (candidates.empty() ||
+        candidates.back().second != legacy_speech_runtime_config()) {
+        std::cerr << "legacy runtime configuration fallback failed\n";
+        passed = false;
+    }
+
     if (!passed) {
         return 1;
     }

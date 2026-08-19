@@ -96,29 +96,36 @@
 
                 <TextBlock Text="Playback" Style="{StaticResource SettingGroupStyle}" />
 
+                <!--  The picker sits under the label rather than beside it: a
+                      control this wide in the right-hand column would squeeze
+                      the hint into a narrow ragged column.  -->
                 <Border Style="{StaticResource SettingCardStyle}">
-                    <Grid Style="{StaticResource SettingRowStyle}">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel VerticalAlignment="Center" Grid.Column="0">
+                    <StackPanel Spacing="10">
+                        <StackPanel>
                             <TextBlock Text="Voice" />
                             <TextBlock
-                                Text="Chosen in the player, beside the transport controls."
+                                Text="Used for everything read aloud."
                                 Style="{ThemeResource CaptionTextBlockStyle}"
                                 TextWrapping="Wrap"
                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                         </StackPanel>
-                        <!--  Read-only until the voice list travels over the
-                              bridge; the picker still lives in the player.  -->
-                        <TextBlock
-                            x:Name="VoiceValue"
-                            Grid.Column="1"
-                            Text="Windows"
-                            VerticalAlignment="Center"
-                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                    </Grid>
+                        <!--  Grouped by engine, as the Tk menu is. Headings are
+                              non-selectable items rather than a nested list,
+                              which is what a ComboBox can express.  -->
+                        <ComboBox
+                            x:Name="VoicePicker"
+                            HorizontalAlignment="Stretch"
+                            SelectionChanged="OnVoiceSelected" />
+
+                        <!--  Shown when a voice will not load. Selecting one
+                              that fails reverts to the previous voice, which
+                              looks like a fault unless it says why.  -->
+                        <InfoBar
+                            x:Name="VoiceError"
+                            IsOpen="False"
+                            IsClosable="True"
+                            Severity="Warning" />
+                    </StackPanel>
                 </Border>
 
                 <TextBlock Text="Behaviour" Style="{StaticResource SettingGroupStyle}" />

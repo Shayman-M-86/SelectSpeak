@@ -52,9 +52,15 @@ public sealed class HotkeyDialog
     /// Show the dialog and return the confirmed shortcut, or <c>null</c> if it
     /// was cancelled or nothing was recorded.
     /// </summary>
+    /// <param name="owner">
+    /// The window the dialog belongs to. Recording stops if it stops being the
+    /// active window, because the hook swallows Alt+Tab and everything else -
+    /// so a dialog left recording in the background could not be returned to.
+    /// </param>
     /// <param name="current">The shortcut in force, shown until keys arrive.</param>
-    public async Task<string?> ShowAsync(XamlRoot xamlRoot, string current)
+    public async Task<string?> ShowAsync(Window owner, string current)
     {
+        var xamlRoot = owner.Content.XamlRoot;
         _captured = string.Empty;
         _preview.Text = string.IsNullOrEmpty(current) ? "Press a shortcut" : current;
         _preview.Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
@@ -97,16 +103,37 @@ public sealed class HotkeyDialog
         recorder.Recorded += combo => Post(() => ShowRecorded(combo));
         recorder.Cancelled += () => Post(() => _dialog?.Hide());
 
+        // Losing the window cancels the recording. The hook swallows Alt+Tab
+        // and the Windows key, so a dialog still recording in the background
+        // would leave no way of getting back to it.
+        void OnActivated(object _, WindowActivatedEventArgs args)
+        {
+            if (args.WindowActivationState == WindowActivationState.Deactivated)
+            {
+                Post(() => _dialog?.Hide());
+            }
+        }
+
+        owner.Activated += OnActivated;
+
         if (!recorder.Start())
         {
             _hint.Text = "The keyboard could not be captured. Close and try again.";
         }
 
-        var result = await _dialog.ShowAsync();
-        _dialog = null;
-        recorder.Stop();
-
-        return result == ContentDialogResult.Primary && _captured.Length > 0 ? _captured : null;
+        try
+        {
+            var result = await _dialog.ShowAsync();
+            _dialog = null;
+            return result == ContentDialogResult.Primary && _captured.Length > 0
+                ? _captured
+                : null;
+        }
+        finally
+        {
+            owner.Activated -= OnActivated;
+            recorder.Stop();
+        }
     }
 
     private void Post(Action action)

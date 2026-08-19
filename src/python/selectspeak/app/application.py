@@ -123,6 +123,7 @@ class SelectSpeakApp:
             on_toggle_debug=self.toggle_speech_debug,
             on_capture_hotkey=self.start_hotkey_capture,
             on_set_hotkey=self.set_hotkey,
+            on_select_voice=self.select_voice,
         )
         player.start()
         return player

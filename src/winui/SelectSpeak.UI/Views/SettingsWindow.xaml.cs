@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
 using SelectSpeak.UI.Bridge;
 using SelectSpeak.UI.Windowing;
 
@@ -62,6 +63,13 @@ public sealed partial class SettingsWindow : Window
     /// </summary>
     public void Apply(PlayerMessage message)
     {
+        if (message.Type == "voice_error")
+        {
+            VoiceError.Message = message.Text ?? "This voice could not be used.";
+            VoiceError.IsOpen = true;
+            return;
+        }
+
         _applying = true;
         try
         {
@@ -79,15 +87,71 @@ public sealed partial class SettingsWindow : Window
                 OcrHotkeyValue.Text = message.OcrHotkey;
             }
 
-            if (!string.IsNullOrEmpty(message.Voice))
+            if (message.Voices is { Count: > 0 })
             {
-                VoiceValue.Text = message.Voice;
+                FillVoices(message.Voices, message.VoiceKey);
             }
         }
         finally
         {
             _applying = false;
         }
+    }
+
+    /// <summary>
+    /// Rebuild the voice list, grouped by engine.
+    ///
+    /// A ComboBox has no nested items, so each group contributes a disabled
+    /// heading followed by its voices - the same shape the Tk menu uses.
+    /// </summary>
+    private void FillVoices(IReadOnlyList<VoiceChoice> voices, string? selectedKey)
+    {
+        _applying = true;
+        try
+        {
+            VoicePicker.Items.Clear();
+
+            var group = string.Empty;
+            foreach (var voice in voices)
+            {
+                if (voice.Group != group)
+                {
+                    group = voice.Group;
+                    VoicePicker.Items.Add(new ComboBoxItem
+                    {
+                        Content = group,
+                        IsEnabled = false,
+                        // A heading, not a choice, so it reads as a label.
+                        FontSize = 12,
+                    });
+                }
+
+                var item = new ComboBoxItem { Content = voice.Label, Tag = voice.Key };
+                VoicePicker.Items.Add(item);
+
+                if (voice.Key == selectedKey)
+                {
+                    VoicePicker.SelectedItem = item;
+                }
+            }
+        }
+        finally
+        {
+            _applying = false;
+        }
+    }
+
+    private async void OnVoiceSelected(object sender, SelectionChangedEventArgs e)
+    {
+        if (_applying || VoicePicker.SelectedItem is not ComboBoxItem { Tag: string key })
+        {
+            return;
+        }
+
+        // A fresh attempt, so any complaint about the last one is stale.
+        VoiceError.IsOpen = false;
+
+        await _bridge.SendAsync("select_voice", new Dictionary<string, string> { ["voice"] = key });
     }
 
     private async void OnAutoHideToggled(object sender, RoutedEventArgs e)
@@ -134,7 +198,7 @@ public sealed partial class SettingsWindow : Window
         {
             // The dialog owns the keyboard hook for as long as it is open, so
             // the backend is not involved until there is a result to report.
-            var chosen = await new HotkeyDialog().ShowAsync(Content.XamlRoot, HotkeyValue.Text);
+            var chosen = await new HotkeyDialog().ShowAsync(this, HotkeyValue.Text);
             if (chosen is not null)
             {
                 await _bridge.SendAsync(

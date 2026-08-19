@@ -54,7 +54,7 @@ public partial class App : Application
     /// </summary>
     private void OnMessage(PlayerMessage message)
     {
-        if (message.Type is not ("show_settings" or "set_settings"))
+        if (message.Type is not ("show_settings" or "set_settings" or "voice_error"))
         {
             return; // Belongs to the player, which subscribes separately.
         }

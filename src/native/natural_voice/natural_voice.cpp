@@ -156,26 +156,39 @@ int ss_voice_initialize(const wchar_t* voice_path)
                                      voices->ErrorDetails);
         }
 
-        auto runtime_config = discover_speech_runtime_config();
-        if (!runtime_config) {
-            throw std::runtime_error(
-                "Could not discover the Natural Voice runtime configuration "
-                "from the installed Windows speech extension");
-        }
-
-        config->SetSpeechSynthesisVoice(voices->Voices.front()->Name,
-                                        *runtime_config);
-        auto validation_synthesizer =
-            SpeechSynthesizer::FromConfig(config, nullptr);
-        auto validation = validation_synthesizer->SpeakText("");
-        if (validation->Reason !=
-            ResultReason::SynthesizingAudioCompleted) {
+        // Voice packages come in two generations that take different
+        // credentials, and nothing in a package says which it wants. The only
+        // way to find out is to synthesise nothing with each in turn and keep
+        // whichever is accepted; guessing from the package name would break
+        // the moment Microsoft ships a voice that does not follow the pattern.
+        const auto candidates = speech_runtime_config_candidates();
+        std::string rejections;
+        bool accepted = false;
+        for (const auto& [source, candidate] : candidates) {
+            auto candidate_config = create_config();
+            candidate_config->SetSpeechSynthesisVoice(
+                voices->Voices.front()->Name, candidate);
+            auto validation_synthesizer =
+                SpeechSynthesizer::FromConfig(candidate_config, nullptr);
+            auto validation = validation_synthesizer->SpeakText("");
+            if (validation->Reason ==
+                ResultReason::SynthesizingAudioCompleted) {
+                config = std::move(candidate_config);
+                accepted = true;
+                break;
+            }
             const auto details =
                 SpeechSynthesisCancellationDetails::FromResult(validation);
+            if (!rejections.empty()) {
+                rejections += " | ";
+            }
+            rejections += source + ": " + details->ErrorDetails;
+        }
+        if (!accepted) {
             throw std::runtime_error(
-                "The installed Natural Voice could not be initialized with "
-                "the discovered speech runtime configuration: " +
-                details->ErrorDetails);
+                "The installed Natural Voice rejected every available speech "
+                "runtime configuration: " +
+                rejections);
         }
 
         auto stream = AudioOutputStream::CreatePushStream(

@@ -107,12 +107,21 @@ public sealed partial class PlayerWindow : Window
                 SetPlayback(message.Speaking, message.Paused);
                 break;
 
+            // Both go through the hotkey, so showing and hiding always take the
+            // one code path with the one set of repainting behaviour. It is a
+            // toggle, so it is only pressed when a change is actually wanted.
             case "show":
-                _controller.Show();
+                if (_controller.IsHidden)
+                {
+                    _controller.PressToggleHotkey();
+                }
                 break;
 
             case "hide":
-                _controller.Hide();
+                if (!_controller.IsHidden)
+                {
+                    _controller.PressToggleHotkey();
+                }
                 break;
         }
     }

@@ -42,3 +42,35 @@ def backend_loading_message(activity: str = "loading") -> str:
             "SelectSpeak will restart when installation finishes."
         )
     return "Loading the voice engine. Reading will be available when it is ready."
+
+
+# Recognisable causes, mapped to something worth reading. The Speech SDK's own
+# text names an internal error code and repeats the whole configuration chain,
+# which is diagnostics rather than an explanation.
+_VOICE_ERROR_CAUSES = (
+    (
+        "WRONG_DECRYPTION_KEY",
+        "This voice did not accept any credential this machine offers. "
+        "Reinstalling it from Windows Settings may help.",
+    ),
+    (
+        "no longer available",
+        "This voice is no longer installed.",
+    ),
+)
+
+
+def voice_error_summary(message: str) -> str:
+    """Explain why a voice would not load, in one sentence.
+
+    The engine's message is long and names an internal error code, so a known
+    cause is replaced with what it means. Anything unrecognised is passed
+    through, trimmed, rather than hidden.
+    """
+    for marker, explanation in _VOICE_ERROR_CAUSES:
+        if marker in message:
+            return explanation
+
+    # Unknown: keep the first sentence, which is the most specific part.
+    first = message.split(". ")[0].strip()
+    return first if first else "This voice could not be used."

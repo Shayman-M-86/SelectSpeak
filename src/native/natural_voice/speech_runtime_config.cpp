@@ -163,6 +163,33 @@ std::optional<std::string> read_speech_runtime_config(
     return std::nullopt;
 }
 
+std::string legacy_speech_runtime_config()
+{
+    // Adapted from NaturalVoiceSAPIAdapter (MIT, copyright 2024 gexgd0419).
+    // Extracted from Windows system components; not suitable for production or
+    // redistribution. New voice packages reject it, which is why it is tried
+    // only after the installed licence.
+    return "Key:ZCjZ7nHDSLvf4gpELteM4AnzaWUjTpn7UkV7D@vvksl0w1SNgon6d1905WANbktDc9S39oaA4r29HJNayXvTq8fJsq";
+}
+
+std::vector<std::pair<std::string, std::string>>
+speech_runtime_config_candidates()
+{
+    // The installed licence comes first: it is read from this machine, so it
+    // matches whatever Windows currently ships and covers every package new
+    // enough to use that format. The legacy key is the fallback for older
+    // packages, which Windows leaves in place across updates without
+    // re-encrypting them.
+    std::vector<std::pair<std::string, std::string>> candidates;
+    if (auto installed = discover_speech_runtime_config()) {
+        candidates.emplace_back("installed Windows runtime",
+                                std::move(*installed));
+    }
+    candidates.emplace_back("legacy compatibility",
+                            legacy_speech_runtime_config());
+    return candidates;
+}
+
 std::optional<std::string> discover_speech_runtime_config()
 {
     for (const auto& path : speech_extension_candidates()) {
