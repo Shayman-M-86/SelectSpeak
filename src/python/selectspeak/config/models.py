@@ -10,7 +10,6 @@ class InputConfig:
     ocr_language: str
     native_dll: str
     hotkey_debounce_seconds: float
-    capture_timeout_seconds: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,7 +64,6 @@ class AppConfig:
     log_file: str = ""
     minimum_text_length: int = 3
     hotkey_debounce_seconds: float = 0.3
-    capture_timeout_seconds: float = 15.0
 
     @property
     def input(self) -> InputConfig:
@@ -75,7 +73,6 @@ class AppConfig:
             self.ocr_language,
             self.native_dll,
             self.hotkey_debounce_seconds,
-            self.capture_timeout_seconds,
         )
 
     @property

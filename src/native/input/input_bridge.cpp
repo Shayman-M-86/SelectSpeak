@@ -20,16 +20,6 @@ int ss_input_capture_now()
     return selectspeak::input::CaptureNow();
 }
 
-int ss_input_record_start(ss_record_callback_t callback, void* context)
-{
-    return selectspeak::input::StartRecording(callback, context);
-}
-
-void ss_input_record_stop()
-{
-    selectspeak::input::StopRecording();
-}
-
 void ss_input_stop()
 {
     // OCR uses the input runtime's message window, so release it first.

@@ -2,7 +2,7 @@ import json
 import types
 
 from selectspeak.app.application import SelectSpeakApp
-from selectspeak.ui.hints import idle_hint, shortcut_label
+from selectspeak.ui.hints import shortcut_label
 from selectspeak.ui.winui_bridge import WinUiPlayer
 
 
@@ -73,30 +73,17 @@ def test_unknown_intent_is_ignored() -> None:
     assert player.drain_callbacks() == 0
 
 
-def test_status_messages_carry_the_same_words_as_the_tk_player() -> None:
-    player, sent = _player_recording_sends()
-
-    player.show_idle_hint()
-
-    assert sent == [
-        {
-            "type": "set_status",
-            "text": idle_hint("alt+s", "alt+d", clipboard_mode=False),
-        }
-    ]
-
-
 def _last_of_type(sent: list[dict[str, object]], message_type: str) -> dict[str, object]:
     return [message for message in sent if message["type"] == message_type][-1]
 
 
-def test_clipboard_mode_changes_the_idle_hint() -> None:
+def test_clipboard_mode_is_recorded_and_pushed_to_the_settings_window() -> None:
     player, sent = _player_recording_sends()
 
     player.set_clipboard_mode(True)
 
-    status = _last_of_type(sent, "set_status")
-    assert status["text"] == idle_hint("alt+s", "alt+d", clipboard_mode=True)
+    assert player.clipboard_mode is True
+    assert _last_of_type(sent, "set_settings")["clipboard_mode"] is True
 
 
 def test_capture_complete_reports_the_new_shortcut() -> None:
@@ -105,8 +92,10 @@ def test_capture_complete_reports_the_new_shortcut() -> None:
     player.show_capture_complete("ctrl+shift+r")
 
     assert player._hotkey == "ctrl+shift+r"
-    status = _last_of_type(sent, "set_status")
-    assert status["text"] == f"Shortcut set to {shortcut_label('ctrl+shift+r')}"
+    # The player names the shortcut beside the gear, and the settings window
+    # shows it in its own row, so a new binding pushes both.
+    assert _last_of_type(sent, "set_shortcut")["hotkey"] == shortcut_label("ctrl+shift+r")
+    assert _last_of_type(sent, "set_settings")["hotkey"] == shortcut_label("ctrl+shift+r")
 
 
 def test_changing_a_setting_pushes_the_whole_set_back() -> None:
@@ -139,14 +128,13 @@ def test_settings_window_intents_are_routed() -> None:
         on_toggle_auto_hide=lambda: seen.append("auto_hide"),
         on_toggle_clipboard=lambda: seen.append("clipboard"),
         on_toggle_debug=lambda: seen.append("debug"),
-        on_capture_hotkey=lambda: seen.append("capture_hotkey"),
     )
 
-    for intent in ("toggle_auto_hide", "toggle_clipboard", "toggle_debug", "capture_hotkey"):
+    for intent in ("toggle_auto_hide", "toggle_clipboard", "toggle_debug"):
         player._dispatch({"type": intent})
     player.drain_callbacks()
 
-    assert seen == ["auto_hide", "clipboard", "debug", "capture_hotkey"]
+    assert seen == ["auto_hide", "clipboard", "debug"]
 
 
 def test_a_message_serialises_to_exactly_one_line() -> None:
@@ -161,7 +149,7 @@ def test_a_message_serialises_to_exactly_one_line() -> None:
 
 
 def test_send_is_a_no_op_while_disconnected() -> None:
-    """Intents are dropped rather than queued, and must not raise."""
+    """Messages are dropped rather than queued, and must not raise."""
     player = WinUiPlayer()
     assert player._pipe is None
-    player.set_status("no pipe yet")
+    player.set_reader_text("no pipe yet")

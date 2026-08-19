@@ -5,7 +5,7 @@ from collections.abc import Callable
 import pystray
 from PIL import Image, ImageDraw
 
-from .theme import load_palette
+from .system_theme import apps_use_dark_theme
 
 logger = logging.getLogger(__name__)
 
@@ -77,9 +77,9 @@ class TrayController:
         this follows the theme: light glyph on dark taskbars and vice versa.
         """
         logger.debug("tray.icon.creating")
-        palette = load_palette()
+        dark = apps_use_dark_theme()
         # The taskbar is the opposite polarity to the app surface.
-        fill = (255, 255, 255, 255) if palette.dark else (0, 0, 0, 255)
+        fill = (255, 255, 255, 255) if dark else (0, 0, 0, 255)
         image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
         drawing = ImageDraw.Draw(image)
         # Speaker body and cone.
@@ -94,5 +94,5 @@ class TrayController:
                 fill=fill,
                 width=width,
             )
-        logger.debug("tray.icon.created theme=%s", "dark" if palette.dark else "light")
+        logger.debug("tray.icon.created theme=%s", "dark" if dark else "light")
         return image

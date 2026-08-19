@@ -10,16 +10,12 @@
 #include <thread>
 
 #include "../selection/selection_capture.h"
-#include "shortcut_recorder.h"
 
 namespace selectspeak::input {
 namespace {
 constexpr int kHotkeyId = 1;
 constexpr int kOcrHotkeyId = 2;
 constexpr UINT kRebindMessage = WM_APP + 1;
-constexpr UINT kStartRecordingMessage = WM_APP + 2;
-constexpr UINT kStopRecordingMessage = WM_APP + 3;
-constexpr UINT kRecordingEventMessage = WM_APP + 4;
 constexpr UINT kCaptureMessage = WM_APP + 5;
 constexpr UINT kRegisterOcrHotkeyMessage = WM_APP + 6;
 constexpr UINT kUnregisterOcrHotkeyMessage = WM_APP + 7;
@@ -44,7 +40,6 @@ struct RuntimeState {
     ss_activation_callback_t activation_callback = nullptr;
     void* callback_context = nullptr;
 
-    ShortcutRecorder recorder;
     OcrHotkeyHandler ocr_handler = nullptr;
     std::atomic<bool> ocr_dispatching{false};
 
@@ -97,8 +92,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wparam,
 {
     switch (message) {
     case WM_HOTKEY:
-        if (wparam == kHotkeyId && !g_runtime.recorder.active() &&
-            !g_runtime.ocr_dispatching.load()) {
+        if (wparam == kHotkeyId && !g_runtime.ocr_dispatching.load()) {
             if (g_runtime.activation_callback != nullptr &&
                 g_runtime.activation_callback(g_runtime.callback_context) != 0) {
                 return 0;
@@ -106,8 +100,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wparam,
             CaptureSelection(GetTickCount64());
             return 0;
         }
-        if (wparam == kOcrHotkeyId && !g_runtime.recorder.active() &&
-            g_runtime.ocr_handler != nullptr &&
+        if (wparam == kOcrHotkeyId && g_runtime.ocr_handler != nullptr &&
             !g_runtime.ocr_dispatching.exchange(true)) {
             g_runtime.ocr_handler();
             g_runtime.ocr_dispatching.store(false);
@@ -155,26 +148,7 @@ LRESULT CALLBACK WindowProcedure(HWND window, UINT message, WPARAM wparam,
         SetWindowsError("RegisterHotKey", error);
         return 0;
     }
-    case kStartRecordingMessage: {
-        const DWORD error = g_runtime.recorder.Start(
-            window, kRecordingEventMessage, kStopRecordingMessage,
-            reinterpret_cast<ss_record_callback_t>(wparam),
-            reinterpret_cast<void*>(lparam));
-        if (error != ERROR_SUCCESS) {
-            SetWindowsError("Start shortcut recording", error);
-            return 0;
-        }
-        return 1;
-    }
-    case kStopRecordingMessage:
-        g_runtime.recorder.Stop();
-        return 1;
-    case kRecordingEventMessage:
-        g_runtime.recorder.Deliver(static_cast<unsigned int>(wparam),
-                                   LOWORD(lparam), HIWORD(lparam));
-        return 0;
     case WM_CLOSE:
-        g_runtime.recorder.Stop();
         UnregisterHotKey(window, kOcrHotkeyId);
         g_runtime.ocr_handler = nullptr;
         DestroyWindow(window);
@@ -241,7 +215,6 @@ void MessageLoop()
         TranslateMessage(&message);
         DispatchMessageW(&message);
     }
-    g_runtime.recorder.Stop();
     UnregisterHotKey(window, kOcrHotkeyId);
     UnregisterHotKey(window, kHotkeyId);
     g_runtime.window.store(nullptr);
@@ -307,28 +280,6 @@ int CaptureNow()
         return 1;
     }
     return 0;
-}
-
-int StartRecording(ss_record_callback_t callback, void* context)
-{
-    const HWND window = g_runtime.window.load();
-    if (!g_runtime.running.load() || window == nullptr || callback == nullptr) {
-        SetError("The native input adapter is not ready to record a shortcut");
-        return 1;
-    }
-    return SendMessageW(window, kStartRecordingMessage,
-                        reinterpret_cast<WPARAM>(callback),
-                        reinterpret_cast<LPARAM>(context))
-               ? 0
-               : 1;
-}
-
-void StopRecording()
-{
-    const HWND window = g_runtime.window.load();
-    if (g_runtime.running.load() && window != nullptr) {
-        SendMessageW(window, kStopRecordingMessage, 0, 0);
-    }
 }
 
 void Stop()

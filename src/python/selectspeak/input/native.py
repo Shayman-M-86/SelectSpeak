@@ -9,7 +9,7 @@ from typing import Any
 
 from ..infrastructure.logging import text_preview
 from ..native import get_native_bridge
-from .keymap import from_windows_hotkey, to_windows_hotkey
+from .keymap import to_windows_hotkey
 
 logger = logging.getLogger(__name__)
 
@@ -20,13 +20,6 @@ class NativeInputError(RuntimeError):
 
 _CAPTURE_CALLBACK = ctypes.CFUNCTYPE(None, ctypes.c_wchar_p, ctypes.c_void_p)
 _ACTIVATION_CALLBACK = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p)
-_RECORD_CALLBACK = ctypes.CFUNCTYPE(
-    None,
-    ctypes.c_uint,
-    ctypes.c_uint,
-    ctypes.c_uint,
-    ctypes.c_void_p,
-)
 
 
 class NativeInputAdapter:
@@ -47,7 +40,6 @@ class NativeInputAdapter:
         self._configure_api()
         self._callback = _CAPTURE_CALLBACK(self._on_capture)
         self._activation_callback = _ACTIVATION_CALLBACK(self._on_activation)
-        self._record_callback: Any = None
         self._started = False
 
     def start(self) -> None:
@@ -83,38 +75,6 @@ class NativeInputAdapter:
             self._started = False
         logger.info("native_input.stopped hotkey=%s", self.hotkey)
 
-    def start_recording(
-        self,
-        on_preview: Callable[[str], None],
-        on_complete: Callable[[str], None],
-        on_cancel: Callable[[], None],
-    ) -> None:
-        def handle_recording(event: int, modifiers: int, virtual_key: int, _context: Any) -> None:
-            hotkey = from_windows_hotkey(modifiers, virtual_key)
-            logger.info(
-                "native_input.recording.event event=%s modifiers=%s virtual_key=%s hotkey=%s",
-                event,
-                modifiers,
-                virtual_key,
-                hotkey,
-            )
-            if event == 1 and hotkey:
-                on_preview(hotkey)
-            elif event == 2 and hotkey:
-                on_complete(hotkey)
-            elif event == 3 or (event == 2 and not hotkey):
-                on_cancel()
-
-        callback = _RECORD_CALLBACK(handle_recording)
-        if self._dll.ss_input_record_start(callback, None):
-            raise NativeInputError(self._last_error())
-        self._record_callback = callback
-        logger.info("native_input.recording.started")
-
-    def stop_recording(self) -> None:
-        self._dll.ss_input_record_stop()
-        logger.info("native_input.recording.stopped")
-
     def _configure_api(self) -> None:
         self._dll.ss_input_start.argtypes = [
             ctypes.c_uint,
@@ -128,13 +88,6 @@ class NativeInputAdapter:
         self._dll.ss_input_rebind.restype = ctypes.c_int
         self._dll.ss_input_capture_now.argtypes = []
         self._dll.ss_input_capture_now.restype = ctypes.c_int
-        self._dll.ss_input_record_start.argtypes = [
-            _RECORD_CALLBACK,
-            ctypes.c_void_p,
-        ]
-        self._dll.ss_input_record_start.restype = ctypes.c_int
-        self._dll.ss_input_record_stop.argtypes = []
-        self._dll.ss_input_record_stop.restype = None
         self._dll.ss_input_stop.argtypes = []
         self._dll.ss_input_stop.restype = None
         self._dll.ss_input_last_capture_source.argtypes = []

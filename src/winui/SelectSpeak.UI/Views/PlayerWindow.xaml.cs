@@ -107,20 +107,20 @@ public sealed partial class PlayerWindow : Window
                 SetPlayback(message.Speaking, message.Paused);
                 break;
 
-            // Both go through the hotkey, so showing and hiding always take the
-            // one code path with the one set of repainting behaviour. It is a
-            // toggle, so it is only pressed when a change is actually wanted.
+            // Both go through Toggle, so showing and hiding always take the one
+            // code path with the one set of repainting behaviour. Guarded, so a
+            // repeated show or hide is not a toggle back the other way.
             case "show":
                 if (_controller.IsHidden)
                 {
-                    _controller.PressToggleHotkey();
+                    _controller.Toggle();
                 }
                 break;
 
             case "hide":
                 if (!_controller.IsHidden)
                 {
-                    _controller.PressToggleHotkey();
+                    _controller.Toggle();
                 }
                 break;
         }
@@ -129,14 +129,8 @@ public sealed partial class PlayerWindow : Window
     /// <summary>Whether the player is currently hidden.</summary>
     public bool IsHidden => _controller.IsHidden;
 
-    /// <summary>
-    /// Show or hide the player exactly as Alt+A does.
-    ///
-    /// This posts the hotkey's own message rather than calling Show or Hide,
-    /// so the window changes state at the same point in the message loop that
-    /// the key press would - which is what makes it repaint identically.
-    /// </summary>
-    public void ToggleAsHotkey() => _controller.PressToggleHotkey();
+    /// <summary>Show or hide the player.</summary>
+    public void Toggle() => _controller.Toggle();
 
     /// <summary>
     /// Name the shortcut that starts a read, beside the settings button.

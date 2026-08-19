@@ -21,7 +21,6 @@ set(SELECTSPEAK_NATIVE_SOURCES
     api.cpp
     input/input_bridge.cpp
     input/hotkeys/hotkey_runtime.cpp
-    input/hotkeys/shortcut_recorder.cpp
     input/ocr/ocr_capture.cpp
     input/ocr/ocr_layout.cpp
     input/selection/selection_capture.cpp)

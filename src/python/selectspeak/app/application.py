@@ -1,6 +1,5 @@
 import ctypes
 import logging
-import os
 import threading
 import time
 from dataclasses import replace
@@ -16,25 +15,15 @@ from ..input.keymap import to_windows_hotkey
 from ..input.ocr_capture import OcrCaptureError, OcrCaptureHotkey
 from ..native import shutdown_native_bridge
 from ..speech import Speaker, create_speaker
-from ..speech.backends.natural import NaturalVoiceSpeaker, discover_natural_voices
 from ..speech.debug import SpeechDebugEvent
-from ..speech.feature_installer import launch_supertonic_installer
-from ..speech.model_installation import supertonic_model_is_installed
 from ..speech.normalization import prepare_for_speech
-from ..speech.optional_dependencies import supertonic_dependencies_are_installed
-from ..speech.voices import VoiceOption, build_voice_options, natural_voice_key
+from ..ui.contracts import Player
 from ..ui.hints import shortcut_label
-from ..ui.player import PlayerWindow
 from ..ui.tray import TrayController
 from ..ui.winui_bridge import WinUiPlayer, winui_executable
+from .voices import VoiceController, speaker_backend
 
 logger = logging.getLogger(__name__)
-
-BACKEND_INSTALLING = "installing"
-BACKEND_LOADING = "loading"
-MESSAGE_BOX_YES_NO = 0x00000004
-MESSAGE_BOX_ICON_QUESTION = 0x00000020
-MESSAGE_BOX_YES = 6
 
 
 def is_repeat_of_active_speech(*, speaking: bool, active_text: str, captured_text: str) -> bool:
@@ -49,23 +38,6 @@ def should_stop_clipboard_speech_immediately(*, speaking: bool, source: str) -> 
     return speaking and source in {"clipboard", "clipboard_fallback"}
 
 
-def confirm_supertonic_install() -> bool:
-    """Ask before handing control to setup for the large optional component."""
-    windows_libraries = getattr(ctypes, "windll", None)
-    if windows_libraries is None:
-        return False
-    result = windows_libraries.user32.MessageBoxW(
-        None,
-        "Supertonic Neural Voice is not installed.\n\n"
-        "Setup will add its Python dependencies and local voice model, requiring "
-        "approximately 475 MB. SelectSpeak will restart when setup finishes.\n\n"
-        "Install Supertonic now?",
-        "Install Supertonic Neural Voice",
-        MESSAGE_BOX_YES_NO | MESSAGE_BOX_ICON_QUESTION,
-    )
-    return result == MESSAGE_BOX_YES
-
-
 class SelectSpeakApp:
     """Coordinate application state while delegating platform-specific work."""
 
@@ -76,14 +48,13 @@ class SelectSpeakApp:
     ) -> None:
         self._config = config
         self._settings = settings
+        self._player: Player
         self._state_lock = threading.RLock()
         self._session = PlaybackSession()
         self._clipboard_mode = config.clipboard_mode
         self._auto_hide = config.auto_hide
         self._speech_debug_enabled = config.speech_debug_enabled
         self._speech_backend = "supertonic" if config.speech_backend.casefold() == "supertonic" else "windows"
-        self._backend_switching = False
-        self._backend_activity = ""
         self._last_hotkey_time = 0.0
         self._shutting_down = False
         logger.debug(
@@ -92,20 +63,19 @@ class SelectSpeakApp:
             config.default_hotkey,
         )
 
-    def _create_player(self) -> PlayerWindow | WinUiPlayer:
-        """Build the renderer, defaulting to Tk.
+    def _create_player(self) -> Player:
+        """Build the WinUI renderer and start its bridge.
 
-        SELECTSPEAK_UI=winui opts into the WinUI player while it is still
-        catching up with the Tk one; it falls back rather than failing to start
-        when that build is missing.
+        The executable is required: without it there is nothing to render to,
+        and starting headless would leave a process with a global hotkey and no
+        way to see or stop what it is doing.
         """
-        if os.environ.get("SELECTSPEAK_UI", "").strip().casefold() != "winui":
-            return self._create_tk_player()
         if winui_executable() is None:
-            logger.error("ui.winui_unavailable falling_back=tk")
-            return self._create_tk_player()
+            raise RuntimeError(
+                "SelectSpeak's player could not be found. Build it with "
+                "build-tools/native/build.ps1, or set SELECTSPEAK_WINUI_EXE."
+            )
 
-        logger.info("ui.renderer.selected renderer=winui")
         player = WinUiPlayer(
             app_name=self._config.app_name,
             hotkey=self._config.default_hotkey,
@@ -122,45 +92,17 @@ class SelectSpeakApp:
             on_toggle_clipboard=self.toggle_clipboard_mode,
             on_toggle_auto_hide=self.toggle_auto_hide,
             on_toggle_debug=self.toggle_speech_debug,
-            on_capture_hotkey=self.start_hotkey_capture,
             on_set_hotkey=self.set_hotkey,
             on_set_ocr_hotkey=self.set_ocr_hotkey,
             on_select_voice=self.select_voice,
         )
         player.start()
+        logger.info("ui.renderer.started renderer=winui")
         return player
 
-    def _create_tk_player(self) -> PlayerWindow:
-        return PlayerWindow(
-            app_name=self._config.app_name,
-            hotkey=self._config.default_hotkey,
-            ocr_hotkey=self._config.ocr_hotkey,
-            on_play=self.replay,
-            on_read=self.read_current,
-            on_pause=self.pause,
-            on_resume=self.resume,
-            on_stop=self.stop,
-            on_refresh_voices=self.refresh_voice_options,
-            on_select_voice=self.select_voice,
-            on_toggle_clipboard=self.toggle_clipboard_mode,
-            on_toggle_auto_hide=self.toggle_auto_hide,
-            on_toggle_debug=self.toggle_speech_debug,
-            on_capture_hotkey=self.start_hotkey_capture,
-            auto_hide=self._auto_hide,
-            speech_backend=self._speech_backend,
-            debug_enabled=self._speech_debug_enabled,
-        )
-
     def open_settings(self) -> None:
-        """Open the settings window, where the renderer provides one.
-
-        The Tk player shows its settings inline, so this is only meaningful for
-        the WinUI renderer.
-        """
         logger.info("ui.settings.requested")
-        opener = getattr(self._player, "open_settings", None)
-        if opener is not None:
-            opener()
+        self._player.open_settings()
 
     def run(self) -> None:
         logger.info("app.starting")
@@ -177,9 +119,17 @@ class SelectSpeakApp:
             language=self._config.ocr_language,
         )
         self._speaker = create_speaker(self._config, self._on_word, self._on_speech_debug)
-        self._speech_backend = self._speaker_backend(self._speaker)
-        self._speakers = {self._speech_backend: self._speaker}
-        self._configure_voice_options()
+        self._speech_backend = speaker_backend(self._speaker)
+        self._voices = VoiceController(
+            self._config,
+            self._player,
+            word_callback=self._on_word,
+            debug_callback=self._on_speech_debug,
+            on_activated=self._on_voice_activated,
+            on_stop_playback=self.stop,
+            on_shutdown_requested=self.shutdown,
+        )
+        self._voices.adopt(self._speaker, self._speech_backend, self._config)
         self._hotkeys = HotkeyManager(
             self._config.default_hotkey,
             self._on_hotkey,
@@ -323,210 +273,23 @@ class SelectSpeakApp:
         logger.info("speech.debug.changed enabled=%s", enabled)
 
     def select_voice(self, key: str) -> None:
-        option = self._voice_options.get(key)
-        if option is None:
-            return
-        if option.backend == "supertonic" and self._supertonic_install_required():
-            self._request_supertonic_install(option)
-            return
-        activity = self._voice_load_activity(option)
+        self._voices.select(key)
+
+    def _on_voice_activated(
+        self,
+        speaker: Speaker,
+        backend: str,
+        _key: str,
+        config: AppConfig,
+    ) -> None:
+        """Make a freshly loaded voice the one that speaks."""
         with self._state_lock:
-            if self._backend_switching:
+            if self._shutting_down:
                 return
-            if key == self._selected_voice_key:
-                return
-            self._backend_switching = True
-            self._backend_activity = activity
-            current_key = self._selected_voice_key
-        self.stop()
-
-        def show_activity() -> None:
-            self._player.set_voice_selection(option.key, option.short_label, activity=activity)
-            self._player.show_backend_loading(activity)
-
-        # stop() queues an idle playback update. Queue this after it so the
-        # loading state remains visible instead of being immediately hidden.
-        self._player.call_soon(show_activity)
-        threading.Thread(
-            target=self._load_voice,
-            args=(current_key, option),
-            daemon=True,
-            name=f"VoiceSelection-{option.backend}",
-        ).start()
-
-    def _request_supertonic_install(self, option: VoiceOption) -> None:
-        current_key = self._selected_voice_key
-        if not confirm_supertonic_install():
-            current = self._voice_options[current_key]
-            self._player.set_voice_selection(current.key, current.short_label)
-            return
-        with self._state_lock:
-            if self._backend_switching:
-                return
-            self._backend_switching = True
-            self._backend_activity = BACKEND_INSTALLING
-        self.stop()
-        self._player.call_soon(
-            lambda: self._player.set_voice_selection(
-                option.key,
-                option.short_label,
-                activity=BACKEND_INSTALLING,
-            )
-        )
-        self._player.call_soon(lambda: self._player.show_backend_loading(BACKEND_INSTALLING))
-        threading.Thread(
-            target=self._launch_supertonic_setup,
-            args=(current_key,),
-            daemon=True,
-            name="SupertonicSetup",
-        ).start()
-
-    def _launch_supertonic_setup(self, current_key: str) -> None:
-        try:
-            launch_supertonic_installer()
-        except Exception as error:
-            logger.exception("supertonic.setup.launch_failed")
-            current = self._voice_options[current_key]
-            self._player.call_soon(lambda: self._player.set_voice_selection(current.key, current.short_label))
-            self._player.call_soon(lambda message=str(error): self._player.show_backend_error(message))
-            with self._state_lock:
-                self._backend_switching = False
-                self._backend_activity = ""
-            return
-        logger.info("supertonic.setup.launched")
-        self._player.call_soon(self.shutdown)
-
-    def _load_voice(self, current_key: str, option: VoiceOption) -> None:
-        try:
-            speaker = self._speakers.get(option.backend)
-            selected_config = replace(
-                self._config,
-                speech_backend=option.backend,
-                preferred_voice_match=(
-                    option.package_path if option.backend == "natural" else self._config.preferred_voice_match
-                ),
-            )
-            if option.backend == "natural" and isinstance(speaker, NaturalVoiceSpeaker):
-                speaker.select_voice(option.package_path)
-            elif speaker is None:
-                speaker = create_speaker(selected_config, self._on_word, self._on_speech_debug)
-                self._speakers[option.backend] = speaker
-            with self._state_lock:
-                if self._shutting_down:
-                    return
-                self._speaker = speaker
-                self._speech_backend = option.backend
-                self._selected_voice_key = option.key
-                self._config = selected_config
-            self._save_settings(selected_config)
-
-            def show_ready() -> None:
-                self._player.set_voice_selection(option.key, option.short_label)
-                self._player.show_backend_ready(option.short_label)
-
-            self._player.call_soon(show_ready)
-            logger.info(
-                "speaker.voice.changed backend=%s key=%s label=%s",
-                option.backend,
-                option.key,
-                option.label,
-            )
-        except Exception as error:
-            logger.exception(
-                "speaker.voice.change_failed backend=%s key=%s",
-                option.backend,
-                option.key,
-            )
-            current = self._voice_options[current_key]
-            self._player.call_soon(lambda: self._player.set_voice_selection(current.key, current.short_label))
-            self._player.call_soon(lambda message=str(error): self._player.show_backend_error(message))
-        finally:
-            with self._state_lock:
-                self._backend_switching = False
-                self._backend_activity = ""
-
-    def _voice_load_activity(self, option: VoiceOption) -> str:
-        if option.backend != "supertonic":
-            return BACKEND_LOADING
-        return BACKEND_INSTALLING if self._supertonic_install_required() else BACKEND_LOADING
-
-    def _supertonic_install_required(self) -> bool:
-        try:
-            return not (
-                supertonic_dependencies_are_installed()
-                and supertonic_model_is_installed(self._config.supertonic_voice)
-            )
-        except Exception:
-            logger.exception("supertonic.installation_state_failed")
-            return True
-
-    def _configure_voice_options(self) -> None:
-        try:
-            if isinstance(self._speaker, NaturalVoiceSpeaker):
-                natural_voices = list(self._speaker.available_voices)
-            else:
-                natural_voices = discover_natural_voices(self._config.speech)
-        except Exception:
-            logger.exception("speaker.voice.discovery_failed")
-            natural_voices = []
-
-        options = build_voice_options(natural_voices, self._config.speech)
-        self._voice_options = {option.key: option for option in options}
-        if isinstance(self._speaker, NaturalVoiceSpeaker):
-            selected_key = natural_voice_key(self._speaker.voice.package_path)
-        elif self._speech_backend == "supertonic":
-            selected_key = "supertonic"
-        else:
-            selected_key = "sapi"
-        self._selected_voice_key = selected_key
-        self._player.set_voice_options(options, selected_key)
-
-    def refresh_voice_options(self) -> None:
-        """Re-enumerate voice packages immediately before opening the menu."""
-        with self._state_lock:
-            if self._backend_switching or self._shutting_down:
-                return
-            selected_key = self._selected_voice_key
-            natural_speaker = self._speakers.get("natural")
-        try:
-            if isinstance(natural_speaker, NaturalVoiceSpeaker):
-                natural_voices = list(natural_speaker.refresh_voices())
-            else:
-                natural_voices = discover_natural_voices(self._config.speech)
-        except Exception:
-            logger.exception("speaker.voice.refresh_failed")
-            return
-
-        options = build_voice_options(natural_voices, self._config.speech)
-        with self._state_lock:
-            self._voice_options = {option.key: option for option in options}
-        self._player.set_voice_options(options, selected_key)
-        logger.info("speaker.voices.refreshed count=%d", len(natural_voices))
-
-    @staticmethod
-    def _speaker_backend(speaker: Speaker) -> str:
-        if isinstance(speaker, NaturalVoiceSpeaker):
-            return "natural"
-        name = type(speaker).__name__.casefold()
-        return "supertonic" if "supertonic" in name else "sapi"
-
-    def start_hotkey_capture(self) -> None:
-        logger.info("hotkey.capture.requested")
-        if self._session.snapshot().speaking:
-            logger.info("hotkey.capture.ignored_while_speaking")
-            return
-
-        started = self._hotkeys.start_capture(
-            timeout_seconds=self._config.capture_timeout_seconds,
-            on_preview=lambda combo: self._player.call_soon(lambda: self._player.show_capture_preview(combo)),
-            on_complete=lambda combo: self._player.call_soon(lambda: self._apply_hotkey(combo)),
-            on_cancel=lambda: self._player.call_soon(self._cancel_hotkey_capture),
-        )
-        if started:
-            self._player.show_capture_started()
-            logger.info("hotkey.capture.started")
-        else:
-            logger.debug("hotkey.capture.already_active")
+            self._speaker = speaker
+            self._speech_backend = backend
+            self._config = config
+        self._save_settings(config)
 
     def shutdown(self) -> None:
         if self._shutting_down:
@@ -534,7 +297,8 @@ class SelectSpeakApp:
             return
         logger.info("app.shutdown.started")
         self._shutting_down = True
-        for speaker in self._speakers.values():
+        self._voices.close()
+        for speaker in self._voices.speakers:
             speaker.stop()
         self._ocr_capture.stop()
         self._hotkeys.close()
@@ -545,9 +309,6 @@ class SelectSpeakApp:
 
     def _on_hotkey(self, selected_text: str, activated_at: float) -> None:
         logger.info("hotkey.activated hotkey=%s", self._hotkeys.hotkey)
-        if self._hotkeys.capturing:
-            logger.debug("hotkey.ignored_during_capture")
-            return
         now = activated_at
         with self._state_lock:
             elapsed = now - self._last_hotkey_time
@@ -613,18 +374,15 @@ class SelectSpeakApp:
 
     def _on_hotkey_activation(self) -> bool:
         with self._state_lock:
-            backend_switching = self._backend_switching
-            backend_activity = self._backend_activity
             clipboard_mode = self._clipboard_mode
             session = self._session.snapshot()
             stop_clipboard_speech = should_stop_clipboard_speech_immediately(
                 speaking=session.speaking, source=session.source
             )
-        if backend_switching:
-            logger.info("hotkey.ignored_backend_%s", backend_activity or BACKEND_LOADING)
-            self._player.call_soon(
-                lambda: self._player.show_backend_loading(backend_activity or BACKEND_LOADING)
-            )
+        if self._voices.switching:
+            activity = self._voices.activity
+            logger.info("hotkey.ignored_backend_%s", activity)
+            self._player.call_soon(lambda: self._player.show_backend_loading(activity))
             return True
         if stop_clipboard_speech:
             logger.info("hotkey.clipboard_speech.immediate_stop")
@@ -639,12 +397,11 @@ class SelectSpeakApp:
         return False
 
     def _begin_speech(self, text: str, *, source: str = "replay") -> None:
-        with self._state_lock:
-            if self._backend_switching:
-                activity = self._backend_activity or BACKEND_LOADING
-                logger.info("speech.ignored_backend_%s", activity)
-                self._player.call_soon(lambda: self._player.show_backend_loading(activity))
-                return
+        if self._voices.switching:
+            activity = self._voices.activity
+            logger.info("speech.ignored_backend_%s", activity)
+            self._player.call_soon(lambda: self._player.show_backend_loading(activity))
+            return
         logger.info(
             "speech.queue.requested text_length=%d text=%s",
             len(text),
@@ -724,9 +481,7 @@ class SelectSpeakApp:
             to_windows_hotkey(hotkey)
         except ValueError:
             logger.warning("hotkey.set.rejected hotkey=%s", hotkey)
-            self._reject_hotkey(
-                f"{shortcut_label(hotkey)} is not a shortcut that can be bound."
-            )
+            self._reject_hotkey(f"{shortcut_label(hotkey)} is not a shortcut that can be bound.")
             return
         self._apply_hotkey(hotkey)
 
@@ -736,11 +491,8 @@ class SelectSpeakApp:
             self._hotkeys.rebind(hotkey)
         except Exception:
             logger.exception("hotkey.rebind.failed hotkey=%s", hotkey)
-            self._reject_hotkey(
-                f"{shortcut_label(hotkey)} is already in use by another application."
-            )
+            self._reject_hotkey(f"{shortcut_label(hotkey)} is already in use by another application.")
             return
-        self._player.show_capture_complete(hotkey)
         self._tray.update_hotkey(hotkey)
         with self._state_lock:
             self._config = replace(self._config, default_hotkey=hotkey)
@@ -805,11 +557,6 @@ class SelectSpeakApp:
         else:
             self._player.set_hotkey(self._hotkeys.hotkey)
         self._player.show_hotkey_error(message)
-
-    def _cancel_hotkey_capture(self) -> None:
-        logger.info("hotkey.capture.cancelled")
-        self._player.set_hotkey(self._hotkeys.hotkey)
-        self._player.show_idle_hint()
 
     def _save_settings(self, config: AppConfig) -> None:
         if self._settings is None:

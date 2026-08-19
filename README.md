@@ -174,24 +174,22 @@ run:
 - Press the hotkey again on the same selection while it is speaking to stop;
   press it once more after stopping to read the selection again. Selecting
   different text replaces the current reading immediately.
-- In **Mode: Auto**, the hotkey reads selected text when available and
-  automatically falls back to the existing clipboard when nothing is selected.
-- Click **Mode: Auto** to switch to **Mode: Clipboard** when you want to force
-  clipboard reading.
-- Click **Voice: … ▾** to choose any discovered Windows Natural Voice, the
-  configured local Supertonic model, or the Windows SAPI fallback. Voice
-  packages are scanned again whenever the menu opens, so newly installed
-  Windows voices appear without restarting SelectSpeak. The first switch to
-  Supertonic can take a moment while its ONNX model loads into memory.
-- Click **Auto hide: On** to keep the player open after speech finishes, or
-  click it again to restore automatic hiding. Auto hide is enabled by default.
-- Click **Debug: Off** to show adaptive chunk boundaries and live speech
-  diagnostics. The active chunk is highlighted when its PCM reaches the
-  playhead; the panel reports target/actual size, estimated and actual synthesis
-  time, generated audio duration, playback runway, queue delay, and underruns.
-- Click **Read** to perform the same capture and reading action as the global
-  hotkey. The player remains visible without taking foreground focus from the
-  source application.
+- Use the transport buttons to pause, resume and stop the current reading. The
+  player never takes foreground focus from the application being read.
+- Open **Settings** with the gear button to change:
+  - **Read the clipboard instead of the selection.** Off by default: the
+    shortcut reads selected text when available and falls back to the existing
+    clipboard when nothing is selected. On, it always reads the clipboard.
+  - **Voice.** Any discovered Windows Natural Voice, the configured local
+    Supertonic model, or the Windows SAPI fallback. The first switch to
+    Supertonic can take a moment while its ONNX model loads into memory.
+  - **Shortcuts.** Both the read and screen-capture shortcuts are recorded in
+    place; a combination another application already holds is refused and the
+    shortcut in force is kept.
+  - **Auto hide.** Enabled by default, so the player puts itself away when
+    reading finishes.
+  - **Speech diagnostics.** Collects adaptive chunk boundaries, synthesis
+    timing, playback runway, queue delay, and underruns.
 
 ## Text processing
 
@@ -215,13 +213,12 @@ chunk. The controller prefers sentence endings, permits semicolons and colons
 under pressure, and uses commas only when the buffer is at risk.
 Supertonic additionally trims model-generated edge silence. Lookahead is capped
 at 12 seconds of ready audio to keep cancellation responsive and memory bounded.
-The expanded reader preserves those interpreted lines
+The reader preserves those interpreted lines
 visually, restores detected bullet markers with hanging indentation, and
 highlights the active word within the structured preview. Visual bullet markers
 are removed before each segment is sent to the speech engine. When Windows
 preserves list rows but drops their markers, list-shaped multiline blocks are
 inferred from their heading and sentence structure.
-- Click the displayed hotkey to bind a different key combination.
 - Use the tray icon to show the player or quit.
 
 The rebound hotkey, clipboard mode, selected backend/voice, and UI preferences
@@ -311,7 +308,7 @@ that its isolated user settings remain intact.
 ```text
 src/                        Product source, grouped by implementation language
 ├── python/selectspeak/     Installable Python application package and entry point
-│   ├── app/                Application lifecycle and startup coordination
+│   ├── app/                Application lifecycle, startup, and voice selection
 │   ├── audio/              Playback-session coordination
 │   ├── config/             Configuration models, settings, and runtime paths
 │   ├── infrastructure/     Cross-cutting logging infrastructure

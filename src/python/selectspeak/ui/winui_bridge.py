@@ -120,7 +120,6 @@ class WinUiPlayer:
         on_toggle_clipboard: Callable[[], None] | None = None,
         on_toggle_auto_hide: Callable[[], None] | None = None,
         on_toggle_debug: Callable[[], None] | None = None,
-        on_capture_hotkey: Callable[[], None] | None = None,
         on_set_hotkey: Callable[[str], None] | None = None,
         on_set_ocr_hotkey: Callable[[str], None] | None = None,
         on_select_voice: Callable[[str], None] | None = None,
@@ -138,7 +137,6 @@ class WinUiPlayer:
             "toggle_clipboard": on_toggle_clipboard,
             "toggle_auto_hide": on_toggle_auto_hide,
             "toggle_debug": on_toggle_debug,
-            "capture_hotkey": on_capture_hotkey,
             "play": on_play,
             "read": on_read,
             "pause": on_pause,
@@ -305,9 +303,6 @@ class WinUiPlayer:
     # accepted so the application layer can call them, but the WinUI player has
     # nowhere to put a sentence and deliberately does not invent one.
 
-    def show_idle_hint(self) -> None:
-        """No-op: the shortcut label is always on screen."""
-
     def show_backend_loading(self, activity: str = "loading") -> None:
         """No-op: voice engine progress has no home in this player yet."""
 
@@ -322,12 +317,6 @@ class WinUiPlayer:
         real failure.
         """
         self._send("voice_error", text=voice_error_summary(message))
-
-    def show_capture_started(self) -> None:
-        """No-op: the settings window runs its own recording dialog."""
-
-    def show_capture_preview(self, hotkey: str) -> None:
-        """No-op: see show_capture_started."""
 
     def show_capture_complete(self, hotkey: str) -> None:
         self.set_hotkey(hotkey)

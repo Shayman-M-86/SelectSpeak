@@ -13,8 +13,6 @@ int Start(unsigned int modifiers, unsigned int virtual_key,
           ss_activation_callback_t activation_callback, void* context);
 int Rebind(unsigned int modifiers, unsigned int virtual_key);
 int CaptureNow();
-int StartRecording(ss_record_callback_t callback, void* context);
-void StopRecording();
 void Stop();
 
 unsigned int LastCaptureSource();

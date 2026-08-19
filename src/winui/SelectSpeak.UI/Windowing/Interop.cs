@@ -24,15 +24,10 @@ internal static class Interop
     public const uint DWMWA_WINDOW_CORNER_PREFERENCE = 33;
     public const uint DWMWCP_ROUND = 2;
 
-    // Hotkey registration, matching the native runtime's use of MOD_NOREPEAT.
-    public const uint MOD_ALT = 0x0001;
-    public const uint MOD_NOREPEAT = 0x4000;
-    public const int WM_HOTKEY = 0x0312;
-
     // Sent to repaint the caption; wParam 0 draws it inactive.
     public const int WM_NCACTIVATE = 0x0086;
 
-    // Subclassing, so the window can see WM_HOTKEY without a message loop.
+    // Subclassing, so the window can swallow SC_MAXIMIZE without a message loop.
     public const int GWLP_WNDPROC = -4;
 
     public delegate IntPtr WindowProcedure(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
@@ -49,21 +44,10 @@ internal static class Interop
 
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
-    public static extern bool PostMessageW(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool SetWindowPos(
         IntPtr hWnd, IntPtr hWndInsertAfter,
         int X, int Y, int cx, int cy, uint uFlags);
 
-    [DllImport("user32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static extern bool UnregisterHotKey(IntPtr hWnd, int id);
     public const int WM_SYSCOMMAND = 0x0112;
 
     public const int SC_MAXIMIZE = 0xF030;

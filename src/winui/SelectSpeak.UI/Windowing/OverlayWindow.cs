@@ -16,13 +16,6 @@ public sealed class OverlayWindow : IDisposable
     // delegate is collected and Windows calls into freed memory.
     private Interop.WindowProcedure? _subclass;
     private IntPtr _previousProcedure;
-    private readonly System.Collections.Generic.Dictionary<int, Action> _hotkeys = new();
-
-    // Virtual key to hotkey id, so a hotkey can be fired by the key it is
-    // bound to rather than the id it happened to be given.
-    private readonly System.Collections.Generic.Dictionary<uint, int> _hotkeyIds = new();
-
-    private int _nextHotkeyId = 1;
 
     public OverlayWindow(Window window)
     {
@@ -71,44 +64,7 @@ public sealed class OverlayWindow : IDisposable
             _hwnd, Interop.DWMWA_USE_IMMERSIVE_DARK_MODE, ref useDark, sizeof(int));
     }
 
-    /// <summary>
-    /// Register a system-wide Alt+key that invokes <paramref name="handler"/>.
-    /// MOD_NOREPEAT matches the native hotkey runtime, so holding the keys down
-    /// fires once rather than repeating.
-    /// </summary>
-    public bool RegisterAltHotkey(uint virtualKey, Action handler)
-    {
-        InstallSubclass();
-        var id = _nextHotkeyId++;
-        if (!Interop.RegisterHotKey(
-                _hwnd, id, Interop.MOD_ALT | Interop.MOD_NOREPEAT, virtualKey))
-        {
-            return false;
-        }
-        _hotkeys[id] = handler;
-        _hotkeyIds[virtualKey] = id;
-        return true;
-    }
-
-    /// <summary>
-    /// Fire a registered hotkey as though it had been pressed.
-    ///
-    /// Posting the message rather than calling the handler is the point: the
-    /// handler then runs at exactly the moment, and on exactly the thread, that
-    /// the real key press would run it. Calling it directly from somewhere else
-    /// in the frame produces visibly different repainting.
-    /// </summary>
-    public bool PressHotkey(uint virtualKey)
-    {
-        if (!_hotkeyIds.TryGetValue(virtualKey, out var id))
-        {
-            return false;
-        }
-
-        return Interop.PostMessageW(_hwnd, Interop.WM_HOTKEY, new IntPtr(id), IntPtr.Zero);
-    }
-
-    private void InstallSubclass()
+    public void InstallSubclass()
     {
         if (_subclass is not null)
         {
@@ -123,12 +79,6 @@ public sealed class OverlayWindow : IDisposable
 
     private IntPtr HandleMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
-        if (msg == Interop.WM_HOTKEY && _hotkeys.TryGetValue(wParam.ToInt32(), out var handler))
-        {
-            handler();
-            return IntPtr.Zero;
-        }
-
         // IsMaximizable=false only greys the caption button; double-clicking
         // the title bar still sends SC_MAXIMIZE. Swallow it so the window has
         // one size behaviour rather than two.
@@ -159,11 +109,6 @@ public sealed class OverlayWindow : IDisposable
         {
             return;
         }
-        foreach (var id in _hotkeys.Keys)
-        {
-            Interop.UnregisterHotKey(_hwnd, id);
-        }
-        _hotkeys.Clear();
         Interop.SetWindowLongPtrW(_hwnd, Interop.GWLP_WNDPROC, _previousProcedure);
         _subclass = null;
     }

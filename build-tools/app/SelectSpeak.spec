@@ -15,6 +15,10 @@ analysis = Analysis(
         "win32com.client",
     ],
     excludes=[
+        # The player is the WinUI process; nothing here draws with Tk, and the
+        # Tcl/Tk runtime is large enough to be worth refusing explicitly.
+        "tkinter",
+        "_tkinter",
         # The neural engine is installed later as a versioned dependency layer.
         "huggingface_hub",
         "numpy",

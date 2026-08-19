@@ -1,38 +1,40 @@
 from collections.abc import Callable
 
-from selectspeak.app import application as app_module
+from selectspeak.app import voices as voices_module
 from selectspeak.app.application import (
     SelectSpeakApp,
-    confirm_supertonic_install,
     is_repeat_of_active_speech,
     should_stop_clipboard_speech_immediately,
     was_speaking_at,
 )
+from selectspeak.app.voices import VoiceController, confirm_supertonic_install
+from selectspeak.config import AppConfig
 
 
 def test_supertonic_install_confirmation_uses_windows_yes_result(monkeypatch) -> None:
     class User32:
         @staticmethod
         def MessageBoxW(*_arguments: object) -> int:
-            return app_module.MESSAGE_BOX_YES
+            return voices_module.MESSAGE_BOX_YES
 
     class WindowsLibraries:
         user32 = User32()
 
-    monkeypatch.setattr(app_module.ctypes, "windll", WindowsLibraries(), raising=False)
+    monkeypatch.setattr(voices_module.ctypes, "windll", WindowsLibraries(), raising=False)
 
     assert confirm_supertonic_install()
 
 
 def test_supertonic_install_is_required_if_either_payload_is_missing(monkeypatch) -> None:
-    app = SelectSpeakApp()
-    monkeypatch.setattr(app_module, "supertonic_dependencies_are_installed", lambda: True)
-    monkeypatch.setattr(app_module, "supertonic_model_is_installed", lambda _voice: False)
+    controller = object.__new__(VoiceController)
+    controller._config = AppConfig()
+    monkeypatch.setattr(voices_module, "supertonic_dependencies_are_installed", lambda: True)
+    monkeypatch.setattr(voices_module, "supertonic_model_is_installed", lambda _voice: False)
 
-    assert app._supertonic_install_required()
+    assert controller._install_required()
 
-    monkeypatch.setattr(app_module, "supertonic_model_is_installed", lambda _voice: True)
-    assert not app._supertonic_install_required()
+    monkeypatch.setattr(voices_module, "supertonic_model_is_installed", lambda _voice: True)
+    assert not controller._install_required()
 
 
 def test_same_text_while_speaking_requests_stop() -> None:
@@ -140,10 +142,15 @@ def test_hotkey_is_consumed_while_voice_backend_is_loading() -> None:
         def show_backend_loading(cls, activity: str) -> None:
             cls.loading_activity = activity
 
+    class Voices:
+        """Stand in for VoiceController, mid-switch."""
+
+        switching = True
+        activity = "installing"
+
     app = SelectSpeakApp()
     setattr(app, "_player", Player())
-    app._backend_switching = True
-    app._backend_activity = "installing"
+    setattr(app, "_voices", Voices())
 
     assert app._on_hotkey_activation()
     assert Player.loading_activity == "installing"

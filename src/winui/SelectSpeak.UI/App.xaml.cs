@@ -75,7 +75,7 @@ public partial class App : Application
                 _settings?.ShowWindow();
                 if (_restorePlayer)
                 {
-                    _window?.ToggleAsHotkey();
+                    _window?.Toggle();
                 }
                 return;
             }
@@ -97,12 +97,12 @@ public partial class App : Application
         }
 
         _restorePlayer = false;
-        // Only toggle if it is actually still hidden: the user may have
-        // pressed Alt+A themselves while settings was open, and toggling then
-        // would hide the player they just asked for.
+        // Only toggle if it is actually still hidden: the backend may have
+        // shown the player while settings was open, and toggling then would
+        // hide the player it just asked for.
         if (_window is not null && _window.IsHidden)
         {
-            _window.ToggleAsHotkey();
+            _window.Toggle();
         }
     }
 }
