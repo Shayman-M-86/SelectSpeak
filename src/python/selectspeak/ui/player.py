@@ -10,6 +10,7 @@ from ..speech.debug import SpeechDebugEvent
 from ..speech.voices import VoiceOption
 from .debug_panel import SpeechDebugPanelModel
 from .dwm import apply_native_frame, enable_shadow, top_level_handle
+from .hints import backend_loading_message, idle_hint, shortcut_label
 from .theme import (
     BODY_SIZE,
     CAPTION_ICON_SIZE,
@@ -437,14 +438,7 @@ class PlayerWindow(tk.Tk):
         self.show()
 
     def show_backend_loading(self, activity: str = "loading") -> None:
-        if activity == "installing":
-            message = (
-                "Opening Setup to install Supertonic and its local voice model. "
-                "SelectSpeak will restart when installation finishes."
-            )
-        else:
-            message = "Loading the voice engine. Reading will be available when it is ready."
-        self._set_status(message, self._palette.accent, "")
+        self._set_status(backend_loading_message(activity), self._palette.accent, "")
         self.show()
 
     def show_backend_ready(self, label: str) -> None:
@@ -793,18 +787,14 @@ class PlayerWindow(tk.Tk):
         # controls by a vertical rule so the two roles do not read as one bar.
         settings = tk.Frame(self._control_row, bg=palette.background)
         settings.pack(side="right")
-        tk.Frame(self._control_row, bg=palette.divider, width=1).pack(
-            side="right", fill="y", padx=12, pady=4
-        )
+        tk.Frame(self._control_row, bg=palette.divider, width=1).pack(side="right", fill="y", padx=12, pady=4)
 
         # Secondary settings read right-to-left in the order they are packed.
         self._hotkey_button = self._subtle_button(
             settings, self._shortcut_label(self._hotkey), on_capture_hotkey
         )
         self._hotkey_button.pack(side="right")
-        self._clipboard_button = self._subtle_button(
-            settings, "Source: Automatic", on_toggle_clipboard
-        )
+        self._clipboard_button = self._subtle_button(settings, "Source: Automatic", on_toggle_clipboard)
         self._clipboard_button.pack(side="right")
         backend_label = "Supertonic" if self._speech_backend == "supertonic" else "Windows"
         self._voice_button = self._subtle_button(
@@ -814,9 +804,7 @@ class PlayerWindow(tk.Tk):
         )
         self._voice_button.set_active(
             self._speech_backend == "supertonic",
-            font=self._font_caption_strong
-            if self._speech_backend == "supertonic"
-            else self._font_caption,
+            font=self._font_caption_strong if self._speech_backend == "supertonic" else self._font_caption,
         )
         self._voice_button.pack(side="right")
         self._auto_hide_button = self._subtle_button(
@@ -988,29 +976,10 @@ class PlayerWindow(tk.Tk):
             self._progress.pack_forget()
 
     def _shortcut_label(self, hotkey: str) -> str:
-        """Format a hotkey the way Windows writes shortcuts: Ctrl+Shift+S."""
-        names = {
-            "ctrl": "Ctrl",
-            "control": "Ctrl",
-            "alt": "Alt",
-            "shift": "Shift",
-            "win": "Win",
-            "cmd": "Win",
-            "esc": "Esc",
-            "space": "Space",
-        }
-        parts = [part.strip() for part in hotkey.split("+") if part.strip()]
-        return "+".join(
-            names.get(part.casefold(), part.upper() if len(part) == 1 else part.title())
-            for part in parts
-        )
+        return shortcut_label(hotkey)
 
     def _idle_hint(self) -> str:
-        target = "your selection or clipboard" if not self._clipboard_mode else "your clipboard"
-        return (
-            f"Press {self._shortcut_label(self._hotkey)} to read {target}, "
-            f"or {self._shortcut_label(self._ocr_hotkey)} to capture text on screen."
-        )
+        return idle_hint(self._hotkey, self._ocr_hotkey, clipboard_mode=self._clipboard_mode)
 
     def _drain_callbacks(self) -> None:
         drained = 0
@@ -1076,9 +1045,7 @@ class PlayerWindow(tk.Tk):
             self.after_idle(self._enable_no_activate)
             self.after_idle(self._apply_native_frame)
 
-    def _subtle_button(
-        self, parent: tk.Frame, text: str, command: Callable[[], None]
-    ) -> SubtleButton:
+    def _subtle_button(self, parent: tk.Frame, text: str, command: Callable[[], None]) -> SubtleButton:
         return SubtleButton(
             parent,
             palette=self._palette,

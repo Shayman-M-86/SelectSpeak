@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 
 namespace SelectSpeak.UI.Bridge;
@@ -27,4 +28,10 @@ public interface IPlayerBridge : IDisposable
 
     /// <summary>Report a user intent - play, pause, stop, read.</summary>
     Task SendAsync(string intent);
+
+    /// <summary>
+    /// Report an intent that carries a value, such as the shortcut chosen in
+    /// the hotkey dialog. The backend still decides whether to accept it.
+    /// </summary>
+    Task SendAsync(string intent, IReadOnlyDictionary<string, string> fields);
 }

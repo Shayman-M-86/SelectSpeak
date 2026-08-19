@@ -13,9 +13,20 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import pathlib
+import subprocess
+import sys
 import threading
 from collections.abc import Callable
 from queue import Empty, SimpleQueue
+
+import pywintypes
+import win32event
+import win32file
+import win32pipe
+
+from .hints import shortcut_label
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +45,46 @@ _ERROR_BROKEN_PIPE = 109
 _ERROR_NO_DATA = 232
 _INVALID_HANDLE_VALUE = -1
 
+# The handle must be overlapped. On a synchronous handle Windows serialises all
+# I/O on it, so a WriteFile issued while the serve thread is parked in ReadFile
+# queues behind that read - and because the UI only sends when a button is
+# pressed, that read does not return. Every outbound message would deadlock.
+_FILE_FLAG_OVERLAPPED = 0x40000000
+
+# How long an overlapped read waits before looping, so a stopped bridge can
+# notice `_running` went false instead of blocking forever.
+_READ_POLL_MS = 250
+
+# How often the main loop wakes to run queued UI intents. Tk polls every 20ms
+# via `after`; this is the same idea with a timeout instead of a scheduler.
+_CALLBACK_POLL_SECONDS = 0.02
+
+_UI_EXE_NAME = "SelectSpeak.UI.exe"
+_UI_BUILD_SUBPATH = pathlib.Path(".build/bin/Debug/net8.0-windows10.0.19041.0/win-x64")
+
+# How long to wait for the UI to exit on shutdown before giving up on it.
+_UI_EXIT_TIMEOUT_SECONDS = 5.0
+
+
+def winui_executable() -> pathlib.Path | None:
+    """Locate the WinUI player, or ``None`` when it has not been built.
+
+    Frozen builds ship it beside the executable; from a source tree it comes
+    from the .NET build output.
+    """
+    override = os.environ.get("SELECTSPEAK_WINUI_EXE")
+    if override:
+        candidate = pathlib.Path(override)
+        return candidate if candidate.is_file() else None
+
+    if getattr(sys, "frozen", False):
+        candidate = pathlib.Path(sys.executable).parent / _UI_EXE_NAME
+        return candidate if candidate.is_file() else None
+
+    root = pathlib.Path(__file__).resolve().parents[3]
+    candidate = root / "winui" / "SelectSpeak.UI" / _UI_BUILD_SUBPATH / _UI_EXE_NAME
+    return candidate if candidate.is_file() else None
+
 
 class WinUiPlayer:
     """Drive the WinUI reader over a named pipe.
@@ -42,33 +93,72 @@ class WinUiPlayer:
     not need to know which renderer is in use.
     """
 
+    # Which field carries the value, for the intents that report one.
+    _VALUE_FIELDS = {"set_hotkey": "hotkey"}
+
     def __init__(
         self,
         *,
         app_name: str = "SelectSpeak",
         pipe_name: str = PIPE_NAME,
+        hotkey: str = "alt+s",
+        ocr_hotkey: str = "alt+d",
+        auto_hide: bool = True,
+        debug_enabled: bool = False,
         on_play: Callable[[], None] | None = None,
         on_read: Callable[[], None] | None = None,
         on_pause: Callable[[], None] | None = None,
         on_resume: Callable[[], None] | None = None,
         on_stop: Callable[[], None] | None = None,
+        on_toggle_playback: Callable[[], None] | None = None,
+        on_settings: Callable[[], None] | None = None,
+        on_toggle_clipboard: Callable[[], None] | None = None,
+        on_toggle_auto_hide: Callable[[], None] | None = None,
+        on_toggle_debug: Callable[[], None] | None = None,
+        on_capture_hotkey: Callable[[], None] | None = None,
+        on_set_hotkey: Callable[[str], None] | None = None,
     ) -> None:
         self._app_name = app_name
         self._pipe_name = pipe_name
         self._handlers: dict[str, Callable[[], None] | None] = {
+            # The WinUI player has one transport button, so it reports that the
+            # button was pressed and lets Python decide what that means. The
+            # explicit verbs stay for the Tk player, which has separate buttons.
+            "toggle_playback": on_toggle_playback,
+            "settings": on_settings,
+            # Reported by the settings window. Python flips and persists the
+            # value, then pushes the result back for the switch to render.
+            "toggle_clipboard": on_toggle_clipboard,
+            "toggle_auto_hide": on_toggle_auto_hide,
+            "toggle_debug": on_toggle_debug,
+            "capture_hotkey": on_capture_hotkey,
             "play": on_play,
             "read": on_read,
             "pause": on_pause,
             "resume": on_resume,
             "stop": on_stop,
         }
+        # The recorder here reads the keys, because its hook sees combinations
+        # a focused window never would. The UI sends back the one the user
+        # confirmed, which is why this intent carries a value.
+        self._valued_handlers: dict[str, Callable[[str], None] | None] = {
+            "set_hotkey": on_set_hotkey,
+        }
         self._callbacks: SimpleQueue[Callable[[], None]] = SimpleQueue()
         self._pipe: int | None = None
         self._lock = threading.Lock()
         self._running = False
         self._connected = threading.Event()
+        self._closed = threading.Event()
         self._thread: threading.Thread | None = None
+        self._process: subprocess.Popen[bytes] | None = None
         self._reader_text = ""
+        self._hotkey = hotkey
+        self._ocr_hotkey = ocr_hotkey
+        self._clipboard_mode = False
+        self._auto_hide = auto_hide
+        self._debug_enabled = debug_enabled
+        self._voice_label = ""
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -77,11 +167,43 @@ class WinUiPlayer:
         self._thread = threading.Thread(target=self._serve, name="WinUiBridge", daemon=True)
         self._thread.start()
         logger.info("winui_bridge.started pipe=%s", self._pipe_name)
+        self._launch_ui()
+
+    def _launch_ui(self) -> None:
+        """Start the WinUI process, unless one is already connecting.
+
+        The server is listening by the time this runs, so the UI connects on its
+        first attempt rather than falling into its reconnect delay.
+        """
+        executable = winui_executable()
+        if executable is None:
+            logger.error("winui_bridge.executable_missing")
+            return
+        try:
+            self._process = subprocess.Popen([str(executable)])
+        except OSError:
+            logger.exception("winui_bridge.launch_failed path=%s", executable)
+            return
+        logger.info("winui_bridge.ui_launched pid=%s", self._process.pid)
 
     def stop(self) -> None:
         self._running = False
         self._close_pipe()
+        self._stop_ui()
         logger.info("winui_bridge.stopped")
+
+    def _stop_ui(self) -> None:
+        """Close the UI process, so it does not outlive the backend."""
+        process = self._process
+        self._process = None
+        if process is None or process.poll() is not None:
+            return
+        process.terminate()
+        try:
+            process.wait(timeout=_UI_EXIT_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            logger.warning("winui_bridge.ui_kill pid=%s", process.pid)
+            process.kill()
 
     def wait_for_ui(self, timeout: float = 10.0) -> bool:
         """Block until the UI connects, so a caller can sequence a demo."""
@@ -95,11 +217,21 @@ class WinUiPlayer:
         with self._lock:
             pipe = self._pipe
             if pipe is None:
+                logger.warning("winui_bridge.send_dropped_disconnected type=%s", message_type)
                 return
+            logger.debug("winui_bridge.send type=%s", message_type)
             try:
-                import win32file
-
-                win32file.WriteFile(pipe, line.encode("utf-8"))
+                # Overlapped, because the handle is. The wait still makes this
+                # call synchronous from the caller's point of view; what it
+                # avoids is queueing behind the serve thread's pending read.
+                overlapped = pywintypes.OVERLAPPED()
+                overlapped.hEvent = win32event.CreateEvent(None, True, False, None)
+                try:
+                    win32file.WriteFile(pipe, line.encode("utf-8"), overlapped)
+                    win32event.WaitForSingleObject(overlapped.hEvent, win32event.INFINITE)
+                    win32file.GetOverlappedResult(pipe, overlapped, False)
+                finally:
+                    win32file.CloseHandle(overlapped.hEvent)
             except Exception:
                 logger.debug("winui_bridge.write_failed type=%s", message_type)
 
@@ -109,8 +241,9 @@ class WinUiPlayer:
     def hide(self) -> None:
         self._send("hide")
 
-    def set_status(self, text: str) -> None:
-        self._send("set_status", text=text)
+    def send_shortcut(self) -> None:
+        """Name the read shortcut, which is all the player displays."""
+        self._send("set_shortcut", hotkey=shortcut_label(self._hotkey))
 
     def set_reader_text(self, text: str) -> None:
         self._reader_text = text
@@ -134,9 +267,135 @@ class WinUiPlayer:
         self._send("set_always_on_top", on_top=on_top)
 
     def set_playback(self, *, speaking: bool, paused: bool = False, text: str = "") -> None:
-        if text and text != self._reader_text:
-            self.set_reader_text(text)
+        if speaking:
+            if text and text != self._reader_text:
+                self.set_reader_text(text)
+        else:
+            # Finished or stopped, so the reader goes back to its resting
+            # state. The backend still passes the text it was reading, but
+            # there is nothing being read any more.
+            self.set_reader_text("")
         self._send("set_playback", speaking=speaking, paused=paused)
+
+    # -- messages the application layer sends ------------------------------
+    #
+    # The player shows one thing: the shortcut that starts a read. These are
+    # accepted so the application layer can call them, but the WinUI player has
+    # nowhere to put a sentence and deliberately does not invent one.
+
+    def show_idle_hint(self) -> None:
+        """No-op: the shortcut label is always on screen."""
+
+    def show_backend_loading(self, activity: str = "loading") -> None:
+        """No-op: voice engine progress has no home in this player yet."""
+
+    def show_backend_ready(self, label: str) -> None:
+        """No-op: see show_backend_loading."""
+
+    def show_backend_error(self, message: str) -> None:
+        """No-op: see show_backend_loading."""
+
+    def show_capture_started(self) -> None:
+        """No-op: the settings window runs its own recording dialog."""
+
+    def show_capture_preview(self, hotkey: str) -> None:
+        """No-op: see show_capture_started."""
+
+    def show_capture_complete(self, hotkey: str) -> None:
+        self.set_hotkey(hotkey)
+
+    # -- settings ----------------------------------------------------------
+    #
+    # Python owns these values and persists them, so each setter records the
+    # new value and pushes the whole set back. The settings window holds no
+    # state of its own; it renders what it is sent.
+
+    @property
+    def auto_hide(self) -> bool:
+        return self._auto_hide
+
+    @property
+    def clipboard_mode(self) -> bool:
+        return self._clipboard_mode
+
+    @property
+    def debug_enabled(self) -> bool:
+        return self._debug_enabled
+
+    def _settings_fields(self) -> dict[str, object]:
+        return {
+            "auto_hide": self._auto_hide,
+            "clipboard_mode": self._clipboard_mode,
+            "debug_enabled": self._debug_enabled,
+            "hotkey": shortcut_label(self._hotkey),
+            "ocr_hotkey": shortcut_label(self._ocr_hotkey),
+            "voice": self._voice_label,
+        }
+
+    def send_settings(self) -> None:
+        self._send("set_settings", **self._settings_fields())
+
+    def open_settings(self) -> None:
+        """Open the settings window, populated with the current values."""
+        self._send("show_settings", **self._settings_fields())
+
+    def set_hotkey(self, hotkey: str) -> None:
+        self._hotkey = hotkey
+        self.send_settings()
+        # The player names the shortcut too, so it changes with the binding.
+        self.send_shortcut()
+
+    def set_clipboard_mode(self, enabled: bool) -> None:
+        self._clipboard_mode = enabled
+        self.send_settings()
+
+    def set_auto_hide(self, enabled: bool) -> None:
+        self._auto_hide = enabled
+        self.send_settings()
+
+    def set_debug_enabled(self, enabled: bool) -> None:
+        self._debug_enabled = enabled
+        self.send_settings()
+
+    def set_voice_options(self, options: object, selected_key: str) -> None:
+        """Accepted so the application layer can call it; no picker yet."""
+
+    def set_voice_selection(self, key: str, label: str, *, activity: str = "") -> None:
+        # Loading and installing have nowhere to show themselves yet, so only a
+        # settled selection is reported.
+        if not activity:
+            self._voice_label = label
+            self.send_settings()
+
+    def update_speech_debug(self, event: object) -> None:
+        """Accepted so the application layer can call it; no panel yet."""
+
+    def reset_speech_debug(self) -> None:
+        """Accepted so the application layer can call it; no panel yet."""
+
+    # -- lifecycle the application layer expects ---------------------------
+
+    def mainloop(self) -> None:
+        """Run until the UI process exits, draining intents as they arrive.
+
+        Tk owns its loop; here Python does, so this is what keeps the process
+        alive and runs queued callbacks on the main thread.
+        """
+        self._closed.clear()
+        while self._running and not self._closed.is_set():
+            self.drain_callbacks()
+            # The UI hides rather than closes, so an exit here means it crashed
+            # or was killed. Either way there is nothing left to render to.
+            process = self._process
+            if process is not None and process.poll() is not None:
+                logger.info("winui_bridge.ui_exited code=%s", process.returncode)
+                break
+            self._closed.wait(_CALLBACK_POLL_SECONDS)
+        self.drain_callbacks()
+
+    def destroy(self) -> None:
+        self._closed.set()
+        self.stop()
 
     # -- inbound: UI intent -> Python -------------------------------------
 
@@ -160,6 +419,22 @@ class WinUiPlayer:
         intent = message.get("type")
         if not isinstance(intent, str):
             return
+
+        # Intents that carry a value are handled first; the rest are simple
+        # "this button was pressed" reports with nothing to read.
+        if intent in self._valued_handlers:
+            valued = self._valued_handlers[intent]
+            if valued is None:
+                logger.info("winui_bridge.intent intent=%s handled=False", intent)
+                return
+            value = message.get(self._VALUE_FIELDS[intent])
+            if not isinstance(value, str) or not value:
+                logger.debug("winui_bridge.intent_missing_value intent=%s", intent)
+                return
+            logger.info("winui_bridge.intent intent=%s value=%s", intent, value)
+            self.call_soon(lambda handler=valued, value=value: handler(value))
+            return
+
         handler = self._handlers.get(intent)
         logger.info("winui_bridge.intent intent=%s handled=%s", intent, handler is not None)
         if handler is not None:
@@ -174,17 +449,60 @@ class WinUiPlayer:
         if pipe is None:
             return
         try:
-            import win32file
-
             win32file.CloseHandle(pipe)
         except Exception:
             logger.debug("winui_bridge.close_failed")
 
-    def _serve(self) -> None:
-        import pywintypes
-        import win32file
-        import win32pipe
+    def _await_client(self, pipe: int) -> None:
+        """Block until the UI connects, using an overlapped connect.
 
+        ``ERROR_PIPE_CONNECTED`` means the client won the race and attached
+        before the call, which is a success rather than a failure.
+        """
+        overlapped = pywintypes.OVERLAPPED()
+        overlapped.hEvent = win32event.CreateEvent(None, True, False, None)
+        try:
+            try:
+                win32pipe.ConnectNamedPipe(pipe, overlapped)
+            except pywintypes.error as error:
+                if error.winerror != _ERROR_PIPE_CONNECTED:
+                    raise
+                return
+            while self._running:
+                if (
+                    win32event.WaitForSingleObject(overlapped.hEvent, _READ_POLL_MS)
+                    != win32event.WAIT_TIMEOUT
+                ):
+                    win32file.GetOverlappedResult(pipe, overlapped, False)
+                    return
+        finally:
+            win32file.CloseHandle(overlapped.hEvent)
+
+    def _read_chunk(self, pipe: int) -> bytes | None:
+        """One overlapped read. ``None`` means nothing arrived before the poll
+        timeout, which lets a stopped bridge notice and exit.
+        """
+        overlapped = pywintypes.OVERLAPPED()
+        overlapped.hEvent = win32event.CreateEvent(None, True, False, None)
+        # The kernel writes into this buffer while the read is pending, so it
+        # has to outlive the call rather than be a length the wrapper allocates.
+        buffer = win32file.AllocateReadBuffer(_BUFFER_SIZE)
+        try:
+            win32file.ReadFile(pipe, buffer, overlapped)
+            if win32event.WaitForSingleObject(overlapped.hEvent, _READ_POLL_MS) == win32event.WAIT_TIMEOUT:
+                # Cancel and wait for the cancellation to land before the
+                # buffer goes out of scope, or the kernel would keep writing
+                # into memory this call no longer owns.
+                win32file.CancelIo(pipe)
+                win32event.WaitForSingleObject(overlapped.hEvent, win32event.INFINITE)
+                return None
+            count = win32file.GetOverlappedResult(pipe, overlapped, False)
+            # AllocateReadBuffer returns a memoryview; the stub understates it.
+            return bytes(buffer[:count]) if count else b""  # type: ignore[index]
+        finally:
+            win32file.CloseHandle(overlapped.hEvent)
+
+    def _serve(self) -> None:
         while self._running:
             pipe = None
             try:
@@ -192,7 +510,7 @@ class WinUiPlayer:
                 security = pywintypes.SECURITY_ATTRIBUTES()
                 pipe = win32pipe.CreateNamedPipe(
                     _PIPE_PATH.format(self._pipe_name),
-                    _PIPE_ACCESS_DUPLEX,
+                    _PIPE_ACCESS_DUPLEX | _FILE_FLAG_OVERLAPPED,
                     _PIPE_TYPE_BYTE | _PIPE_READMODE_BYTE | _PIPE_WAIT,
                     _PIPE_UNLIMITED_INSTANCES,
                     _BUFFER_SIZE,
@@ -204,22 +522,26 @@ class WinUiPlayer:
                     logger.error("winui_bridge.create_failed")
                     return
 
-                win32pipe.ConnectNamedPipe(pipe, None)
+                self._await_client(pipe)
                 with self._lock:
                     self._pipe = pipe
                 self._connected.set()
                 logger.info("winui_bridge.client_connected")
+                # A reconnected UI starts blank, so give it the current state
+                # rather than waiting for the next thing to change.
+                self.send_settings()
+                self.send_shortcut()
 
                 buffer = b""
                 while self._running:
                     try:
-                        _result, data = win32file.ReadFile(pipe, _BUFFER_SIZE)
-                        # A byte-mode pipe yields bytes, though the stub says str.
-                        chunk = data.encode("utf-8") if isinstance(data, str) else bytes(data)
+                        chunk = self._read_chunk(pipe)
                     except pywintypes.error as error:
                         if error.winerror in (_ERROR_BROKEN_PIPE, _ERROR_NO_DATA):
                             break
                         raise
+                    if chunk is None:
+                        continue  # Poll timeout; nothing arrived yet.
                     if not chunk:
                         break
                     buffer += chunk

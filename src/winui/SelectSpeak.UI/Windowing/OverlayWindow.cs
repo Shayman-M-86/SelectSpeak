@@ -17,6 +17,11 @@ public sealed class OverlayWindow : IDisposable
     private Interop.WindowProcedure? _subclass;
     private IntPtr _previousProcedure;
     private readonly System.Collections.Generic.Dictionary<int, Action> _hotkeys = new();
+
+    // Virtual key to hotkey id, so a hotkey can be fired by the key it is
+    // bound to rather than the id it happened to be given.
+    private readonly System.Collections.Generic.Dictionary<uint, int> _hotkeyIds = new();
+
     private int _nextHotkeyId = 1;
 
     public OverlayWindow(Window window)
@@ -81,7 +86,26 @@ public sealed class OverlayWindow : IDisposable
             return false;
         }
         _hotkeys[id] = handler;
+        _hotkeyIds[virtualKey] = id;
         return true;
+    }
+
+    /// <summary>
+    /// Fire a registered hotkey as though it had been pressed.
+    ///
+    /// Posting the message rather than calling the handler is the point: the
+    /// handler then runs at exactly the moment, and on exactly the thread, that
+    /// the real key press would run it. Calling it directly from somewhere else
+    /// in the frame produces visibly different repainting.
+    /// </summary>
+    public bool PressHotkey(uint virtualKey)
+    {
+        if (!_hotkeyIds.TryGetValue(virtualKey, out var id))
+        {
+            return false;
+        }
+
+        return Interop.PostMessageW(_hwnd, Interop.WM_HOTKEY, new IntPtr(id), IntPtr.Zero);
     }
 
     private void InstallSubclass()

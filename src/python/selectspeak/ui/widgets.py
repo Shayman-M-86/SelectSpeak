@@ -139,9 +139,7 @@ class FluentButton(tk.Frame):
         self._repaint(hover=self._hovering)
         # Only fire when released inside the control, matching Win32 buttons.
         widget = event.widget
-        inside = (
-            0 <= event.x < widget.winfo_width() and 0 <= event.y < widget.winfo_height()
-        )
+        inside = 0 <= event.x < widget.winfo_width() and 0 <= event.y < widget.winfo_height()
         if inside:
             self._command()
 

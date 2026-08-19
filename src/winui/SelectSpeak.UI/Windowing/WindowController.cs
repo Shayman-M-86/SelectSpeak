@@ -65,6 +65,17 @@ public sealed class WindowController : IDisposable
     /// <summary>Whether the window is currently hidden.</summary>
     public bool IsHidden { get; private set; }
 
+    /// <summary>
+    /// Do exactly what pressing Alt+A does, by posting the same message the
+    /// key press posts.
+    ///
+    /// Anything else that wants to show or hide the player goes through here,
+    /// so there is one code path with one set of repainting behaviour rather
+    /// than a second one that merely calls the same methods from a different
+    /// point in the frame.
+    /// </summary>
+    public void PressToggleHotkey() => _overlay.PressHotkey(ToggleVirtualKey);
+
     /// <summary>Show or hide the window - what Alt+A and the close button do.</summary>
     public void Toggle()
     {

@@ -61,7 +61,8 @@
                 x:Name="ReaderScroll"
                 Padding="0,0,0,0"
                 VerticalScrollBarVisibility="Auto"
-                VerticalScrollMode="Auto">
+                VerticalScrollMode="Auto"
+                ViewChanged="OnReaderScrolled">
 
                 <!--  Paragraph spacing is a Margin on each Paragraph rather than
                       line spacing, so the spoken-word highlight stays the same
@@ -71,27 +72,13 @@
                     Padding="12,8,12,8"
                     IsTextSelectionEnabled="False">
 
-                    <Paragraph Margin="0,0,0,6">
-                        SelectSpeak reads whatever you have selected out loud,
-                        and this first paragraph is long enough to wrap onto a
-                        second line so the highlight can be checked at a line
-                        boundary.
-                    </Paragraph>
-
-                    <!--  A hanging indent aligns a wrapped bullet under its
-                          text rather than under the bullet glyph.  -->
-                    <Paragraph Margin="14,0,0,6" TextIndent="-14">
-                        • This bullet is also deliberately long so that it
-                        wraps onto a second display line for testing
-                    </Paragraph>
-
-                    <Paragraph Margin="14,0,0,6" TextIndent="-14">
-                        • Second bullet is short
-                    </Paragraph>
-
-                    <Paragraph Margin="14,0,0,6" TextIndent="-14">
-                        • Third bullet also wraps because it is written to
-                        be long enough to spill over the width of the panel
+                    <!--  The resting state. set_text replaces this while there
+                          is something to read and restores it when there is
+                          not, so the wording is duplicated in PlaceholderText.
+                          A bullet's hanging indent is applied in code, matching
+                          the TextIndent used here.  -->
+                    <Paragraph x:Name="ReaderPlaceholder" Margin="0,0,0,6">
+                        Select some text and press the read shortcut.
                     </Paragraph>
 
                 </RichTextBlock>
@@ -110,9 +97,12 @@
             Spacing="8"
             HorizontalAlignment="Left">
 
+            <!--  Both transport buttons start collapsed: nothing has been
+                  read yet, so there is no playback to pause or stop.  -->
             <Button
                 x:Name="PlayPauseButton"
                 Style="{StaticResource TransportButtonStyle}"
+                Visibility="Collapsed"
                 MinWidth="96"
                 HorizontalContentAlignment="Left"
                 Click="OnPlayPause">
@@ -128,6 +118,8 @@
             <Button
                 x:Name="StopButton"
                 Style="{StaticResource StopButtonStyle}"
+                Visibility="Collapsed"
+                Click="OnStop"
                 Foreground="#cb473b">
                 <!--  A subtle-style button resolves its foreground from the
                       SubtleButtonForeground* resources, not the ButtonForeground*
@@ -146,16 +138,31 @@
 
         </StackPanel>
 
-        <!--  Height comes from the shared style; only Width and the zeroed
-              padding are specific to this one, to keep it square.  -->
-        <Button
-            x:Name="SettingsButton"
-            Style="{StaticResource TransportButtonStyle}"
+        <!--  The read shortcut sits beside the gear, at the right edge. It is
+              the only persistent message the player shows.  -->
+        <StackPanel
+            Orientation="Horizontal"
+            Spacing="8"
             HorizontalAlignment="Right"
-            Width="26"
-            Padding="0">
-            <FontIcon Glyph="&#xE713;" FontSize="14" />
-        </Button>
+            VerticalAlignment="Center">
+
+            <TextBlock
+                x:Name="ShortcutHint"
+                VerticalAlignment="Center"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Style="{ThemeResource CaptionTextBlockStyle}" />
+
+            <!--  Height comes from the shared style; only Width and the zeroed
+                  padding are specific to this one, to keep it square.  -->
+            <Button
+                x:Name="SettingsButton"
+                Style="{StaticResource TransportButtonStyle}"
+                Click="OnSettings"
+                Width="26"
+                Padding="0">
+                <FontIcon Glyph="&#xE713;" FontSize="14" />
+            </Button>
+        </StackPanel>
     </Grid>
 </Grid>
 </Window>

@@ -16,10 +16,22 @@ namespace SelectSpeak.UI.Bridge;
 /// <param name="Length">Length in characters of the spoken word.</param>
 /// <param name="Speaking">Whether playback is active.</param>
 /// <param name="Paused">Whether active playback is paused.</param>
+/// <param name="AutoHide">Settings: hide the player once reading finishes.</param>
+/// <param name="ClipboardMode">Settings: read the clipboard rather than the selection.</param>
+/// <param name="DebugEnabled">Settings: speech diagnostics are collected.</param>
+/// <param name="Hotkey">Settings: the shortcut that starts a read.</param>
+/// <param name="OcrHotkey">Settings: the shortcut that captures text on screen.</param>
+/// <param name="Voice">Settings: label of the voice currently in use.</param>
 public readonly record struct PlayerMessage(
     string Type,
     string? Text = null,
     int Position = 0,
     int Length = 0,
     bool Speaking = false,
-    bool Paused = false);
+    bool Paused = false,
+    bool AutoHide = false,
+    bool ClipboardMode = false,
+    bool DebugEnabled = false,
+    string? Hotkey = null,
+    string? OcrHotkey = null,
+    string? Voice = null);

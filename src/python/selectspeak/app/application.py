@@ -1,5 +1,6 @@
 import ctypes
 import logging
+import os
 import threading
 import time
 from dataclasses import replace
@@ -11,6 +12,7 @@ from ..infrastructure.logging import text_preview
 from ..input.capture import resolve_capture
 from ..input.clipboard import ClipboardService
 from ..input.hotkeys import HotkeyManager
+from ..input.keymap import to_windows_hotkey
 from ..input.ocr_capture import OcrCaptureError, OcrCaptureHotkey
 from ..native import shutdown_native_bridge
 from ..speech import Speaker, create_speaker
@@ -23,6 +25,7 @@ from ..speech.optional_dependencies import supertonic_dependencies_are_installed
 from ..speech.voices import VoiceOption, build_voice_options, natural_voice_key
 from ..ui.player import PlayerWindow
 from ..ui.tray import TrayController
+from ..ui.winui_bridge import WinUiPlayer, winui_executable
 
 logger = logging.getLogger(__name__)
 
@@ -88,11 +91,44 @@ class SelectSpeakApp:
             config.default_hotkey,
         )
 
-    def run(self) -> None:
-        logger.info("app.starting")
-        self._enable_dpi_awareness()
-        logger.debug("app.creating_services")
-        self._player = PlayerWindow(
+    def _create_player(self) -> PlayerWindow | WinUiPlayer:
+        """Build the renderer, defaulting to Tk.
+
+        SELECTSPEAK_UI=winui opts into the WinUI player while it is still
+        catching up with the Tk one; it falls back rather than failing to start
+        when that build is missing.
+        """
+        if os.environ.get("SELECTSPEAK_UI", "").strip().casefold() != "winui":
+            return self._create_tk_player()
+        if winui_executable() is None:
+            logger.error("ui.winui_unavailable falling_back=tk")
+            return self._create_tk_player()
+
+        logger.info("ui.renderer.selected renderer=winui")
+        player = WinUiPlayer(
+            app_name=self._config.app_name,
+            hotkey=self._config.default_hotkey,
+            ocr_hotkey=self._config.ocr_hotkey,
+            auto_hide=self._auto_hide,
+            debug_enabled=self._speech_debug_enabled,
+            on_play=self.replay,
+            on_read=self.read_current,
+            on_pause=self.pause,
+            on_resume=self.resume,
+            on_stop=self.stop,
+            on_toggle_playback=self.toggle_playback,
+            on_settings=self.open_settings,
+            on_toggle_clipboard=self.toggle_clipboard_mode,
+            on_toggle_auto_hide=self.toggle_auto_hide,
+            on_toggle_debug=self.toggle_speech_debug,
+            on_capture_hotkey=self.start_hotkey_capture,
+            on_set_hotkey=self.set_hotkey,
+        )
+        player.start()
+        return player
+
+    def _create_tk_player(self) -> PlayerWindow:
+        return PlayerWindow(
             app_name=self._config.app_name,
             hotkey=self._config.default_hotkey,
             ocr_hotkey=self._config.ocr_hotkey,
@@ -111,6 +147,23 @@ class SelectSpeakApp:
             speech_backend=self._speech_backend,
             debug_enabled=self._speech_debug_enabled,
         )
+
+    def open_settings(self) -> None:
+        """Open the settings window, where the renderer provides one.
+
+        The Tk player shows its settings inline, so this is only meaningful for
+        the WinUI renderer.
+        """
+        logger.info("ui.settings.requested")
+        opener = getattr(self._player, "open_settings", None)
+        if opener is not None:
+            opener()
+
+    def run(self) -> None:
+        logger.info("app.starting")
+        self._enable_dpi_awareness()
+        logger.debug("app.creating_services")
+        self._player = self._create_player()
         if self._clipboard_mode:
             self._player.set_clipboard_mode(True)
         self._clipboard = ClipboardService()
@@ -190,6 +243,29 @@ class SelectSpeakApp:
         speaker.resume()
         self._update_player(speaking=True, paused=False, text=text)
         logger.info("playback.resumed")
+
+    def toggle_playback(self) -> None:
+        """Resolve a single play/pause button press against the current state.
+
+        The WinUI player has one transport button and reports only that it was
+        pressed; deciding what that means is Python's job, because only the
+        session knows whether it is speaking, paused, or finished.
+        """
+        state = self._session.snapshot()
+        logger.debug(
+            "playback.toggle.requested speaking=%s paused=%s",
+            state.speaking,
+            state.paused,
+        )
+        if state.speaking and not state.paused:
+            self.pause()
+        elif state.speaking:
+            self.resume()
+        else:
+            # Nothing is playing, so the button replays the last capture. With
+            # no text yet, replay logs and does nothing, which is the right
+            # outcome for a press before anything has been read.
+            self.replay()
 
     def replay(self) -> None:
         logger.info("playback.replay.requested")
@@ -436,6 +512,7 @@ class SelectSpeakApp:
         if self._session.snapshot().speaking:
             logger.info("hotkey.capture.ignored_while_speaking")
             return
+
         started = self._hotkeys.start_capture(
             timeout_seconds=self._config.capture_timeout_seconds,
             on_preview=lambda combo: self._player.call_soon(lambda: self._player.show_capture_preview(combo)),
@@ -631,6 +708,22 @@ class SelectSpeakApp:
         )
         if text:
             self._begin_speech(text, source="ocr")
+
+    def set_hotkey(self, hotkey: str) -> None:
+        """Bind the shortcut the user confirmed in the settings dialog.
+
+        The keys came from our own recorder, but they arrive back over the
+        pipe, so the string is validated here before anything is bound; a
+        rejected one leaves the existing binding alone.
+        """
+        logger.info("hotkey.set.requested hotkey=%s", hotkey)
+        try:
+            to_windows_hotkey(hotkey)
+        except ValueError:
+            logger.warning("hotkey.set.rejected hotkey=%s", hotkey)
+            self._player.set_hotkey(self._hotkeys.hotkey)
+            return
+        self._apply_hotkey(hotkey)
 
     def _apply_hotkey(self, hotkey: str) -> None:
         logger.info("hotkey.rebind.requested hotkey=%s", hotkey)

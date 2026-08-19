@@ -121,7 +121,13 @@ public sealed class NamedPipePlayerBridge : IPlayerBridge
     }
 
     /// <inheritdoc />
-    public async Task SendAsync(string intent)
+    public Task SendAsync(string intent) => WriteAsync(intent, fields: null);
+
+    /// <inheritdoc />
+    public Task SendAsync(string intent, IReadOnlyDictionary<string, string> fields) =>
+        WriteAsync(intent, fields);
+
+    private async Task WriteAsync(string intent, IReadOnlyDictionary<string, string>? fields)
     {
         var writer = _writer;
         if (writer is null)
@@ -129,8 +135,16 @@ public sealed class NamedPipePlayerBridge : IPlayerBridge
             return; // Not connected; intents are dropped rather than queued.
         }
 
-        var payload = JsonSerializer.Serialize(
-            new Dictionary<string, string> { ["type"] = intent });
+        var message = new Dictionary<string, string> { ["type"] = intent };
+        if (fields is not null)
+        {
+            foreach (var pair in fields)
+            {
+                message[pair.Key] = pair.Value;
+            }
+        }
+
+        var payload = JsonSerializer.Serialize(message);
 
         await _writeLock.WaitAsync().ConfigureAwait(false);
         try

@@ -91,6 +91,13 @@ class NativeInputAdapter:
     ) -> None:
         def handle_recording(event: int, modifiers: int, virtual_key: int, _context: Any) -> None:
             hotkey = from_windows_hotkey(modifiers, virtual_key)
+            logger.info(
+                "native_input.recording.event event=%s modifiers=%s virtual_key=%s hotkey=%s",
+                event,
+                modifiers,
+                virtual_key,
+                hotkey,
+            )
             if event == 1 and hotkey:
                 on_preview(hotkey)
             elif event == 2 and hotkey:

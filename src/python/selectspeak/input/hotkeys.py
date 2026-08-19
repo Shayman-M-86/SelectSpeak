@@ -75,6 +75,7 @@ class HotkeyManager:
         on_complete: Callable[[str], None],
         on_cancel: Callable[[], None],
     ) -> bool:
+        """Record a shortcut, suppressing every keystroke until it finishes."""
         logger.info("hotkey.capture_listener.requested timeout_seconds=%s", timeout_seconds)
         with self._lock:
             if self._capture_active:
