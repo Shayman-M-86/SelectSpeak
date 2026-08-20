@@ -29,38 +29,36 @@ public sealed class OverlayWindow : IDisposable
     /// </summary>
     public void EnableNoActivate()
     {
-        var style = (int)Interop.GetWindowLongPtrW(_hwnd, Interop.GWL_EXSTYLE);
+        Interop.SetLastError(0);
+        var stylePointer = Interop.GetWindowLongPtrW(_hwnd, Interop.GWL_EXSTYLE);
+        ThrowIfZeroFailed(stylePointer, "GetWindowLongPtr(GWL_EXSTYLE) failed");
+        var style = unchecked((int)stylePointer.ToInt64());
 
         // SetWindowLongPtr returns 0 both when the previous value was 0 and on
         // failure, so the last error is cleared first to tell them apart.
-        Interop.SetLastError(0);
-        var previous = Interop.SetWindowLongPtrW(
-            _hwnd, Interop.GWL_EXSTYLE, new IntPtr(style | Interop.WS_EX_NOACTIVATE));
-        if (previous == IntPtr.Zero)
+        SetWindowLongChecked(
+            Interop.GWL_EXSTYLE,
+            new IntPtr(style | Interop.WS_EX_NOACTIVATE),
+            "SetWindowLongPtr(GWL_EXSTYLE) failed");
+
+        if (!Interop.SetWindowPos(
+                _hwnd, IntPtr.Zero, 0, 0, 0, 0,
+                Interop.SWP_NOMOVE | Interop.SWP_NOSIZE | Interop.SWP_NOZORDER
+                | Interop.SWP_FRAMECHANGED | Interop.SWP_NOACTIVATE))
         {
             var error = System.Runtime.InteropServices.Marshal.GetLastWin32Error();
-            if (error != 0)
-            {
-                throw new System.ComponentModel.Win32Exception(
-                    error, "SetWindowLongPtr(GWL_EXSTYLE) failed");
-            }
+            throw new System.ComponentModel.Win32Exception(error, "SetWindowPos failed");
         }
-
-        Interop.SetWindowPos(
-            _hwnd, IntPtr.Zero, 0, 0, 0, 0,
-            Interop.SWP_NOMOVE | Interop.SWP_NOSIZE | Interop.SWP_NOZORDER
-            | Interop.SWP_FRAMECHANGED | Interop.SWP_NOACTIVATE);
-
     }
 
     /// <summary>Rounded corners and dark chrome, as dwm.py does today.</summary>
     public void ApplyDwmChrome(bool dark)
     {
         var corner = (int)Interop.DWMWCP_ROUND;
-        Interop.DwmSetWindowAttribute(
+        _ = Interop.DwmSetWindowAttribute(
             _hwnd, Interop.DWMWA_WINDOW_CORNER_PREFERENCE, ref corner, sizeof(int));
         var useDark = dark ? 1 : 0;
-        Interop.DwmSetWindowAttribute(
+        _ = Interop.DwmSetWindowAttribute(
             _hwnd, Interop.DWMWA_USE_IMMERSIVE_DARK_MODE, ref useDark, sizeof(int));
     }
 
@@ -70,11 +68,13 @@ public sealed class OverlayWindow : IDisposable
         {
             return;
         }
-        _subclass = HandleMessage;
-        _previousProcedure = Interop.SetWindowLongPtrW(
-            _hwnd,
-            Interop.GWLP_WNDPROC,
-            System.Runtime.InteropServices.Marshal.GetFunctionPointerForDelegate(_subclass));
+        var subclass = new Interop.WindowProcedure(HandleMessage);
+        var procedure = System.Runtime.InteropServices.Marshal.GetFunctionPointerForDelegate(subclass);
+        var previous = SetWindowLongChecked(
+            Interop.GWLP_WNDPROC, procedure, "SetWindowLongPtr(GWLP_WNDPROC) failed");
+
+        _previousProcedure = previous;
+        _subclass = subclass;
     }
 
     private IntPtr HandleMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
@@ -109,7 +109,33 @@ public sealed class OverlayWindow : IDisposable
         {
             return;
         }
-        Interop.SetWindowLongPtrW(_hwnd, Interop.GWLP_WNDPROC, _previousProcedure);
+        SetWindowLongChecked(
+            Interop.GWLP_WNDPROC,
+            _previousProcedure,
+            "Restoring the window procedure failed");
         _subclass = null;
+        _previousProcedure = IntPtr.Zero;
+    }
+
+    private IntPtr SetWindowLongChecked(int index, IntPtr value, string message)
+    {
+        Interop.SetLastError(0);
+        var previous = Interop.SetWindowLongPtrW(_hwnd, index, value);
+        ThrowIfZeroFailed(previous, message);
+        return previous;
+    }
+
+    private static void ThrowIfZeroFailed(IntPtr result, string message)
+    {
+        if (result != IntPtr.Zero)
+        {
+            return;
+        }
+
+        var error = System.Runtime.InteropServices.Marshal.GetLastWin32Error();
+        if (error != 0)
+        {
+            throw new System.ComponentModel.Win32Exception(error, message);
+        }
     }
 }

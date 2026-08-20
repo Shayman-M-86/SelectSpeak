@@ -41,6 +41,7 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 $configuration = if ($Release) { "Release" } else { "Debug" }
 $python = Join-Path $projectRoot ".venv\Scripts\python.exe"
 $pythonw = Join-Path $projectRoot ".venv\Scripts\pythonw.exe"
+$dotnet = Join-Path $projectRoot ".runtime\dotnet-sdk\dotnet.exe"
 $nativeDll = Join-Path $projectRoot ".runtime\native\selectspeak_native.dll"
 $playerProject = Join-Path $projectRoot "src\winui\SelectSpeak.UI\SelectSpeak.UI.csproj"
 $playerExe = Join-Path $projectRoot `
@@ -51,6 +52,7 @@ $playerExe = Join-Path $projectRoot `
 $speechSdk = Join-Path $projectRoot ".cache\natural_voice\packages\Microsoft.CognitiveServices.Speech.1.41.1"
 $missing = @(
     @{ Path = $python; Name = "the Python environment" },
+    @{ Path = $dotnet; Name = "the .NET SDK" },
     @{ Path = $speechSdk; Name = "the Speech SDK packages" }
 ) | Where-Object { -not (Test-Path -LiteralPath $_.Path) }
 if ($missing) {
@@ -59,15 +61,41 @@ if ($missing) {
     exit 1
 }
 
-# One instance at a time: a copy already in the tray owns the mutex, so a second
-# would exit immediately with nothing on screen and no explanation.
-$running = Get-CimInstance Win32_Process `
-    -Filter "Name = 'pythonw.exe' OR Name = 'python.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -match '-m\s+selectspeak' }
-if ($running) {
-    Write-Host "SelectSpeak is already running (pid $($running.ProcessId -join ', '))." -ForegroundColor Yellow
-    Write-Host "Quit it from the tray icon first." -ForegroundColor Yellow
-    exit 1
+# One instance at a time: stop either a development backend or the packaged app
+# before building and launching this checkout. Stop the player as well because a
+# forced backend shutdown cannot ask its child process to exit cleanly.
+$runningBackends = Get-CimInstance Win32_Process `
+    -Filter "Name = 'pythonw.exe' OR Name = 'python.exe' OR Name = 'SelectSpeak.exe'" `
+    -ErrorAction SilentlyContinue |
+    Where-Object {
+        $_.Name -eq "SelectSpeak.exe" -or $_.CommandLine -match '-m\s+selectspeak'
+    }
+$runningPlayers = Get-Process -Name "SelectSpeak.UI" -ErrorAction SilentlyContinue
+$stoppedProcessIds = @()
+foreach ($process in $runningBackends) {
+    Write-Host "Stopping SelectSpeak backend (pid $($process.ProcessId))" -ForegroundColor Yellow
+    Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+    $stoppedProcessIds += $process.ProcessId
+}
+foreach ($process in $runningPlayers) {
+    Write-Host "Stopping SelectSpeak player (pid $($process.Id))" -ForegroundColor Yellow
+    Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+    $stoppedProcessIds += $process.Id
+}
+if ($stoppedProcessIds.Count -gt 0) {
+    $shutdownDeadline = [DateTime]::UtcNow.AddSeconds(5)
+    do {
+        $remaining = @(
+            foreach ($processId in $stoppedProcessIds) {
+                Get-Process -Id $processId -ErrorAction SilentlyContinue
+            }
+        )
+        if ($remaining.Count -eq 0) { break }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $shutdownDeadline)
+    if ($remaining.Count -gt 0) {
+        throw "An existing SelectSpeak process could not be stopped."
+    }
 }
 
 if (-not $NoBuild) {
@@ -76,17 +104,15 @@ if (-not $NoBuild) {
     & (Join-Path $projectRoot "build-tools\native\build.ps1") -DevRuntime -SkipTests
     if ($LASTEXITCODE) { throw "The native bridge failed to build." }
 
-    # A running player locks its own output, and MSBuild then reports success
-    # having copied nothing - which looks exactly like the edit doing nothing.
-    # The XAML compiler and reused MSBuild nodes hold locks of their own.
-    Get-Process -Name "SelectSpeak.UI", "XamlCompiler" -ErrorAction SilentlyContinue |
+    # The XAML compiler can retain locks from a previous interrupted build.
+    Get-Process -Name "XamlCompiler" -ErrorAction SilentlyContinue |
         ForEach-Object {
             Write-Host "stopping $($_.ProcessName) (pid $($_.Id))" -ForegroundColor DarkGray
             Stop-Process -Id $_.Id -Force
         }
     Start-Sleep -Milliseconds 400
 
-    $output = & dotnet build $playerProject --configuration $configuration `
+    $output = & $dotnet build $playerProject --configuration $configuration `
         --nologo -nodeReuse:false 2>&1
     if ($LASTEXITCODE) {
         $output | Where-Object { $_ -match "error" } | ForEach-Object {

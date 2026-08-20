@@ -27,6 +27,7 @@ def _recognize_image(image: Image.Image) -> tuple[int, list[tuple[int, str]]]:
     dll = get_native_bridge(str(RUNTIME_OCR_DLL)).library
     dll.ss_ocr_recognize_bgra.argtypes = [
         ctypes.POINTER(ctypes.c_ubyte),
+        ctypes.c_uint64,
         ctypes.c_uint,
         ctypes.c_uint,
         ctypes.c_uint,
@@ -39,6 +40,7 @@ def _recognize_image(image: Image.Image) -> tuple[int, list[tuple[int, str]]]:
     pixels = (ctypes.c_ubyte * len(bgra)).from_buffer_copy(bgra)
     return_code = dll.ss_ocr_recognize_bgra(
         pixels,
+        len(bgra),
         image.width,
         image.height,
         image.width * 4,
@@ -185,3 +187,41 @@ def test_built_bridge_reconstructs_visual_wraps_and_paragraphs() -> None:
             "Second paragraph starts after a larger gap.",
         )
     ]
+
+
+@pytest.mark.skipif(
+    sys.platform != "win32" or not RUNTIME_OCR_DLL.is_file(),
+    reason="built Windows input bridge is unavailable",
+)
+def test_built_bridge_rejects_an_undersized_bgra_buffer() -> None:
+    dll = get_native_bridge(str(RUNTIME_OCR_DLL)).library
+    callback_results: list[tuple[int, str]] = []
+    callback = _OCR_TEST_CALLBACK(
+        lambda text, status, _context: callback_results.append((status, text or ""))
+    )
+    dll.ss_ocr_recognize_bgra.argtypes = [
+        ctypes.POINTER(ctypes.c_ubyte),
+        ctypes.c_uint64,
+        ctypes.c_uint,
+        ctypes.c_uint,
+        ctypes.c_uint,
+        ctypes.c_wchar_p,
+        _OCR_TEST_CALLBACK,
+        ctypes.c_void_p,
+    ]
+    dll.ss_ocr_recognize_bgra.restype = ctypes.c_int
+    pixels = (ctypes.c_ubyte * 16)()
+
+    result = dll.ss_ocr_recognize_bgra(
+        pixels,
+        15,
+        2,
+        2,
+        8,
+        "en-US",
+        callback,
+        None,
+    )
+
+    assert result == 1
+    assert callback_results == []

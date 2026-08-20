@@ -9,7 +9,7 @@ from typing import Any
 
 from ..config.paths import is_frozen, native_dir
 
-NATIVE_API_VERSION = 3
+NATIVE_API_VERSION = 6
 
 
 class NativeBridgeError(RuntimeError):

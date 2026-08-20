@@ -2,6 +2,8 @@
 
 #include <windows.h>
 
+#include <string>
+
 #include "../api.h"
 
 namespace selectspeak::input {
@@ -17,10 +19,13 @@ void Stop();
 
 unsigned int LastCaptureSource();
 unsigned long long LastActivationTimeMs();
+unsigned int LastCaptureTrace(char* buffer, unsigned int length);
 unsigned int LastError(char* buffer, unsigned int length);
+void SetLastError(const std::string& message);
 
 DWORD RegisterOcrHotkey(unsigned int modifiers, unsigned int virtual_key,
                         OcrHotkeyHandler handler);
 void UnregisterOcrHotkey();
+void CompleteOcrDispatch();
 
 }  // namespace selectspeak::input

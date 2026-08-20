@@ -174,7 +174,10 @@ class NaturalVoiceEngine:
                 candidate.locale,
                 candidate.package_path,
             )
-            if not self._dll.ss_voice_initialize(candidate.package_path):
+            if not self._dll.ss_voice_initialize(
+                candidate.package_path,
+                candidate.name.encode("utf-8"),
+            ):
                 self.voice = candidate
                 logger.info(
                     "natural_voice.selected voice=%s locale=%s package_path=%s available_voice_count=%s",
@@ -201,7 +204,7 @@ class NaturalVoiceEngine:
     def _configure_api(self) -> None:
         self._dll.ss_voice_list.argtypes = [_VOICE_CALLBACK, ctypes.c_void_p]
         self._dll.ss_voice_list.restype = ctypes.c_uint32
-        self._dll.ss_voice_initialize.argtypes = [ctypes.c_wchar_p]
+        self._dll.ss_voice_initialize.argtypes = [ctypes.c_wchar_p, ctypes.c_char_p]
         self._dll.ss_voice_initialize.restype = ctypes.c_int
         self._dll.ss_voice_set_audio_callback.argtypes = [
             _AUDIO_CALLBACK,

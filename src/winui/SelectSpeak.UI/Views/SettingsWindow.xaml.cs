@@ -81,9 +81,20 @@ public sealed partial class SettingsWindow : Window
         _applying = true;
         try
         {
-            AutoHideToggle.IsOn = message.AutoHide;
-            ClipboardToggle.IsOn = message.ClipboardMode;
-            DebugToggle.IsOn = message.DebugEnabled;
+            if (message.AutoHide is { } autoHide)
+            {
+                AutoHideToggle.IsOn = autoHide;
+            }
+
+            if (message.ClipboardMode is { } clipboardMode)
+            {
+                ClipboardToggle.IsOn = clipboardMode;
+            }
+
+            if (message.DebugEnabled is { } debugEnabled)
+            {
+                DebugToggle.IsOn = debugEnabled;
+            }
 
             if (!string.IsNullOrEmpty(message.Hotkey))
             {
@@ -114,38 +125,30 @@ public sealed partial class SettingsWindow : Window
     /// </summary>
     private void FillVoices(IReadOnlyList<VoiceChoice> voices, string? selectedKey)
     {
-        _applying = true;
-        try
-        {
-            VoicePicker.Items.Clear();
+        VoicePicker.Items.Clear();
 
-            var group = string.Empty;
-            foreach (var voice in voices)
+        var group = string.Empty;
+        foreach (var voice in voices)
+        {
+            if (voice.Group != group)
             {
-                if (voice.Group != group)
+                group = voice.Group;
+                VoicePicker.Items.Add(new ComboBoxItem
                 {
-                    group = voice.Group;
-                    VoicePicker.Items.Add(new ComboBoxItem
-                    {
-                        Content = group,
-                        IsEnabled = false,
-                        // A heading, not a choice, so it reads as a label.
-                        FontSize = 12,
-                    });
-                }
-
-                var item = new ComboBoxItem { Content = voice.Label, Tag = voice.Key };
-                VoicePicker.Items.Add(item);
-
-                if (voice.Key == selectedKey)
-                {
-                    VoicePicker.SelectedItem = item;
-                }
+                    Content = group,
+                    IsEnabled = false,
+                    // A heading, not a choice, so it reads as a label.
+                    FontSize = 12,
+                });
             }
-        }
-        finally
-        {
-            _applying = false;
+
+            var item = new ComboBoxItem { Content = voice.Label, Tag = voice.Key };
+            VoicePicker.Items.Add(item);
+
+            if (voice.Key == selectedKey)
+            {
+                VoicePicker.SelectedItem = item;
+            }
         }
     }
 

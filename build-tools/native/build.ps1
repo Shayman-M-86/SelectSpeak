@@ -53,6 +53,7 @@ $configureArguments = @(
     "-S", $nativeSourceRoot,
     "-B", $buildRoot,
     "-A", "x64",
+    "-DBUILD_TESTING=$(-not $SkipTests)",
     "-DSELECTSPEAK_VERSION=$version",
     "-DSELECTSPEAK_ENABLE_NATURAL_VOICE=$(-not $SkipNaturalVoice)"
 )
@@ -86,7 +87,11 @@ if (-not $SkipNaturalVoice) {
 if ($LASTEXITCODE) {
     throw "CMake configuration failed with exit code $LASTEXITCODE"
 }
-& $cmake --build $buildRoot --config Release
+$buildArguments = @("--build", $buildRoot, "--config", "Release")
+if ($SkipTests) {
+    $buildArguments += @("--target", "selectspeak_native")
+}
+& $cmake @buildArguments
 if ($LASTEXITCODE) { throw "Native build failed with exit code $LASTEXITCODE" }
 if (-not $SkipTests) {
     $ctest = Join-Path (Split-Path -Parent $cmake) "ctest.exe"

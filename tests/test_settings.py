@@ -24,6 +24,8 @@ def test_settings_round_trip_every_persistent_category(tmp_path: Path) -> None:
         auto_hide=False,
         speech_debug_enabled=False,
         clipboard_mode=True,
+        logging_enabled=True,
+        log_file="C:/Temp/selectspeak-debug.log",
     )
     store = SettingsStore(path)
 

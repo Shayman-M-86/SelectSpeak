@@ -94,6 +94,8 @@ class NativeInputAdapter:
         self._dll.ss_input_last_capture_source.restype = ctypes.c_uint
         self._dll.ss_input_last_activation_time_ms.argtypes = []
         self._dll.ss_input_last_activation_time_ms.restype = ctypes.c_ulonglong
+        self._dll.ss_input_last_capture_trace.argtypes = [ctypes.c_char_p, ctypes.c_uint]
+        self._dll.ss_input_last_capture_trace.restype = ctypes.c_uint
         self._dll.ss_input_last_error.argtypes = [ctypes.c_char_p, ctypes.c_uint]
         self._dll.ss_input_last_error.restype = ctypes.c_uint
 
@@ -105,7 +107,14 @@ class NativeInputAdapter:
         capture_latency_ms = max(0, kernel.GetTickCount64() - activated_ms)
         activated_at = time.monotonic() - capture_latency_ms / 1000
         source_id = self._dll.ss_input_last_capture_source()
-        source = {1: "ui_automation", 2: "clipboard"}.get(source_id, "empty")
+        source = {
+            1: "ui_automation",
+            2: "wm_copy",
+            3: "synthetic_copy",
+        }.get(source_id, "empty")
+        capture_trace = self._last_capture_trace()
+        if capture_trace:
+            logger.info("native_input.selection_capture %s", capture_trace)
         logger.log(
             logging.INFO if captured else logging.WARNING,
             "native_input.capture.completed captured=%s source=%s "
@@ -140,4 +149,10 @@ class NativeInputAdapter:
         required = self._dll.ss_input_last_error(None, 0)
         buffer = ctypes.create_string_buffer(max(required, 1))
         self._dll.ss_input_last_error(buffer, len(buffer))
+        return buffer.value.decode("utf-8", errors="replace")
+
+    def _last_capture_trace(self) -> str:
+        required = self._dll.ss_input_last_capture_trace(None, 0)
+        buffer = ctypes.create_string_buffer(max(required, 1))
+        self._dll.ss_input_last_capture_trace(buffer, len(buffer))
         return buffer.value.decode("utf-8", errors="replace")

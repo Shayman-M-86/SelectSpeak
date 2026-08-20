@@ -7,7 +7,6 @@ std::uint32_t ss_api_version()
 
 void ss_shutdown()
 {
-    ss_ocr_stop();
     ss_input_stop();
     ss_voice_shutdown();
 }

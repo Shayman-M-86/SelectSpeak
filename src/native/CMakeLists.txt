@@ -9,6 +9,8 @@ endif()
 
 option(SELECTSPEAK_ENABLE_NATURAL_VOICE
     "Build Microsoft Natural Voice support into the native bridge" ON)
+option(SELECTSPEAK_ENABLE_ASAN
+    "Build the native bridge with AddressSanitizer" OFF)
 set(SELECTSPEAK_VERSION "0.1.3" CACHE STRING
     "SelectSpeak product version embedded in the native bridge")
 if(NOT SELECTSPEAK_VERSION MATCHES "^[0-9]+\.[0-9]+\.[0-9]+$")
@@ -23,7 +25,8 @@ set(SELECTSPEAK_NATIVE_SOURCES
     input/hotkeys/hotkey_runtime.cpp
     input/ocr/ocr_capture.cpp
     input/ocr/ocr_layout.cpp
-    input/selection/selection_capture.cpp)
+    input/selection/selection_capture.cpp
+    input/selection/selection_policy.cpp)
 list(APPEND SELECTSPEAK_NATIVE_SOURCES
     "${CMAKE_CURRENT_BINARY_DIR}/selectspeak_version.rc")
 
@@ -47,13 +50,19 @@ target_compile_features(selectspeak_native PRIVATE cxx_std_17)
 target_compile_definitions(selectspeak_native PRIVATE
     SELECTSPEAK_NATIVE_EXPORTS WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
 if(MSVC)
-    target_compile_options(selectspeak_native PRIVATE /utf-8)
+    target_compile_options(selectspeak_native PRIVATE
+        /utf-8 /W4 /permissive- /sdl /Zc:__cplusplus /guard:cf)
+    target_link_options(selectspeak_native PRIVATE /guard:cf /CETCOMPAT)
+    if(SELECTSPEAK_ENABLE_ASAN)
+        target_compile_options(selectspeak_native PRIVATE /fsanitize=address)
+        target_link_options(selectspeak_native PRIVATE /INCREMENTAL:NO)
+    endif()
     if(SELECTSPEAK_ENABLE_NATURAL_VOICE AND MSVC_VERSION LESS 1930)
         target_compile_options(selectspeak_native PRIVATE /await)
     endif()
 endif()
 target_link_libraries(selectspeak_native PRIVATE
-    gdi32 msimg32 ole32 shcore shell32 uiautomationcore user32 windowsapp)
+    gdi32 msimg32 ole32 shcore uiautomationcore user32 windowsapp)
 set_target_properties(selectspeak_native PROPERTIES OUTPUT_NAME "selectspeak_native")
 
 if(SELECTSPEAK_ENABLE_NATURAL_VOICE)
@@ -71,9 +80,20 @@ if(BUILD_TESTING)
     target_compile_features(selectspeak_ocr_layout_tests PRIVATE cxx_std_17)
     target_compile_definitions(selectspeak_ocr_layout_tests PRIVATE NOMINMAX)
     if(MSVC)
-        target_compile_options(selectspeak_ocr_layout_tests PRIVATE /utf-8)
+        target_compile_options(selectspeak_ocr_layout_tests PRIVATE
+            /utf-8 /W4 /permissive- /sdl /Zc:__cplusplus)
     endif()
     add_test(NAME ocr_layout COMMAND selectspeak_ocr_layout_tests)
+
+    add_executable(selectspeak_selection_policy_tests
+        input/selection/selection_policy.cpp
+        input/selection/selection_policy_tests.cpp)
+    target_compile_features(selectspeak_selection_policy_tests PRIVATE cxx_std_17)
+    if(MSVC)
+        target_compile_options(selectspeak_selection_policy_tests PRIVATE
+            /utf-8 /W4 /permissive- /sdl /Zc:__cplusplus)
+    endif()
+    add_test(NAME selection_policy COMMAND selectspeak_selection_policy_tests)
 
     if(SELECTSPEAK_ENABLE_NATURAL_VOICE)
         add_executable(selectspeak_speech_runtime_config_tests
@@ -83,6 +103,10 @@ if(BUILD_TESTING)
             cxx_std_17)
         target_compile_definitions(selectspeak_speech_runtime_config_tests PRIVATE
             WIN32_LEAN_AND_MEAN NOMINMAX)
+        if(MSVC)
+            target_compile_options(selectspeak_speech_runtime_config_tests PRIVATE
+                /utf-8 /W4 /permissive- /sdl /Zc:__cplusplus)
+        endif()
         add_test(NAME natural_voice_speech_runtime_config
             COMMAND selectspeak_speech_runtime_config_tests)
     endif()

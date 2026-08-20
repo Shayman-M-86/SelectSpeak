@@ -8,12 +8,14 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <mutex>
 #include <system_error>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
 namespace {
+constexpr std::uintmax_t maximum_runtime_binary_size = 64ull * 1024 * 1024;
 constexpr std::array<std::uint8_t, 7> runtime_config_marker = {
     '2', '7', '7', '4', '3', '1', '6'};
 
@@ -84,6 +86,11 @@ std::optional<std::vector<std::uint8_t>> read_binary(
 {
     std::ifstream stream(path, std::ios::binary);
     if (!stream) {
+        return std::nullopt;
+    }
+    std::error_code error;
+    const auto size = std::filesystem::file_size(path, error);
+    if (error || size > maximum_runtime_binary_size) {
         return std::nullopt;
     }
     return std::vector<std::uint8_t>(std::istreambuf_iterator<char>(stream), {});
@@ -181,9 +188,14 @@ speech_runtime_config_candidates()
     // packages, which Windows leaves in place across updates without
     // re-encrypting them.
     std::vector<std::pair<std::string, std::string>> candidates;
-    if (auto installed = discover_speech_runtime_config()) {
+    static std::once_flag discovery_once;
+    static std::optional<std::string> installed_runtime;
+    std::call_once(discovery_once, [] {
+        installed_runtime = discover_speech_runtime_config();
+    });
+    if (installed_runtime) {
         candidates.emplace_back("installed Windows runtime",
-                                std::move(*installed));
+                                *installed_runtime);
     }
     candidates.emplace_back("legacy compatibility",
                             legacy_speech_runtime_config());

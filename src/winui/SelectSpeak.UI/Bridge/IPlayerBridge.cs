@@ -12,8 +12,8 @@ namespace SelectSpeak.UI.Bridge;
 /// <c>Windowing/</c> or <c>Views/</c> should know how that conversation is
 /// transported.
 ///
-/// Not implemented yet - this interface exists to fix the shape of the
-/// boundary. The planned transport is newline-delimited JSON over a named pipe.
+/// The production transport is newline-delimited JSON over a named pipe; the
+/// interface keeps transport details out of the views.
 /// </summary>
 public interface IPlayerBridge : IDisposable
 {

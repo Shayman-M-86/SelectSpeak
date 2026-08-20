@@ -95,7 +95,9 @@ def test_engine_initializes_the_preferred_installed_voice(
 
     assert engine.voice == installed[1]
     assert engine.available_voices == (installed[1], installed[0])
-    assert initialized_arguments == [(installed[1].package_path,)]
+    assert initialized_arguments == [
+        (installed[1].package_path, installed[1].name.encode("utf-8"))
+    ]
     engine.close()
 
 
@@ -153,7 +155,7 @@ def test_select_voice_refreshes_packages_installed_after_engine_start(
             )
         return len(installed)
 
-    def initialize(package_path: str) -> int:
+    def initialize(package_path: str, _voice_name: bytes) -> int:
         initialized_paths.append(package_path)
         return 0
 

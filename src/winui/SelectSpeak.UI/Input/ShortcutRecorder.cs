@@ -45,6 +45,8 @@ public sealed class ShortcutRecorder : IDisposable
 
     public ShortcutRecorder() => _proc = HookProc;
 
+    ~ShortcutRecorder() => StopCore();
+
     public bool IsRecording => _hook != IntPtr.Zero;
 
     /// <summary>Start intercepting the keyboard. Returns false if it could not.</summary>
@@ -66,20 +68,36 @@ public sealed class ShortcutRecorder : IDisposable
     }
 
     /// <summary>Stop intercepting. Safe to call when not recording.</summary>
-    public void Stop()
+    public void Stop() => StopCore();
+
+    private bool StopCore()
     {
         if (_hook == IntPtr.Zero)
         {
-            return;
+            return true;
         }
 
-        UnhookWindowsHookEx(_hook);
+        // Keep both the handle and delegate live if Windows refuses removal.
+        // Dispose gets another attempt, and the finalizer is a last safety net
+        // before the native callback could otherwise outlive its delegate.
+        if (!UnhookWindowsHookEx(_hook))
+        {
+            return false;
+        }
+
         _hook = IntPtr.Zero;
         _modifiers.Clear();
         _trigger = null;
+        return true;
     }
 
-    public void Dispose() => Stop();
+    public void Dispose()
+    {
+        if (StopCore())
+        {
+            GC.SuppressFinalize(this);
+        }
+    }
 
     private IntPtr HookProc(int code, IntPtr wParam, IntPtr lParam)
     {
@@ -88,7 +106,7 @@ public sealed class ShortcutRecorder : IDisposable
             return CallNextHookEx(IntPtr.Zero, code, wParam, lParam);
         }
 
-        var message = (int)wParam;
+        var message = unchecked((int)wParam.ToInt64());
         var pressed = message is WmKeyDown or WmSysKeyDown;
         var released = message is WmKeyUp or WmSysKeyUp;
         if (!pressed && !released)
@@ -96,8 +114,10 @@ public sealed class ShortcutRecorder : IDisposable
             return SwallowKey;
         }
 
-        var info = Marshal.PtrToStructure<KeyboardLowLevelHookStruct>(lParam);
-        var virtualKey = (int)info.VirtualKey;
+        // VirtualKey is the first 32-bit field in KBDLLHOOKSTRUCT. Reading only
+        // what this recorder uses avoids marshalling the whole structure for
+        // every key event.
+        var virtualKey = Marshal.ReadInt32(lParam);
 
         if (pressed && virtualKey == VkEscape)
         {
@@ -220,16 +240,6 @@ public sealed class ShortcutRecorder : IDisposable
     };
 
     private delegate IntPtr LowLevelKeyboardProc(int code, IntPtr wParam, IntPtr lParam);
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct KeyboardLowLevelHookStruct
-    {
-        public uint VirtualKey;
-        public uint ScanCode;
-        public uint Flags;
-        public uint Time;
-        public IntPtr ExtraInfo;
-    }
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern IntPtr SetWindowsHookEx(

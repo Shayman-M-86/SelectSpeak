@@ -73,6 +73,10 @@ def _settings_payload(config: AppConfig) -> dict[str, Any]:
             "speech_debug_enabled": config.speech_debug_enabled,
             "clipboard_mode": config.clipboard_mode,
         },
+        "logging": {
+            "enabled": config.logging_enabled,
+            "file": config.log_file,
+        },
     }
 
 
@@ -81,6 +85,7 @@ def _apply_settings(defaults: AppConfig, payload: dict[str, Any]) -> AppConfig:
     speech = _mapping(payload.get("speech"))
     supertonic = _mapping(payload.get("supertonic"))
     ui = _mapping(payload.get("ui"))
+    logging = _mapping(payload.get("logging"))
     backend = _choice(payload.get("speech_backend"), {"auto", "natural", "sapi", "supertonic"})
     return replace(
         defaults,
@@ -98,6 +103,8 @@ def _apply_settings(defaults: AppConfig, payload: dict[str, Any]) -> AppConfig:
         auto_hide=_boolean(ui.get("auto_hide"), defaults.auto_hide),
         speech_debug_enabled=_boolean(ui.get("speech_debug_enabled"), defaults.speech_debug_enabled),
         clipboard_mode=_boolean(ui.get("clipboard_mode"), defaults.clipboard_mode),
+        logging_enabled=_boolean(logging.get("enabled"), defaults.logging_enabled),
+        log_file=_text(logging.get("file"), defaults.log_file, allow_empty=True),
     )
 
 
