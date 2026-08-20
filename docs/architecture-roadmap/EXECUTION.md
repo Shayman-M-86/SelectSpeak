@@ -86,6 +86,9 @@ instead of reimplementing it. Minor differences normally belong under `Adapt`, n
 - Package C contracts are authoritative after explicit review and freeze; do not
   silently redesign them.
 - Preserve user-visible behaviour unless the assigned package changes it.
+- If behaviour regresses broadly or implementation drifts substantially, compare
+  the affected path with the known-good feature-branch commit recorded in the
+  unified plan before making broad corrective changes.
 - Run tests directly related to changed behaviour, followed by the normal checks
   for the affected area.
 - Use full-system checks when required by the package, cross-layer risk, or targeted

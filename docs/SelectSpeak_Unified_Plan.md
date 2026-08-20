@@ -21,6 +21,26 @@ Implement the audio-pipeline and Python simplification recommendations as one co
 * creating competing request/session identities
 * moving logic into C++ merely because native code is theoretically faster
 
+## Known-good reference point
+
+At feature-branch commit
+`1f7461213f55ebcc218a564405df3786c284f2d9` (2026-08-21), the application is a
+known-good working baseline before this architecture migration begins.
+
+This roadmap is primarily an optimization, simplification, ownership, and
+cleanliness migration. Preserving existing behaviour is therefore more important
+than completing a structural change exactly as first imagined.
+
+If implementation drifts substantially, several behaviours regress together, or
+the intended old behaviour becomes unclear, compare the affected path with this
+commit. Use it to recover working semantics, lifecycle expectations, tests, and
+integration details before attempting broader corrective changes.
+
+The reference commit is diagnostic evidence, not permission to reset the branch,
+overwrite later work, or reintroduce architecture that a completed package has
+intentionally replaced. Inspect and reconcile the relevant implementation while
+preserving unrelated changes.
+
 The target architecture is:
 
 ```text
