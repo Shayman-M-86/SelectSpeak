@@ -17,7 +17,7 @@
     the native bridge. scripts/bump_version.ps1 owns Version; the rest are fixed.
   -->
   <PropertyGroup>
-    <Version>0.1.2</Version>
+    <Version>0.1.3</Version>
     <!-- The SDK otherwise appends "+<commit sha>" to ProductVersion, which the
          release metadata check compares literally against the project version. -->
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>

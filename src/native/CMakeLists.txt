@@ -9,7 +9,7 @@ endif()
 
 option(SELECTSPEAK_ENABLE_NATURAL_VOICE
     "Build Microsoft Natural Voice support into the native bridge" ON)
-set(SELECTSPEAK_VERSION "0.1.2" CACHE STRING
+set(SELECTSPEAK_VERSION "0.1.3" CACHE STRING
     "SelectSpeak product version embedded in the native bridge")
 if(NOT SELECTSPEAK_VERSION MATCHES "^[0-9]+\.[0-9]+\.[0-9]+$")
     message(FATAL_ERROR "SELECTSPEAK_VERSION must use major.minor.patch")

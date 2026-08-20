@@ -1,9 +1,10 @@
-# WinUI 3 reader spike
+# SelectSpeak player
 
-A minimal slice of the SelectSpeak player rendered by WinUI 3, driven by the
-existing Python backend. It exists to answer one question: can the reader and
-its word highlighting live in a native Windows UI while Python keeps every
-decision?
+The SelectSpeak player, rendered by WinUI 3 and driven by the Python backend.
+
+Python owns every decision; this process draws what it is sent and reports which
+button was pressed. That split is what lets the player live in another process
+without the application layer knowing.
 
 ## Layout
 
@@ -15,9 +16,8 @@ SelectSpeak.UI.exe (renders, reports intents)
 ```
 
 - `SelectSpeak.UI/` - the WinUI 3 app. Holds no application logic.
-- `../python/selectspeak/ui/winui_bridge.py` - the Python side, exposing the
-  familiar `PlayerWindow` method names.
-- `demo.py` - drives the slice end to end.
+- `../python/selectspeak/ui/winui_bridge.py` - the Python side of the pipe.
+- `../python/selectspeak/ui/contracts.py` - the contract both sides satisfy.
 
 ## Protocol
 
@@ -27,7 +27,8 @@ Python sends state:
 {"type":"set_text","text":"..."}
 {"type":"highlight_word","position":143,"length":7}
 {"type":"set_playback","speaking":true,"paused":false}
-{"type":"set_status","text":"Reading..."}
+{"type":"set_shortcut","hotkey":"Alt+S"}
+{"type":"set_settings","auto_hide":true,"voices":[]}
 {"type":"show"}
 {"type":"hide"}
 ```
@@ -35,24 +36,35 @@ Python sends state:
 The UI sends intent:
 
 ```json
-{"type":"read"}
-{"type":"play"}
-{"type":"pause"}
-{"type":"resume"}
+{"type":"toggle_playback"}
 {"type":"stop"}
+{"type":"settings"}
+{"type":"set_hotkey","hotkey":"ctrl+shift+r"}
+{"type":"select_voice","voice":"sapi"}
 ```
 
-## Running
+## Building and running
+
+Use the repository's development launcher, which builds this project and starts
+the backend that drives it:
 
 ```powershell
-dotnet build src/winui/SelectSpeak.UI
-.venv/Scripts/python.exe src/winui/demo.py
+.\scripts\run-dev.ps1
 ```
 
-`demo.py` launches the UI itself. The bridge reconnects on its own, so either
-process can be restarted independently.
+Build output goes to `.build/winui/`, alongside every other build artefact.
 
-## Not in this slice
+Build this project alone with:
 
-Tray, hotkeys, OCR, voice menu, diagnostics panel, auto-hide, fullscreen
-handling, installer packaging. All of that still runs through the Tk player.
+```powershell
+dotnet build src/winui/SelectSpeak.UI/SelectSpeak.UI.csproj
+```
+
+Launching `SelectSpeak.UI.exe` on its own proves the XAML parses, but shows
+nothing useful: with no backend connected the reader keeps its placeholder and
+the buttons have nothing to report to.
+
+Note that `dotnet publish` is not usable here - it drops `SelectSpeak.UI.pri`
+and the compiled `.xbf` files, and the resulting executable faults inside
+`Microsoft.UI.Xaml.dll` on launch. `build-tools/winui/build.ps1` uses
+`dotnet build` for that reason.

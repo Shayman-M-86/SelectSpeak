@@ -65,10 +65,23 @@ def _read_text(relative_path: str) -> str:
 
 
 def test_root_entry_points_moved_to_scripts() -> None:
-    assert (PROJECT_ROOT / "scripts" / "install.ps1").is_file()
+    assert (PROJECT_ROOT / "scripts" / "install-dev-dependencies.ps1").is_file()
+    assert (PROJECT_ROOT / "scripts" / "run-dev.ps1").is_file()
     assert (PROJECT_ROOT / "scripts" / "run.vbs").is_file()
     assert not (PROJECT_ROOT / "install.ps1").exists()
     assert not (PROJECT_ROOT / "run.vbs").exists()
+
+
+def test_development_has_one_setup_and_one_run_entry_point() -> None:
+    """Building and running a dev checkout is two scripts, not four.
+
+    The player used to carry its own run.ps1 and preview.ps1, which drifted out
+    of step with the build layout; run-dev.ps1 rebuilds whatever is stale.
+    """
+    player_scripts = PROJECT_ROOT / "src" / "winui" / "SelectSpeak.UI"
+    assert not (player_scripts / "run.ps1").exists()
+    assert not (player_scripts / "preview.ps1").exists()
+    assert not (PROJECT_ROOT / "scripts" / "install.ps1").exists()
 
 
 def test_github_workflows_cover_release_quality_gates() -> None:

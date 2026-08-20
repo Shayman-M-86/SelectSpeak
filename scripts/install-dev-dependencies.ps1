@@ -79,7 +79,7 @@ function Install-Uv {
     if (-not $winget) {
         throw @"
 WinGet is required for first-time setup but was not found.
-Install Microsoft's App Installer, then run .\scripts\install.ps1 again.
+Install Microsoft's App Installer, then run .\scripts\install-dev-dependencies.ps1 again.
 "@
     }
     Write-Host "Installing uv..." -ForegroundColor Cyan
@@ -143,7 +143,7 @@ try {
         $uv = Find-Uv | Select-Object -First 1
     }
     if (-not $uv) {
-        throw "uv was installed but could not be located. Open a new PowerShell window and rerun .\scripts\install.ps1."
+        throw "uv was installed but could not be located. Open a new PowerShell window and rerun .\scripts\install-dev-dependencies.ps1."
     }
 
     Invoke-Checked "Installing Python $pythonVersion..." {
@@ -206,7 +206,7 @@ try {
     Write-Host "SelectSpeak installation completed successfully." `
         -ForegroundColor Green
     if (-not $Launch -and -not $running.Count) {
-        Write-Host "Double-click scripts\run.vbs to start it."
+        Write-Host "Run .\scripts\run-dev.ps1 to start it, or double-click scripts\run.vbs."
     }
     if (-not $SkipNaturalVoice) {
         Write-Host "Natural Voice uses compatible Narrator voices and the speech runtime installed through Windows."

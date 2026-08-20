@@ -21,7 +21,7 @@ Project policies: [privacy](PRIVACY.md), [security](SECURITY.md),
 Download and run:
 
 ```text
-SelectSpeak-Setup-0.1.2.exe
+SelectSpeak-Setup-0.1.3.exe
 ```
 
 The installer does not require administrator rights. It installs SelectSpeak
@@ -80,7 +80,7 @@ manually when a complete data reset is wanted.
 Open PowerShell in the project folder and run:
 
 ```powershell
-.\scripts\install.ps1
+.\scripts\install-dev-dependencies.ps1
 ```
 
 This developer setup script requires WinGet. It provisions `uv`, a managed
@@ -93,14 +93,14 @@ when updating an existing installation.
 To install, start SelectSpeak, and add it to Windows startup in one command:
 
 ```powershell
-.\scripts\install.ps1 -Launch -AddToStartup
+.\scripts\install-dev-dependencies.ps1 -Launch -AddToStartup
 ```
 
 This developer setup script requires WinGet. It provisions uv, a managed Python 3.13 installation, all required Python packages, Visual C++ Build Tools and CMake when needed, and builds the native bridge. It also downloads the local Supertonic ONNX voice model, then verifies the installation by running the test, lint, and type-check suites. The script is safe to run again when updating an existing installation.
 
 To install SelectSpeak, launch it, and add it to Windows startup in one command:
 
-.\scripts\install.ps1 -Launch -AddToStartup
+.\scripts\install-dev-dependencies.ps1 -Launch -AddToStartup
 
 Use -SkipNaturalVoice if you only want the SAPI backend and do not want to build the optional direct Natural Voice integration. Use -SkipSupertonicModel to defer downloading the model until Supertonic is first selected. Use -SkipChecks to omit developer checks during installation.
 
@@ -126,11 +126,19 @@ The Natural Voice integration currently targets Speech SDK 1.41.1 for compatibil
 
 ## Development run
 
-Double-click `scripts/run.vbs` to launch without a console window. It uses the
-project-local Python environment created by `scripts/install.ps1`, so `uv` does not
-need to be on the launcher's `PATH`.
+```powershell
+.\scripts\run-dev.ps1
+```
 
-Developers can also run `uv run python -m selectspeak` or `uv run selectspeak`.
+This is the main way to run SelectSpeak from a checkout. It runs the native and
+player builds, which compile only what changed, and then starts the application.
+Use `-NoBuild` to start without building, `-Release` for a Release player, and
+`-Detached` to return once it is running.
+
+Double-click `scripts/run.vbs` for the same thing without a console window; it
+calls `run-dev.ps1 -Detached`.
+
+Developers can also run `uv run selectspeak`, which builds nothing.
 
 To update every source-controlled release-version field before building a new
 release, run:
@@ -160,12 +168,12 @@ speech normalization, giving the chunker meaningful structural boundaries.
 ## Start automatically
 
 Select **Start SelectSpeak when I sign in** while running the Windows installer.
-For a developer checkout, pass `-AddToStartup` to `scripts/install.ps1`. To remove that
+For a developer checkout, pass `-AddToStartup` to `scripts/install-dev-dependencies.ps1`. To remove that
 development shortcut later,
 run:
 
 ```powershell
-.\scripts\install.ps1 -RemoveFromStartup
+.\scripts\install-dev-dependencies.ps1 -RemoveFromStartup
 ```
 
 ## Controls
@@ -338,8 +346,10 @@ build-tools/                Source-controlled build and release tooling
 └── tools/                  Staging, notices, icons, and verification utilities
 
 scripts/                    Developer and user convenience launchers
-├── install.ps1             Complete development setup and upgrade script
-└── run.vbs                 Console-free development launcher
+├── install-dev-dependencies.ps1  Complete development setup and upgrade
+├── run-dev.ps1             Rebuild what changed, then run from the checkout
+├── run.vbs                 Console-free wrapper over run-dev.ps1
+└── bump_version.ps1        Update every source-controlled version field
 
 docs/                       Engineering, release, signing, and installer notices
 .build/                     Ignored generated intermediate files
