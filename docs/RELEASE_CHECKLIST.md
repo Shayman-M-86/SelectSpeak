@@ -1,6 +1,7 @@
 # Release checklist
 
 Replace the example version once, then run the steps in order from the repository root.
+For a guided run through the same process, use `.\scripts\release.ps1`.
 
 ## 1. Prepare and merge the version bump
 
@@ -13,8 +14,8 @@ Replace the example version once, then run the steps in order from the repositor
   ```
 
 - [ ] Commit the generated version changes and merge them to `main` through the normal review process. Confirm the `CI` workflow passes on the merged commit.
-- [ ] Prepare and review the user-visible changes and known limitations for the release. The repository has no changelog file or generated change summary; this text will be entered in the draft GitHub Release after the workflow creates it.
-Prepare and review the user-visible changes and known limitations for the release. The repository has no changelog file or generated change summary; this text will be entered in the draft GitHub Release after the workflow creates it.
+- [ ] Add and review the release's user-visible changes and relevant known limitations in the matching version section of `CHANGELOG.md` before tagging. Leave `Unreleased` ready for future changes.
+
 ## 2. Tag the release
 
 - [ ] Update local `main`, create the matching annotated tag, and push it:
@@ -34,6 +35,6 @@ Prepare and review the user-visible changes and known limitations for the releas
 
 ## 4. Review and publish
 
-- [ ] Add the reviewed release-note text to the draft GitHub Release description. The workflow seeds the description with unsigned-release and installation boilerplate only.
+- [ ] Review the draft GitHub Release notes and make any necessary corrections. The workflow includes the matching `CHANGELOG.md` section automatically alongside the unsigned-release and installation boilerplate.
 - [ ] Download the draft installer and manually verify on a clean supported Windows system that installation succeeds and the release's important user flows work, including text selection, speech playback, the configured hotkeys, OCR, and any changed functionality. Keep the release marked unsigned.
 - [ ] Review the draft title and notes, then publish the draft from GitHub.
