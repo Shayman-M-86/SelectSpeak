@@ -66,6 +66,8 @@ Set-VersionValue "src\python\selectspeak\__init__.py" `
     '(?m)^__version__ = "(?<value>\d+\.\d+\.\d+)"\s*$' $Version
 Set-VersionValue "src\native\CMakeLists.txt" `
     'set\(SELECTSPEAK_VERSION "(?<value>\d+\.\d+\.\d+)" CACHE STRING' $Version
+Set-VersionValue "src\winui\SelectSpeak.UI\SelectSpeak.UI.csproj" `
+    '<Version>(?<value>\d+\.\d+\.\d+)</Version>' $Version
 Set-VersionValue "build-tools\app\SelectSpeak.manifest" `
     'version="(?<value>\d+\.\d+\.\d+\.\d+)"' $numericVersion
 Set-VersionValue "build-tools\app\version_info.txt" `

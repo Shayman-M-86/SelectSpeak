@@ -1,9 +1,43 @@
+<#
+    .SYNOPSIS
+    Build SelectSpeak: the app, the native bridge, the player, and the installer.
+
+    .DESCRIPTION
+    This is the one command an ordinary build needs:
+
+        .\build-tools\build.ps1
+
+    It produces dist\SelectSpeak and dist\SelectSpeak-Setup-<version>.exe.
+
+    The optional Supertonic payloads are large and rarely change, so they are
+    reused when a compatible pair is already present rather than rebuilt every
+    time. A release build regenerates them, because their download URLs are
+    published under the release tag - see -RebuildSupertonicPayload.
+
+    .PARAMETER SkipInstaller
+    Build only the portable dist\SelectSpeak folder.
+
+    .PARAMETER RebuildSupertonicPayload
+    Rebuild the Supertonic dependency and model archives at the current
+    version. Required for a real release; downloads roughly 371 MB.
+
+    .PARAMETER ReleaseReady
+    Fail rather than reusing payloads whose version does not match the
+    application. The Distribution workflow uses this so a release can never
+    ship an installer pointing at archives that will not exist.
+#>
 [CmdletBinding()]
 param(
     [switch]$SkipNativeBuild,
+    [switch]$SkipWinUiBuild,
     [switch]$SkipInstaller,
-    [switch]$SkipSupertonicPayload,
-    [string]$SupertonicModelSource
+    [switch]$RebuildSupertonicPayload,
+    [switch]$ReleaseReady,
+    [string]$SupertonicModelSource,
+    # Retained so existing scripts and habits keep working; reuse is now the
+    # default, so this only suppresses the rebuild that -RebuildSupertonicPayload
+    # asks for.
+    [switch]$SkipSupertonicPayload
 )
 
 $ErrorActionPreference = "Stop"
@@ -15,6 +49,7 @@ $supertonicRoot = Join-Path $PSScriptRoot "supertonic"
 $python = Join-Path $projectRoot ".venv\Scripts\python.exe"
 $distRoot = Join-Path $projectRoot "dist\SelectSpeak"
 $nativeStage = Join-Path $projectRoot ".build\staging\native"
+$winuiStage = Join-Path $projectRoot ".build\staging\winui"
 $licenseStage = Join-Path $projectRoot ".build\staging\licenses"
 $icon = Join-Path $projectRoot ".build\packaging\SelectSpeak.ico"
 $projectMetadata = Get-Content -LiteralPath (Join-Path $projectRoot "pyproject.toml") -Raw
@@ -26,6 +61,72 @@ $version = $versionMatch.Groups["version"].Value
 $layerArchive = Join-Path $projectRoot "dist\SelectSpeak-Supertonic-Dependencies-$version-win-x64.zip"
 $modelArchive = Join-Path $projectRoot "dist\SelectSpeak-Supertonic-Model-$version.zip"
 
+function Find-SupertonicPayload {
+    <#
+        .SYNOPSIS
+        Locate a usable Supertonic archive, preferring the current version.
+
+        .DESCRIPTION
+        These archives are hundreds of megabytes and change far less often than
+        the application version, so an ordinary local build reuses whichever
+        compatible pair is already in dist\ instead of downloading them again.
+        The newest is chosen when several are present.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Preferred,
+        [Parameter(Mandatory)][string]$Pattern
+    )
+
+    if (Test-Path -LiteralPath $Preferred -PathType Leaf) {
+        return $Preferred
+    }
+    $candidate = Get-ChildItem -LiteralPath (Join-Path $projectRoot "dist") -Filter $Pattern `
+        -File -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    if ($candidate) {
+        return $candidate.FullName
+    }
+    return ""
+}
+
+# A payload is rebuilt when asked for, and otherwise only when nothing usable
+# exists. -SkipSupertonicPayload forces reuse even when a rebuild was requested.
+$rebuildPayload = $RebuildSupertonicPayload -and (-not $SkipSupertonicPayload)
+if (-not $rebuildPayload) {
+    $resolvedLayer = Find-SupertonicPayload -Preferred $layerArchive `
+        -Pattern "SelectSpeak-Supertonic-Dependencies-*-win-x64.zip"
+    $resolvedModel = Find-SupertonicPayload -Preferred $modelArchive `
+        -Pattern "SelectSpeak-Supertonic-Model-*.zip"
+    if ($resolvedLayer -and $resolvedModel) {
+        $layerArchive = $resolvedLayer
+        $modelArchive = $resolvedModel
+    } elseif (-not $SkipInstaller -and -not $SkipSupertonicPayload) {
+        # Nothing to reuse, and the installer needs both, so build them.
+        Write-Host "No Supertonic payload found; building it once." -ForegroundColor Yellow
+        $rebuildPayload = $true
+        $layerArchive = Join-Path $projectRoot "dist\SelectSpeak-Supertonic-Dependencies-$version-win-x64.zip"
+        $modelArchive = Join-Path $projectRoot "dist\SelectSpeak-Supertonic-Model-$version.zip"
+    }
+}
+
+# The installer publishes each payload's download URL under this release's tag,
+# so a reused archive from another version would point at a file that is never
+# uploaded. Harmless while testing locally, wrong in a release.
+$payloadVersionMatches =
+    ((Split-Path -Leaf $layerArchive) -eq "SelectSpeak-Supertonic-Dependencies-$version-win-x64.zip") -and
+    ((Split-Path -Leaf $modelArchive) -eq "SelectSpeak-Supertonic-Model-$version.zip")
+if (-not $rebuildPayload -and -not $payloadVersionMatches -and -not $SkipInstaller) {
+    $message = "Reusing Supertonic payloads from another version: " +
+        "$(Split-Path -Leaf $layerArchive), $(Split-Path -Leaf $modelArchive)."
+    if ($ReleaseReady) {
+        throw "$message Run with -RebuildSupertonicPayload to build them for $version."
+    }
+    Write-Host $message -ForegroundColor Yellow
+    Write-Host ("  Fine for local testing. A release needs " +
+        "-RebuildSupertonicPayload so the download links resolve.") -ForegroundColor Yellow
+}
+
 if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
     throw "Run .\scripts\install.ps1 before building a release."
 }
@@ -34,6 +135,12 @@ if (-not $SkipNativeBuild) {
     if ($LASTEXITCODE) { throw "Native release build failed." }
 }
 & (Join-Path $toolsRoot "stage_native.ps1")
+
+if (-not $SkipWinUiBuild) {
+    & (Join-Path $PSScriptRoot "winui\build.ps1")
+    if ($LASTEXITCODE) { throw "SelectSpeak player build failed." }
+}
+& (Join-Path $toolsRoot "stage_winui.ps1")
 
 if (Test-Path -LiteralPath $licenseStage) {
     Remove-Item -LiteralPath $licenseStage -Recurse -Force
@@ -60,12 +167,15 @@ if ($LASTEXITCODE) { throw "PyInstaller failed with exit code $LASTEXITCODE" }
 
 Copy-Item -LiteralPath $nativeStage -Destination (Join-Path $distRoot "native") `
     -Recurse -Force
+Copy-Item -LiteralPath $winuiStage -Destination (Join-Path $distRoot "ui") `
+    -Recurse -Force
 Copy-Item -LiteralPath $licenseStage -Destination (Join-Path $distRoot "licenses") `
     -Recurse -Force
 & (Join-Path $toolsRoot "verify_windows_metadata.ps1") `
     -Files @(
         (Join-Path $distRoot "SelectSpeak.exe"),
-        (Join-Path $distRoot "native\selectspeak_native.dll")
+        (Join-Path $distRoot "native\selectspeak_native.dll"),
+        (Join-Path $distRoot "ui\SelectSpeak.UI.exe")
     ) `
     -ExpectedVersion $version
 if ($LASTEXITCODE) { throw "Windows metadata verification failed." }
@@ -73,7 +183,7 @@ if ($LASTEXITCODE) { throw "Windows metadata verification failed." }
 if ($LASTEXITCODE) { throw "Portable distribution verification failed." }
 Write-Host "Portable SelectSpeak build created at $distRoot" -ForegroundColor Green
 
-if (-not $SkipSupertonicPayload) {
+if ($rebuildPayload) {
     $payloadArguments = @(
         (Join-Path $supertonicRoot "build_payload.py"),
         "--layer-output", $layerArchive,
@@ -133,4 +243,11 @@ if (-not $SkipInstaller) {
         -SupertonicLayerPath $layerArchive `
         -SupertonicModelPath $modelArchive
     if ($LASTEXITCODE) { throw "Installer build failed." }
+}
+
+Write-Host ""
+Write-Host "SelectSpeak $version build complete." -ForegroundColor Green
+Write-Host "  Portable:  $distRoot"
+if (-not $SkipInstaller) {
+    Write-Host "  Installer: $(Join-Path $projectRoot "dist\SelectSpeak-Setup-$version.exe")"
 }

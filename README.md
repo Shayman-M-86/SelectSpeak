@@ -190,6 +190,7 @@ run:
     reading finishes.
   - **Speech diagnostics.** Collects adaptive chunk boundaries, synthesis
     timing, playback runway, queue delay, and underruns.
+- Use the tray icon to show the player or quit.
 
 ## Text processing
 
@@ -219,7 +220,6 @@ highlights the active word within the structured preview. Visual bullet markers
 are removed before each segment is sent to the speech engine. When Windows
 preserves list rows but drops their markers, list-shaped multiline blocks are
 inferred from their heading and sentence structure.
-- Use the tray icon to show the player or quit.
 
 The rebound hotkey, clipboard mode, selected backend/voice, and UI preferences
 are persisted in `%LOCALAPPDATA%\SelectSpeak\settings.json`. Code-level
@@ -264,6 +264,18 @@ To create the Windows application and installer:
 .\build-tools\build.ps1
 ```
 
+That single command builds the native bridge, the WinUI player, the portable
+`dist\SelectSpeak` folder, and `dist\SelectSpeak-Setup-<version>.exe`. For the
+portable folder alone, add `-SkipInstaller`.
+
+The optional Supertonic archives are large and change far less often than the
+application version, so an ordinary build reuses whichever pair is already in
+`dist\`, reporting when their version differs. Pass `-RebuildSupertonicPayload`
+to regenerate them, which a real release needs because their download links are
+published under the release tag; `-ReleaseReady` turns a reused mismatch into an
+error rather than a warning. Add `-SkipNativeBuild` or `-SkipWinUiBuild` to
+reuse those build outputs.
+
 GitHub Actions mirrors these checks on GitHub-hosted Windows runners. `CI` runs
 the lint, test, package, and dependency-security jobs for pull requests and every
 push to `main`. `Distribution` runs only when started manually from the matching
@@ -281,9 +293,7 @@ Setup, its `.sha256` file, and both ZIP archives together under the matching
 `v<version>` tag. Setup contains
 the pinned NuGet client and package manifest, then obtains the pinned Microsoft
 Speech SDK DLLs during installation. It downloads the hash-pinned Supertonic
-ZIPs only when that component is selected. During an iteration where the native
-bridge and optional payloads already exist, use `-SkipNativeBuild` and
-`-SkipSupertonicPayload`.
+ZIPs only when that component is selected.
 
 Inno Setup is a release-build dependency. Install it with:
 

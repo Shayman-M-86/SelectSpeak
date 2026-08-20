@@ -28,6 +28,9 @@ def test_release_version_metadata_matches_project_version() -> None:
     cmake = _read("src/native/CMakeLists.txt")
     assert f'SET(SELECTSPEAK_VERSION "{version}"' in cmake.upper()
 
+    player = _read("src/winui/SelectSpeak.UI/SelectSpeak.UI.csproj")
+    assert f"<Version>{version}</Version>" in player
+
     installer = _read("build-tools/installer/SelectSpeak.iss")
     assert f'#define AppVersion "{version}"' in installer
     assert f'#define AppNumericVersion "{numeric_version}"' in installer

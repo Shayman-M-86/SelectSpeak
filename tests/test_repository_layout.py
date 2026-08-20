@@ -13,16 +13,18 @@ BUILD_GROUPS = {
     },
     "installer": {"SelectSpeak.iss", "build_installer.ps1", "smoke_test.ps1"},
     "native": {"build.ps1", "build_helpers.ps1"},
-    "runtime": {"install_speech_runtime.ps1"},
+    "runtime": {"install_speech_runtime.ps1", "install_player_runtime.ps1"},
     "security": {"README.md", "audit_dependencies.ps1"},
     "supertonic": {"build_payload.py", "install_payload.ps1"},
     "tools": {
         "collect_licenses.py",
         "create_icon.py",
         "stage_native.ps1",
+        "stage_winui.ps1",
         "verify_dist.py",
         "verify_windows_metadata.ps1",
     },
+    "winui": {"build.ps1"},
 }
 
 
@@ -40,6 +42,13 @@ def test_build_files_are_grouped_by_responsibility() -> None:
         assert actual == names
 
 
+def test_every_language_builds_into_the_one_output_directory() -> None:
+    """C# output joins the rest under .build/ rather than nesting its own."""
+    properties = _read_text("src/winui/SelectSpeak.UI/Directory.Build.props")
+    assert r".build\winui" in properties
+    assert not (PROJECT_ROOT / "src" / "winui" / "SelectSpeak.UI" / ".build").exists()
+
+
 def test_generated_output_is_separate_from_build_tooling() -> None:
     ignored_paths = {
         line.strip() for line in (PROJECT_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
@@ -49,6 +58,10 @@ def test_generated_output_is_separate_from_build_tooling() -> None:
     assert "build-tools/" not in ignored_paths
     assert not (PROJECT_ROOT / "build").exists()
     assert not (PROJECT_ROOT / "packaging").exists()
+
+
+def _read_text(relative_path: str) -> str:
+    return (PROJECT_ROOT / relative_path).read_text(encoding="utf-8")
 
 
 def test_root_entry_points_moved_to_scripts() -> None:

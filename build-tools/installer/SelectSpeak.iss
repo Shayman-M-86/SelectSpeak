@@ -22,6 +22,9 @@
 #ifndef RuntimeInstaller
   #error RuntimeInstaller must point to install_speech_runtime.ps1
 #endif
+#ifndef PlayerRuntimeInstaller
+  #error PlayerRuntimeInstaller must point to install_player_runtime.ps1
+#endif
 #ifndef RuntimePackages
   #error RuntimePackages must point to the Natural Voice packages.config
 #endif
@@ -135,6 +138,7 @@ Type: filesandordirs; Name: "{app}\licenses"
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#NuGetExe}"; Flags: dontcopy
 Source: "{#RuntimeInstaller}"; Flags: dontcopy
+Source: "{#PlayerRuntimeInstaller}"; Flags: dontcopy
 Source: "{#RuntimePackages}"; Flags: dontcopy
 Source: "{#SupertonicInstaller}"; DestName: "install_supertonic_payload.ps1"; Flags: dontcopy; Components: supertonic
 #ifdef EmbedSupertonicPayload
@@ -283,6 +287,7 @@ begin
   begin
     ExtractTemporaryFile('nuget.exe');
     ExtractTemporaryFile('install_speech_runtime.ps1');
+    ExtractTemporaryFile('install_player_runtime.ps1');
     ExtractTemporaryFile('packages.config');
     if WizardIsComponentSelected('supertonic') then
     begin
@@ -298,8 +303,25 @@ begin
 
   if CurStep = ssPostInstall then
   begin
-    WizardForm.StatusLabel.Caption := 'Installing Microsoft Speech runtime...';
     PowerShell := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
+
+    { The player is framework-dependent, so the Microsoft runtimes it needs are
+      installed here rather than bundled. The script leaves any compatible
+      version already on the machine alone, and re-checks after installing. }
+    WizardForm.StatusLabel.Caption := 'Checking Microsoft player runtimes...';
+    Parameters := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
+      ExpandConstant('{tmp}\install_player_runtime.ps1') + '"';
+    if not Exec(PowerShell, Parameters, '', SW_HIDE,
+      ewWaitUntilTerminated, ResultCode) then
+      RaiseException('Could not start the player runtime installer.');
+    if ResultCode <> 0 then
+      RaiseException(Format(
+        'The Microsoft runtimes SelectSpeak''s player needs could not be installed ' +
+        '(exit code %d). Check your internet connection and run setup again, or ' +
+        'install the .NET 8 Desktop Runtime and Windows App Runtime 1.8 from ' +
+        'Microsoft and retry.', [ResultCode]));
+
+    WizardForm.StatusLabel.Caption := 'Installing Microsoft Speech runtime...';
     Parameters := '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
       ExpandConstant('{tmp}\install_speech_runtime.ps1') + '" -NuGetPath "' +
       ExpandConstant('{tmp}\nuget.exe') + '" -PackagesConfig "' +

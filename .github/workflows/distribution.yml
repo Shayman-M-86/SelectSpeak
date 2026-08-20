@@ -69,7 +69,11 @@ jobs:
           uv run python -c "import os; from supertonic.config import get_model_revision; from supertonic.loader import download_model; expected='724fb5abbf5502583fb520898d45929e62f02c0b'; actual=get_model_revision('supertonic-3'); assert actual == expected, f'Unexpected model revision: {actual}'; download_model(os.environ['MODEL_PATH'], 'supertonic-3')"
 
       - name: Build portable app, optional payloads, and installer
-        run: .\build-tools\build.ps1 -SupertonicModelSource .\.build\supertonic-model-source
+        run: >-
+          .\build-tools\build.ps1
+          -RebuildSupertonicPayload
+          -ReleaseReady
+          -SupertonicModelSource .\.build\supertonic-model-source
 
       - name: Smoke-test installer lifecycle
         run: .\build-tools\installer\smoke_test.ps1

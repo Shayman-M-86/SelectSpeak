@@ -3,7 +3,6 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .python-version
-/src/winui/SelectSpeak.UI/.build/
 
 # Environments and local configuration
 .env

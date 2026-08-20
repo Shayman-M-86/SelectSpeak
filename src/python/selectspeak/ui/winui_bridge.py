@@ -16,7 +16,6 @@ import logging
 import os
 import pathlib
 import subprocess
-import sys
 import threading
 from collections.abc import Callable
 from queue import Empty, SimpleQueue
@@ -26,6 +25,7 @@ import win32event
 import win32file
 import win32pipe
 
+from ..config.paths import app_dir, is_frozen
 from ..speech.voices import VoiceOption
 from .hints import shortcut_label, voice_error_summary
 
@@ -61,7 +61,12 @@ _READ_POLL_MS = 250
 _CALLBACK_POLL_SECONDS = 0.02
 
 _UI_EXE_NAME = "SelectSpeak.UI.exe"
-_UI_BUILD_SUBPATH = pathlib.Path(".build/bin/Debug/net8.0-windows10.0.19041.0/win-x64")
+_UI_DIRECTORY = "ui"
+
+# Where `dotnet build` leaves the player in a source tree. Release first, so a
+# developer who has built both gets the one a release would ship.
+_UI_TARGET_SUBPATH = pathlib.Path("net8.0-windows10.0.19041.0/win-x64")
+_UI_BUILD_CONFIGURATIONS = ("Release", "Debug")
 
 # How long to wait for the UI to exit on shutdown before giving up on it.
 _UI_EXIT_TIMEOUT_SECONDS = 5.0
@@ -70,21 +75,26 @@ _UI_EXIT_TIMEOUT_SECONDS = 5.0
 def winui_executable() -> pathlib.Path | None:
     """Locate the WinUI player, or ``None`` when it has not been built.
 
-    Frozen builds ship it beside the executable; from a source tree it comes
-    from the .NET build output.
+    Frozen builds ship it in ``ui/`` beside the executable; from a source tree
+    it comes from the .NET build output under ``.build/winui``. Both roots come
+    from ``app_dir()``, so this agrees with where the native bridge is found.
     """
     override = os.environ.get("SELECTSPEAK_WINUI_EXE")
     if override:
         candidate = pathlib.Path(override)
         return candidate if candidate.is_file() else None
 
-    if getattr(sys, "frozen", False):
-        candidate = pathlib.Path(sys.executable).parent / _UI_EXE_NAME
+    root = app_dir()
+    if is_frozen():
+        candidate = root / _UI_DIRECTORY / _UI_EXE_NAME
         return candidate if candidate.is_file() else None
 
-    root = pathlib.Path(__file__).resolve().parents[3]
-    candidate = root / "winui" / "SelectSpeak.UI" / _UI_BUILD_SUBPATH / _UI_EXE_NAME
-    return candidate if candidate.is_file() else None
+    build_root = root / ".build" / "winui" / "bin"
+    for configuration in _UI_BUILD_CONFIGURATIONS:
+        candidate = build_root / configuration / _UI_TARGET_SUBPATH / _UI_EXE_NAME
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 class WinUiPlayer:

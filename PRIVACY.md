@@ -34,6 +34,13 @@ the user or installer:
 - Setup downloads pinned Microsoft Speech SDK runtime packages from
   `api.nuget.org`. It copies three required runtime DLLs into SelectSpeak's own
   application directory and does not install a system-wide SDK.
+- Setup checks whether the .NET 8 Desktop Runtime and the Windows App Runtime
+  1.8, which SelectSpeak's player requires, are already installed. Any
+  compatible version found is left unchanged. If one is missing, Setup
+  downloads it from Microsoft (`aka.ms`, redirecting to Microsoft's download
+  servers) and installs it silently. Unlike the Speech SDK runtime, these are
+  system-wide Microsoft redistributables and are not removed when SelectSpeak
+  is uninstalled.
 - When Supertonic is selected, SelectSpeak may download the matching Setup
   executable and checksum from the project's GitHub Releases page. Setup may
   then download hash-verified Supertonic dependency and model archives from the

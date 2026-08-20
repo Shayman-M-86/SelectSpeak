@@ -11,6 +11,22 @@
     <WindowsPackageType>None</WindowsPackageType>
   </PropertyGroup>
 
+  <!--
+    Windows file metadata, verified at release time by
+    build-tools/tools/verify_windows_metadata.ps1 alongside SelectSpeak.exe and
+    the native bridge. scripts/bump_version.ps1 owns Version; the rest are fixed.
+  -->
+  <PropertyGroup>
+    <Version>0.1.2</Version>
+    <!-- The SDK otherwise appends "+<commit sha>" to ProductVersion, which the
+         release metadata check compares literally against the project version. -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <Company>SelectSpeak Project</Company>
+    <Product>SelectSpeak</Product>
+    <AssemblyTitle>SelectSpeak player</AssemblyTitle>
+    <Description>SelectSpeak text-to-speech player</Description>
+  </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.250916003" />
   </ItemGroup>
