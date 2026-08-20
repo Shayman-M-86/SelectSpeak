@@ -1,17 +1,25 @@
+These final reviewer comments are good refinements rather than another architectural change. I’ve folded them in below, fixed the phase/package lettering, removed duplicated work, and made the ABI/session rules explicit enough that an implementation agent should not need to redesign them mid-project.
+
 # SelectSpeak Unified Architecture and Implementation Plan
+
+> Agents execute this roadmap using
+> [`architecture-roadmap/EXECUTION.md`](architecture-roadmap/EXECUTION.md) and
+> record progress in
+> [`architecture-roadmap/STATUS.md`](architecture-roadmap/STATUS.md). This
+> document remains the source of truth for architectural intent and Package C
+> contracts.
 
 ## Goal
 
-Implement the recommendations from both the audio-pipeline audit and the Python simplification audit as one coordinated project.
-
-The implementation must avoid:
+Implement the audio-pipeline and Python simplification recommendations as one coordinated roadmap without:
 
 * rewriting the same subsystem multiple times
-* optimizing code that is about to be deleted
-* introducing temporary abstractions that are later removed
-* changing application behaviour during architectural cleanup
-* bundling unrelated behavioural changes into optimization work
-* moving code into C++ simply because C++ is faster
+* optimizing code that will shortly be deleted
+* introducing temporary abstractions that later become permanent
+* changing user-visible behaviour during architectural cleanup
+* mixing unrelated cleanup into the audio migration
+* creating competing request/session identities
+* moving logic into C++ merely because native code is theoretically faster
 
 The target architecture is:
 
@@ -21,7 +29,7 @@ Python
   speech policy
   text preparation
   backend selection
-  generation/session state
+  request/session state
   Supertonic inference
            │
            ▼
@@ -35,108 +43,125 @@ C++ native DLL
   pause/resume/stop
            │
            ▼
+Python application
+  request validation
+  asynchronous UI delivery
+           │
+           ▼
 WinUI
   rendering
   player UI
-  highlighted text
+  highlighting
   settings UI
 ```
 
-## The audio audit strongly supports this division: move PCM playback into native code, but keep normalization, chunking, backend policy, Supertonic inference and application playback semantics in Python.
+---
 
 # Locked architectural decisions
 
-These decisions should be treated as constraints for every later phase.
-
-## 1. Python remains the application coordinator
+## 1. Python owns meaning and policy
 
 Keep these Python-owned:
 
 * text normalization
-* adaptive text chunking
+* adaptive chunking
 * punctuation and structural-pause policy
 * backend selection/fallback
-* `PlaybackSession`
+* application `PlaybackSession`
 * repeat-hotkey-to-stop behaviour
-* generation/stale-result logic
-* Supertonic model inference
+* request/session identity
+* stale-request rejection
+* Supertonic inference
 * Supertonic boundary estimation
 * voice/settings persistence
 * application UI-state decisions
 
 Do not migrate these into C++.
 
-## 2. Native code becomes the owner of PCM playback
+---
 
-The final native audio subsystem should own:
+## 2. Native owns PCM playback
 
-* PCM device resources
-* audio buffers
+The final native audio subsystem owns:
+
+* audio-device resources
+* PCM buffers
 * prebuffering
-* bounded buffering/backpressure
+* bounded queueing
 * played-frame position
 * word-boundary scheduling
-* pause
-* resume
+* pause/resume
 * stop/reset
-* completion
+* playback completion
 * underrun detection
 * deterministic audio shutdown
 
-This replaces the implementation currently inside Python `WaveOutPlayer`.
+The current Python `WaveOutPlayer` is transitional and will eventually be deleted.
 
-## 3. Natural Voice PCM must eventually stay native
+---
+
+## 3. Natural Voice PCM stays native
 
 Final Natural Voice flow:
 
 ```text
-Python text chunk
-      │
-      ▼
+Python
+  text chunk
+  request_id
+  complete-text base offset
+       │
+       ▼
 C++ Natural Voice synthesis
-      │
-      ├── PCM ───────────────► native PCM playback
-      │
-      └── word boundaries ───► native boundary scheduler
+       │
+       ├── PCM ───────────────► native PCM playback
+       │
+       └── boundaries ────────► native boundary scheduler
                                       │
                                       ▼
-                              Python played-word event
+                               played-word event
+                                      │
+                                      ▼
+                                   Python
 ```
 
-Do not continue sending Natural Voice PCM into Python once native playback exists.
+Python must not receive Natural Voice PCM once native playback exists.
 
-## 4. Supertonic remains Python-owned but uses native playback
+---
+
+## 4. Supertonic remains Python-owned
 
 Final Supertonic flow:
 
 ```text
 Python Supertonic inference
-        │
-        ▼
+          │
+          ▼
 PCM segment + boundaries
-        │
-        ▼
-one native enqueue operation
-        │
-        ▼
+          │
+          ▼
+native PCM session enqueue
+          │
+          ▼
 native playback
 ```
 
 Do not migrate Supertonic inference into C++.
 
-## 5. `PlaybackController` stays, but is simplified
+---
 
-Do not delete it.
+## 5. `PlaybackController` remains
 
-It owns useful backend-generation/cancellation semantics shared by all three backends.
+Keep it.
 
-It may be simplified internally, but its responsibility remains separate from the application-level `PlaybackSession`.
+It owns useful backend request, cancellation and pause/resume semantics shared by the speech backends.
+
+It may be simplified internally but remains separate from application-level `PlaybackSession`.
+
+---
 
 ## 6. `VoiceController` becomes the sole speaker owner
 
-`SelectSpeakApp` should not independently own a speaker while `VoiceController` also manages speakers.
-
-`VoiceController` should ultimately own:
+`VoiceController` owns:
 
 * current speaker
 * cached speakers
@@ -144,1038 +169,1431 @@ It may be simplified internally, but its responsibility remains separate from th
 * backend identity
 * speaker shutdown
 
-## 7. There is one normal application lifecycle owner
+`SelectSpeakApp` must not maintain a second independent current-speaker owner.
 
-`SelectSpeakApp.close()` becomes the normal authoritative cleanup path.
-
-It must be:
-
-* idempotent
-* safe after partial startup
-* responsible for closing all resources it successfully acquired
-
-Startup should use `try/finally` around the application lifecycle.
-
-`atexit` can remain only as last-resort protection.
-
-## 8. Native ABI configuration happens in one place
-
-`NativeBridge` should configure the DLL ABI once.
-
-Input, OCR, Natural Voice and the future audio wrapper should not independently mutate `ctypes` function declarations on the shared DLL.
-
-## 9. WinUI is the only real renderer
-
-Remove the obsolete Tk-era renderer interface instead of preserving dead compatibility.
-
-The Python→WinUI contract should represent only operations actually supported by WinUI.
-
-## 10. Speech-debug plumbing is removed unless it is deliberately made a real WinUI feature
-
-The current production WinUI implementation ignores these diagnostics.
-
-For this implementation plan, assume it is removed.
-
-Do not migrate debug-marker scheduling into the new native audio player just because the old `WaveOutPlayer` contained it.
-
-Normal logging and underrun diagnostics remain.
-
-The current speech-debug feature is effectively dead code.
+Completion callbacks must identify immutable requests rather than relying on mutable "current speaker" state.
 
 ---
 
-# Phase 0 — Establish the safety baseline
+# Request identity
 
-Do this before structural changes.
+## 7. The application allocates every `request_id`
 
-## Objectives
-
-Create a known-good behavioural baseline so every later phase can be compared against it.
-
-## Preserve these behaviours explicitly
-
-* Natural Voice speech
-* Supertonic speech
-* SAPI speech
-* first-audio startup behaviour
-* text highlighting
-* highlighting occurs at playback time, not synthesis time
-* pause
-* resume
-* stop
-* repeat-selection hotkey stops existing speech
-* replacing speech cancels the previous generation correctly
-* stale completion cannot alter current playback
-* backend switching
-* backend fallback
-* voice switching
-* normal application shutdown
-* startup failure cleanup
-* WinUI reconnection
-* OCR and text capture remain unaffected
-
-## Validation cleanup
-
-Resolve the existing type-checking failures before large structural work so new diagnostics are distinguishable from existing ones.
-
-The Python audit reported passing tests/Ruff but existing `ty` problems.
-
-## Rule
-
-No architecture changes in this phase.
-
----
-
-# Phase 1 — Remove dead interfaces and transitional architecture
-
-Do cleanup that will otherwise contaminate the new interfaces.
-
-This phase deliberately happens **before** audio API design.
-
-## 1A. Remove dead speech-debug plumbing
-
-Remove the unused production path for:
-
-* speech-debug setting
-* debug-panel production integration
-* no-op WinUI debug calls
-* `WaveOutPlayer` debug markers
-* application forwarding of those markers
-* dead renderer methods related only to that feature
-
-Retain ordinary logs and underrun logging.
-
-### Why now
-
-The native audio API should not be designed around a feature that is being deleted.
-
----
-
-## 1B. Shrink the WinUI renderer contract
-
-Remove unsupported Tk-era surface such as:
-
-* obsolete constructor callbacks
-* unsupported resize/chrome/resizable operations
-* dead capture-complete calls
-* dead backend-loading/ready calls
-* dead wait methods
-* stale Tk comments
-* unnecessary runtime-checkable machinery
-
-Keep structural interfaces useful for tests where appropriate.
-
-### Why now
-
-Later played-word and playback-state callbacks need to target the **actual final UI interface**, not an obsolete abstraction.
-
----
-
-## 1C. Remove duplicated application configuration state
-
-Make `_config` authoritative rather than separately maintaining values such as:
-
-* clipboard mode
-* auto-hide
-* speech-debug state
-
-Remove unused `_speech_backend` state if backend identity moves to `VoiceController`.
-
-A single helper can update/replace/persist configuration.
-
----
-
-# Phase 2 — Establish final lifecycle and ownership
-
-Do this before changing backend threads or audio ownership.
-
-## 2A. Give `SelectSpeakApp` authoritative lifecycle ownership
-
-Introduce one idempotent `close()` path that safely handles:
-
-* partially initialized UI
-* hotkeys/input
-* OCR
-* voice controller
-* speakers
-* native bridge
-* tray
-* other owned resources
-
-Normal startup/run becomes conceptually:
+Use an unsigned 64-bit integer:
 
 ```text
-construct
-start
-run
-finally
-    close
+uint64 request_id
 ```
 
-Do not rely on three independent shutdown owners.
+Rules:
+
+* allocated by the Python application
+* monotonically increasing
+* never reused during one process lifetime
+* process restart may reset the sequence
+* the same ID flows through:
+
+  * `PlaybackSession`
+  * `PlaybackController`
+  * speaker backend
+  * native synthesis
+  * native audio session
+  * callbacks
+  * application completion handling
+
+Native code must not create a second competing generation identity.
+
+Existing internal generation numbers may remain temporarily for implementation purposes, but they are not externally authoritative request identity.
 
 ---
 
-## 2B. Add an explicit `close()` lifecycle to speech backends
+# Completion semantics
 
-Extend the speaker contract so every backend has deterministic shutdown.
+## 8. Completion means playback completion
 
-Each backend must be able to:
+### Natural Voice
 
-1. reject new work
+Completed only when:
+
+* synthesis input is finished
+* all queued PCM has actually played
+
+### Supertonic
+
+Completed only when all submitted PCM has played.
+
+### SAPI
+
+Completion means actual end-of-stream.
+
+Initially the existing SAPI worker may continue determining this using its current mechanism.
+
+Direct SAPI `EndStream` events are introduced later in the separate SAPI project.
+
+### Cancellation
+
+Cancellation completes only after synthesis/playback cancellation has settled sufficiently that no further events can occur for that request.
+
+---
+
+## 9. Terminal-status truth table
+
+Use these meanings consistently:
+
+| Situation                           | Terminal status |
+| ----------------------------------- | --------------- |
+| Audio fully played                  | `completed`     |
+| Explicit user stop                  | `cancelled`     |
+| New request replaces active request | `superseded`    |
+| Backend/runtime/device error        | `failed`        |
+| Application/backend/session closing | `closed`        |
+
+Each accepted request receives **exactly one** terminal status.
+
+---
+
+## 10. Callback ordering
+
+For each request:
+
+```text
+started
+→ zero or more played_word / underrun events
+→ exactly one terminal event
+```
+
+Rules:
+
+* `started` occurs at most once
+* no played-word callback occurs before `started`
+* callbacks for one request are serialized in order
+* terminal is always the final callback
+* no callback occurs after terminal
+* no callback occurs after session destruction returns
+
+---
+
+# Lifecycle
+
+## 11. One authoritative application shutdown path
+
+One idempotent shutdown implementation owns normal cleanup.
+
+Whether its public name remains `shutdown()` or becomes `close()` is secondary.
+
+It must:
+
+* reject new work once closing begins
+* work after partial startup
+* continue cleanup if one resource fails
+* log cleanup failures
+* not abandon later resources because an earlier close operation failed
+
+`atexit` may remain only as last-resort protection.
+
+---
+
+## 12. Shutdown order
+
+Required invariant:
+
+**NativeBridge must outlive every object capable of calling into it.**
+
+Recommended order:
+
+```text
+mark application closing
+→ reject/stop new input activation
+→ cancel active PlaybackSession
+→ close VoiceController
+    → stop every speaker
+    → join every speech worker
+    → destroy native audio/speech sessions
+→ stop OCR/input native capabilities
+→ close tray / WinUI bridge/process
+→ shut down shared NativeBridge last
+```
+
+Minor ordering between UI/tray and input may differ if implementation requires it, but:
+
+* no speech worker may survive native DLL shutdown
+* no callback may access unloaded native code
+* no new speech request may start once closing begins
+
+---
+
+## 13. Backend close contract
+
+Every backend must be able to:
+
+1. reject new requests
 2. cancel active work
-3. wake a blocked worker
-4. terminate the worker
-5. join the worker
+3. wake blocked workers
+4. terminate worker loops
+5. join workers
 6. release backend-specific resources
 
-Natural Voice:
-
-* native synthesis/audio resources
-
-Supertonic:
-
-* worker/model-owned resources as appropriate
-
-SAPI:
-
-* COM worker/resources
-
-The audits specifically found that the current daemon workers remain blocked rather than being explicitly shut down.
+Daemon-thread abandonment is not the normal shutdown mechanism.
 
 ---
 
-## 2C. Give `VoiceController` sole speaker ownership
+# Native ABI rules
 
-Move current/cached speaker ownership into `VoiceController`.
+## 14. Centralize native ABI configuration
 
-Eliminate:
-
-* initial create-then-adopt ceremony
-* duplicated current-speaker ownership
-* backend identity based on class-name inspection
-* unnecessary activation callback parameters
-* application-level speaker shutdown loops
-
-`VoiceController.close()` should close all owned speakers.
-
-### Important
-
-Complete this ownership change **before** native playback sessions are attached to speakers.
-
-That avoids rewriting audio cleanup twice.
-
----
-
-# Phase 3 — Stabilize the final backend completion contract
-
-Do this before replacing audio playback.
-
-## Goal
-
-Remove the need for one `SpeechWait-<generation>` thread per utterance and establish the completion mechanism the native audio player will eventually use.
-
-## Final completion model
-
-Backends report completion using something equivalent to:
-
-```text
-backend
-generation
-status
-```
-
-The application remains responsible for deciding whether the completion still belongs to the active `PlaybackSession`.
-
-Generation/stale-result protection stays intact.
-
-## Requirements
-
-Completion must distinguish at least:
-
-* normal completion
-* cancellation
-* failure
-
-Do not allow stale generations to mutate current UI/application state.
-
-## Why before native audio
-
-The native player will naturally produce completion events.
-
-If the application is still built around temporary waiting threads when native audio arrives, the integration would immediately need another rewrite.
-
----
-
-# Phase 4 — Simplify `PlaybackController` around the final semantics
-
-Now simplify backend request management.
-
-The current implementation combines:
-
-* condition
-* queue
-* two events
-* generation counters
-* active state
-* completed state
-* pause state
-
-while deliberately throwing away older queued requests.
-
-## Target internal model
-
-Use one synchronization authority containing approximately:
-
-```text
-Condition
-
-latest pending request or None
-current generation
-active generation
-completed generation
-pending command
-paused state
-failed state
-closed state
-```
-
-Replace the queue-drain mechanism with a latest-request slot.
-
-Replace separate pause/resume `Event`s with one pending command/state mechanism if behaviour can be preserved exactly.
-
-## Critical requirement
-
-Do not change:
-
-* latest-request-wins semantics
-* cancellation generation behaviour
-* pause/resume ordering
-* stale generation rejection
-
-## Why here
-
-By this point lifecycle and completion semantics are settled, so the controller can be simplified once against the final model.
-
----
-
-# Phase 5 — Centralize the native ABI
-
-Do this immediately before adding the audio API.
-
-## NativeBridge becomes responsible for
+`NativeBridge` owns:
 
 * DLL loading
-* API version verification
+* API-version verification
 * all `argtypes`
-* all `restype` declarations
-* shared error-buffer helpers
-* shutdown access
+* all `restype`
+* common status/error definitions
 * capability creation
+* final DLL shutdown
 
-Individual wrappers remain responsible for:
+Capability wrappers own:
 
-* callbacks
-* Python object lifetime
-* subsystem-specific state
+* Python callbacks
+* callback lifetimes
+* subsystem state
 
-but not DLL-global function declaration.
-
-## Also decide/process one-DLL ownership
-
-If production supports only one SelectSpeak native library in a process, make that explicit rather than pretending multiple unrelated DLL paths are supported.
-
-### Why here
-
-The new PCM API should be added directly to the centralized ABI rather than reproducing the current fragmented pattern.
+They do not repeatedly mutate shared ctypes function definitions.
 
 ---
 
-# Phase 6 — Define the final PCM playback contract
+## 15. Native API versioning
 
-This is the architectural seam that prevents the audio migration from forcing another backend rewrite.
+When the audio ABI is introduced:
 
-## Create one stable playback-session interface
+* increment `SELECTSPEAK_NATIVE_API_VERSION`
+* update Python `NATIVE_API_VERSION`
+* update ABI/version tests
+* ensure the matching DLL is staged before Python integration tests run
 
-Natural Voice and Supertonic should interact with the concept of a PCM playback session rather than directly with Python `WaveOutPlayer` implementation details.
-
-The final contract should support:
-
-* begin session/generation
-* enqueue PCM
-* enqueue PCM together with word boundaries
-* enqueue silence by frame count
-* finish input
-* wait for buffer capacity
-* query buffered duration/frames if genuinely needed
-* pause
-* resume
-* stop
-* close/shutdown
-
-Callbacks/events:
-
-* playback started
-* played word
-* playback completed
-* playback error
-* underrun diagnostic
-
-## Critical design rule
-
-Design this interface for the **final native implementation**, not around limitations of the old Python `WaveOutPlayer`.
-
-The Python implementation is temporary.
+Do **not** increment the public native ABI version for internal C++ implementation changes that do not alter the interface.
 
 ---
 
-# Phase 7 — Introduce bounded audio backpressure
+# Native error model
 
-Now address the Natural Voice runaway buffering.
+## 16. Do not use one global `last_error` for audio sessions
 
-Telemetry found:
+Synchronous native calls return stable status/error codes.
 
-* roughly 40 seconds average runway
-* over 206 seconds maximum
-* no observed underruns
+Examples:
 
-## Desired behaviour
+```text
+ok
+invalid_handle
+invalid_request
+invalid_argument
+invalid_boundary
+wrong_state
+device_error
+closed
+```
 
-Natural Voice should stop synthesizing additional chunks once playback has a healthy amount of queued audio.
+Asynchronous session failures are delivered through the request's terminal `failed` event.
 
-Initial policy can be around:
+Diagnostic text may be:
 
-**8–12 seconds maximum buffered runway**
+* attached/copied as part of the terminal event, or
+* retrieved from the specific session while it remains valid
 
-but keep it configurable/internal so it can be tuned from measurement.
+Destroyed handles return `invalid_handle`.
 
-## Waiting must be event/condition driven
+Do not expose stale process-global audio errors belonging to another session.
 
-Do not add another polling loop.
+---
+
+# Audio-session ownership
+
+## 17. Use opaque native session handles
 
 Conceptually:
 
 ```text
-if buffered audio is above limit:
-    wait until:
-        playback consumes enough audio
-        OR request is cancelled
-        OR session stops
+ss_audio_session_create(...)
+ss_audio_session_begin(handle, request_id, ...)
+ss_audio_session_enqueue(...)
+ss_audio_session_enqueue_silence(...)
+ss_audio_session_finish_input(...)
+ss_audio_session_wait_for_capacity(...)
+ss_audio_session_buffered_frames(...)
+ss_audio_session_pause(...)
+ss_audio_session_resume(...)
+ss_audio_session_stop(...)
+ss_audio_session_destroy(...)
 ```
 
-## Supertonic
+The application may still enforce one active audible request, but explicit handles simplify:
 
-Replace its current 20 ms buffer-capacity polling with the same capacity-wait concept.
-
-## Important anti-rewrite rule
-
-Implement backpressure through the stable playback interface from Phase 6.
-
-Do not embed new backpressure behaviour directly into Python WaveOut internals.
-
-That way the exact same backend logic survives the native migration.
+* ownership
+* testing
+* callback contexts
+* cached speakers
+* Natural/Supertonic format differences
 
 ---
 
-# Phase 8 — Implement the native event-driven PCM player
+## 18. Handle lifecycle and idempotency
 
-This is the main audio architecture change.
+Rules:
 
-## Preserve behaviour first
+* `stop` is idempotent
+* `destroy` either:
 
-Initially preserve:
+  * is idempotent, or
+  * returns a clear `invalid_handle` after destruction
+* no new operation may begin once destruction starts
+* destroy wakes capacity waiters
+* callback contexts remain valid until destroy returns
+* Python retains native callback objects until destroy returns
+* after destroy returns, no callbacks may occur
 
-* current PCM format
-* current 100 ms effective block behaviour where useful
-* current 200 ms startup prebuffer behaviour
-* existing volume semantics
-* existing word-highlight timing
-* pause/resume behaviour
+---
 
-Do not combine this migration with an audio-quality or latency retuning exercise.
+# PCM contract
 
-## Native implementation owns
+## 19. Frames are the canonical audio-position unit
 
-* WaveOut device
-* reusable native PCM buffers
-* prepared headers
-* buffer queue
-* device completion signalling
+Use integer frames throughout the final PCM API.
+
+Do not mix:
+
+* bytes
+* milliseconds
+* Speech SDK ticks
+* frame counts
+
+inside the core playback contract.
+
+Convert only at platform boundaries.
+
+PCM format includes at least:
+
+```text
+sample_rate
+channels
+sample_format / bits_per_sample
+```
+
+Natural and Supertonic may use different sample rates.
+
+---
+
+## 20. Enqueue ownership
+
+When native enqueue returns successfully:
+
+**native has copied everything it needs.**
+
+This includes:
+
+* PCM bytes/samples
+* boundary array
+* associated request metadata
+
+Python/NumPy does not need to retain the input buffer after return.
+
+---
+
+## 21. Boundary representation
+
+Each supplied boundary contains conceptually:
+
+```text
+frame_offset
+text_position
+text_length
+```
+
+`frame_offset`:
+
+* relative to the submitted PCM segment
+
+Text positions:
+
+* relative to the complete spoken request
+
+For Natural Voice adaptive chunks, Python supplies the complete-text base offset to native synthesis.
+
+Native converts chunk-relative SDK positions into complete-request text positions.
+
+---
+
+## 22. Boundary validation
+
+Before accepting an enqueue:
+
+* `frame_offset` values must be monotonic
+* `frame_offset` must not exceed submitted segment frame count
+* text positions/lengths must fit the complete request text
+* duplicate frame offsets preserve input order
+
+Invalid boundaries must either:
+
+* reject the enqueue explicitly
+
+or, if a specifically documented policy is chosen:
+
+* return/report that they were dropped
+
+Never silently corrupt timing data.
+
+Prefer rejecting invalid input during development because it exposes upstream bugs.
+
+---
+
+# Buffered runway
+
+## 23. `PcmPlaybackSession` exposes buffered frames
+
+Python adaptive chunking still needs current playback runway.
+
+Provide:
+
+```text
+buffered_frames(request_id) -> int
+```
+
+or equivalent session-specific method.
+
+`wait_for_capacity()` may additionally return remaining buffered frames, but an explicit query is useful for adaptive chunk calculations and telemetry.
+
+---
+
+## 24. Buffer thresholds are sample-rate relative
+
+Backpressure values are expressed conceptually in seconds but stored/compared in frames.
+
+For example:
+
+```text
+high_water_frames = sample_rate × 10
+low_water_frames  = sample_rate × 6
+```
+
+Do not assume Natural and Supertonic share a sample rate.
+
+---
+
+# Backpressure policy
+
+## 25. Backpressure stays outside low-level device mechanics
+
+Use high-water/low-water hysteresis.
+
+Initial example:
+
+```text
+high water = 10 seconds
+low water  = 6 seconds
+```
+
+These are tuning values, not permanent architecture.
+
+Rules:
+
+* first chunk may bypass normal capacity wait
+* structural silence counts toward buffered duration
+* when high water is reached, generation waits
+* generation resumes only after low water is reached
+* pause must not allow synthesis to fill indefinitely
+* cancellation wakes waiters immediately
+* stop wakes waiters immediately
+* close wakes waiters immediately
+
+---
+
+# Natural Voice synthesis contract
+
+## 26. Natural synthesis operation
+
+Conceptually:
+
+```text
+ss_voice_synthesize_to_audio(
+    audio_session,
+    request_id,
+    text,
+    text_base_offset
+)
+```
+
+The call may block until **that one adaptive text chunk has finished synthesizing**.
+
+It must not wait for audio playback to drain.
+
+---
+
+## 27. Natural synthesis return value
+
+Return at least:
+
+```text
+status
+generated_frames
+synthesis_duration
+buffered_frames_after_enqueue
+```
+
+This allows Python to preserve:
+
+* `GenerationStatistics`
+* adaptive chunk-size calculations
+* synthesis telemetry
+* existing logging behaviour
+
+If useful, return a fixed result structure rather than several follow-up native queries.
+
+---
+
+## 28. Natural threading rules
+
+* PCM stays native
+* word boundaries stay native until playback reaches them
+* played-word callbacks originate from the audio-session event path
+* stop remains callable from another Python thread while synthesis is blocked
+* native locks must not be held while Python callbacks execute
+* stop coordinates:
+
+  * synthesis cancellation
+  * playback stop
+  * boundary discard
+  * capacity waiter wakeup
+  * exactly one terminal result
+
+---
+
+# Exact Natural Voice identity
+
+## 29. Voice identity uses package + exact SDK voice
+
+Stable Natural Voice identity contains:
+
+```text
+package_path
++
+sdk_voice_name
+```
+
+Package path alone is not sufficient.
+
+This change must be separately reviewable because it affects:
+
+* voice discovery
+* Python keys
+* WinUI option identity
+* persisted settings
+* native initialization
+
+---
+
+## 30. Existing selection migration
+
+If an existing persisted setting contains only package path:
+
+* if that package resolves unambiguously to one voice, migrate automatically
+* if multiple voices exist in the package, use a deterministic documented fallback, preferably the same voice that legacy behaviour previously selected
+* persist the new exact identity once resolved
+
+Do not silently select a random voice.
+
+---
+
+# Playback abstraction
+
+## 31. Stable Python `PcmPlaybackSession`
+
+Create one narrow abstraction that survives migration.
+
+Conceptually:
+
+```text
+begin
+enqueue
+enqueue_silence
+finish_input
+wait_for_capacity
+buffered_frames
+pause
+resume
+stop
+close
+```
+
+Events:
+
+```text
+started
+played_word
+terminal
+underrun/error
+```
+
+### Supertonic
+
+Python directly uses:
+
+```text
+enqueue
+enqueue_silence
+```
+
+because Python owns Supertonic PCM.
+
+### Natural Voice
+
+Python does not enqueue PCM.
+
+It supplies text/request metadata and the native audio-session handle to native synthesis.
+
+---
+
+# Critical implementation path
+
+# Phase A — Baseline and telemetry
+
+## A1. Behaviour baseline
+
+Preserve:
+
+* Natural speech
+* Supertonic speech
+* SAPI speech
+* playback-time highlighting
+* pause/resume
+* stop
+* repeat-hotkey stop
+* superseding speech
+* stale-result rejection
+* voice/backend switching
+* fallback
+* shutdown
+* OCR/input
+* WinUI playback state
+
+## A2. Type-check baseline
+
+Ideally fix the existing small set of `ty` diagnostics now if doing so does not broaden scope.
+
+Otherwise:
+
+* record exact diagnostic count
+* record exact files/locations
+* after every package require:
+
+  * no count increase
+  * no location drift caused by this project
+  * no new production diagnostics
+
+Final audio acceptance requires a completely passing type check.
+
+## A3. Baseline telemetry
+
+Record:
+
+* PCM callback count
+* callback-size distribution
+* total PCM bytes
+* maximum pending bytes
+* WaveOut loop iterations
+* position-query count
+* blocks prepared/written
+* runway median/P95/max
+* first-audio latency median/P95
+* stop-to-silence
+* highlight callback delay
+* capacity wait duration
+* underruns
+* playback/idle CPU
+* thread count during playback
+* thread count after shutdown
+
+## A4. Preserve results
+
+Temporary instrumentation may later be deleted.
+
+The baseline results themselves must remain in a short engineering report/release-evidence document so final performance can be compared after old WaveOut is gone.
+
+---
+
+# Phase B — Lifecycle and ownership
+
+Implement:
+
+* authoritative application shutdown
+* backend deterministic close/join
+* `VoiceController` sole speaker ownership
+* immutable request lifetime rules
+
+Moving the physical `PlaybackSession` file under `app` is optional here.
+
+Do it only if trivial.
+
+Logical ownership matters; package relocation must not become a blocker.
+
+If deferred, perform the physical move during post-audio Python cleanup.
+
+---
+
+# Phase C — Interface-design checkpoint
+
+**Do not begin implementation of the new request/audio interfaces until this checkpoint is reviewed and frozen.**
+
+Freeze together:
+
+* `uint64 request_id`
+* terminal statuses
+* callback ordering
+* lifecycle semantics
+* PCM format
+* frame units
+* boundary representation
+* boundary validation
+* enqueue ownership
+* native error model
+* opaque handle lifecycle
+* `buffered_frames`
+* backpressure policy
+* Natural synthesis result structure
+* callback threading/reentrancy
+* exact shutdown guarantees
+
+Packages D through J must not independently redesign these rules.
+
+---
+
+# Phase D — Request/completion model
+
+Implement:
+
+* application-issued `uint64 request_id`
+* immutable identity through every layer
+* terminal status truth table
+* ordered callbacks
+* exactly-once terminal delivery
+* remove per-request `SpeechWait` threads
+
+Backend generations may remain internally where useful but are no longer the application's request identity.
+
+---
+
+# Phase E — Simplify `PlaybackController`
+
+Simplify only after Phase D is stable.
+
+Target approximately:
+
+```text
+Condition
+latest pending request | None
+active request
+request/generation state
+pending control command
+paused
+failed
+closed
+```
+
+Where safe:
+
+* remove queue draining
+* remove redundant pause/resume Event objects
+
+Preserve behaviour exactly.
+
+---
+
+# Phase F — Centralize native ABI
+
+Implement:
+
+* shared ABI declaration
+* error/status definitions
+* audio handle declarations
+* callback definitions
+* API version bump
+* Python/native version tests
+* matching native DLL staging for integration tests
+
+---
+
+# Phase G — Stable PCM session abstraction
+
+Implement `PcmPlaybackSession`.
+
+Do not couple backend code directly to Python `WaveOutPlayer`.
+
+---
+
+# Phase G1 — Minimal temporary WaveOut adapter
+
+Wrap existing Python WaveOut only enough to satisfy the final PCM abstraction.
+
+Do not heavily optimize it.
+
+Allowed:
+
+* expose `buffered_frames`
+* capacity signalling/waiting required by final interface
+* minimal correctness changes
+
+Avoid:
+
+* major buffer rewrite
+* full Python event-engine rewrite
+* major thread refactor
+* architectural polish on code scheduled for deletion
+
+---
+
+# Phase H — Backpressure
+
+Implement high/low-water capacity management through `PcmPlaybackSession`.
+
+Natural and Supertonic use the final interface.
+
+No new polling loops.
+
+---
+
+# Phase I — Asynchronous played-word/UI delivery
+
+Do this **before any native played-word callback is introduced**.
+
+Audio/backend callback:
+
+```text
+callback
+→ validate request_id
+→ enqueue UI update
+→ return
+```
+
+A separate WinUI writer performs pipe I/O.
+
+Do not expand this phase into broad WinUI cleanup.
+
+---
+
+# Phase J — Native PCM engine
+
+Implement:
+
+* opaque audio handles
+* event-driven WaveOut
+* reusable buffers
 * played-frame accounting
-* boundary queue
-* capacity signalling
-* pause/restart
-* reset/stop
-* close
-* underrun timing
+* boundary scheduling
+* high/low capacity signalling
+* pause/resume/stop
+* deterministic close
+* session-specific failure reporting
 
-## Make WaveOut event-driven
-
-Use Windows completion events/callbacks instead of Python's current 2–5 ms polling loop.
-
-The existing Python loop can wake hundreds of times per second despite no observed underruns.
-
-## Do not switch to WASAPI yet
-
-The immediate goal is:
-
-**same behaviour, better ownership**
-
-WaveOut is already working.
-
-A WASAPI migration is a separate future optimization and should not be mixed into this structural migration.
+Do not switch to WASAPI.
 
 ---
 
-# Phase 9 — Route Natural Voice directly into native playback
+## J1. Deterministic fake audio sink
 
-Once native PCM playback is independently validated, connect Natural Voice to it.
+Separate scheduler/session logic from the real WaveOut sink.
 
-## Remove this path
+Tests must run without physical speakers.
 
-```text
-Speech SDK PCM
-→ C++ callback
-→ Python ctypes callback
-→ Python bytes
-→ Python bytearray
-→ Python 100 ms block
-→ ctypes buffer
-→ WaveOut
-```
+Required tests include:
 
-The current pipeline creates multiple avoidable PCM copies.
+* normal prebuffer
+* short input below prebuffer
+* reusable buffers
+* high/low capacity
+* pause/resume frame progression
+* word timing
+* stop during playback
+* stop while paused
+* stop while capacity blocked
+* boundary ordering
+* duplicate-boundary ordering
+* final-frame boundary
+* invalid boundary rejection
+* stale request rejection
+* enqueue after stop
+* underrun start/end
+* partial device-write failure
+* exactly-once terminal
+* callback ordering
+* callback reentrancy
+* close during playback
+* no callback after close
+* capacity wait wake on stop
+* capacity wait wake on close
 
-## Replace with
-
-```text
-Speech SDK PCM callback
-        │
-        ▼
-native PCM session
-```
-
-## Word boundaries
-
-Natural Voice SDK boundary events remain native until the corresponding audio position is reached.
-
-Only then call Python with:
-
-```text
-generation
-text position
-length
-```
-
-This leaves approximately one meaningful Python callback per spoken word, which is already low-frequency and worth keeping.
-
-## Stop
-
-Define one deterministic cancellation sequence covering:
-
-* synthesis cancellation
-* PCM playback cancellation
-* pending boundaries
-* completion status
-
-Avoid the current separate loosely coordinated Python playback stop and native synthesis stop.
+Keep a separate real WaveOut Windows smoke test.
 
 ---
 
-# Phase 10 — Route Supertonic through native playback
+# Phase K — Natural Voice integration
 
-Do this only after Natural Voice validates the native player.
+Connect native Natural synthesis directly to native audio.
 
-## Keep unchanged
+Remove Natural PCM callbacks into Python.
 
-* model loading
-* ONNX execution
-* adaptive chunking
-* waveform generation
-* silence trimming
-* word-boundary estimation
+Implement:
 
-## Change only transport
+* native PCM path
+* native boundary scheduling
+* Natural synthesis result structure
+* stop/cancellation coordination
+* callback ordering
+* request identity
 
-Instead of feeding Python WaveOut:
+---
+
+## K1 — Exact Natural Voice identity
+
+Treat exact voice identity as a separately reviewable subpackage.
+
+Implement:
+
+* package path + SDK voice name key
+* persistence migration
+* UI identity update
+* native initialization alignment
+
+Do not mix unrelated voice UI changes into K.
+
+---
+
+# Phase L — Supertonic integration
+
+Keep inference unchanged.
+
+Change transport only:
 
 ```text
-prepared PCM segment
-+
-boundary array
-+
-generation
-        │
-        ▼
+PCM
+boundaries
+request_id
+    ↓
 native enqueue
 ```
 
-Prefer one enqueue per prepared/adaptive segment rather than Python-created 100 ms audio blocks.
+Native copies data before return.
 
-## Silence
-
-Where practical, tell the native player to enqueue a number of silent frames rather than creating large zero-filled Python `bytes`.
+Use native silence-frame queueing where practical.
 
 ---
 
-# Phase 11 — Remove the old Python WaveOut implementation
+# Phase M — Dual-path rollout
 
-Only after both Natural Voice and Supertonic use native playback successfully.
+The Python/native playback switch is strictly:
 
-Now delete rather than optimize:
+* development/test-only
+* not persisted in user settings
+* preferably environment-variable or dependency-injection controlled
 
-* Python WaveOut polling thread
-* ctypes WaveOut structs
-* ctypes WaveOut function calls
-* Python WaveOut header management
-* pending PCM bytearray
-* Python buffer completion polling
-* Python boundary polling
-* Python 100 ms block creation
-* associated temporary compatibility code
+Rollout stages:
 
-## Important
+### M1 — Native opt-in
 
-This is why the earlier recommendations to convert WaveOut lists/bytearrays to `deque` should **not** be treated as a major standalone refactor.
+Old Python playback remains default.
 
-Those optimizations are valid if Python WaveOut remains for a long period, but once native migration is committed they are transitional work.
+Native path is explicitly enabled for testing.
 
-Only make minimal temporary improvements needed for correctness/migration.
+### M2 — Native default soak
 
----
+Native becomes default.
 
-# Phase 12 — Decouple UI writes from playback callbacks
+Old Python playback remains emergency-selectable for development/testing.
 
-Currently a word callback can reach a synchronous named-pipe write and therefore potentially stall the thread reporting audio progress.
+Compare both implementations using the same workloads.
 
-## Create one outbound WinUI writer
+### M3 — Acceptance
 
-Application/UI updates enqueue messages.
+Native must pass behavioural/performance acceptance.
 
-One bridge-owned writer sends them.
+### Package N
 
-Guarantee ordering for stateful messages.
+Deletes:
 
-For highlights:
+* old playback
+* switch
+* fallback support
 
-* stale unsent highlight events may be coalesced if necessary
-* the newest highlight is what matters when the UI falls behind
-
-## Result
-
-Native audio event:
-
-```text
-played word
-   ↓
-small Python callback
-   ↓
-queue UI update
-   ↓
-return immediately
-```
-
-No pipe I/O on the audio callback path.
+The application must not permanently support two PCM playback engines.
 
 ---
 
-# Phase 13 — Make the rest of the WinUI bridge event-driven
+# Phase N — Delete Python WaveOut
 
-Remove unnecessary idle polling.
+Delete:
 
-The audit found:
+* Python WaveOut thread
+* WinMM ctypes structures
+* WinMM ctypes calls
+* Python WaveOut buffers
+* polling
+* boundary polling
+* block preparation
+* temporary adapter
+* dual-path switch
+* temporary old-path instrumentation
 
-* Python UI loop waking around every 20 ms
-* pipe read repeatedly cancelled/recreated after idle timeout
-
-## Replace with
-
-* wake event for scheduled Python UI work
-* persistent pipe read
-* shutdown closes/cancels the read
-* one pipe instance if only one WinUI process is supported
-
-Also ensure reconnection restores:
-
-* settings
-* shortcut
-* current text
-* current playback state
-
-not only part of the application state.
+Do not leave dormant compatibility code.
 
 ---
 
-# Phase 14 — Replace SAPI polling with events
+# Phase O — Audio acceptance
 
-SAPI is separate from the native PCM player because it owns its audio itself.
+Compare against Phase A baseline.
 
-Currently it polls COM state roughly every 10 ms.
+Verify:
 
-## First implementation choice
+* first-audio latency
+* buffered runway
+* highlighting timing
+* stop-to-silence
+* CPU usage
+* thread count
+* underruns
+* pause/resume
+* cancellation
+* repeat-hotkey stop
+* superseding requests
+* voice/backend switching
+* shutdown
+* no stale callbacks
+* no callbacks after close
+* OCR/input unaffected
 
-Use SAPI word and end-stream events from Python with an appropriate COM message/event mechanism.
+Require:
 
-Events should drive:
+* full unit/integration suite passing
+* Ruff passing
+* full `ty` passing
+* native deterministic tests passing
+* Windows WaveOut smoke passing
+* Natural smoke
+* Supertonic smoke
+* SAPI smoke
+* WinUI highlighting smoke
+* shutdown/restart smoke
 
-* played-word updates
-* stream completion
+Update the engineering comparison report with final metrics before deleting temporary instrumentation.
 
-Pause/resume/stop remain explicit controls.
-
-## Only move SAPI native if necessary
-
-Do not create a native SAPI implementation unless the Python event model proves unreliable or excessively complex.
-
----
-
-# Phase 15 — Finish Python ownership/dependency simplifications
-
-At this point the audio interfaces are stable. Structural cleanup can happen without touching them again.
-
-## 15A. Remove one-class `audio` package
-
-Move application-level `PlaybackSession` under `app`.
-
-Do not merge it with backend `PlaybackController`; they represent different scopes.
-
----
-
-## 15B. Collapse the one-module infrastructure package
-
-Move logging to a simpler appropriate module.
-
----
-
-## 15C. Remove unused config view models
-
-Remove unused:
-
-* `InputConfig`
-* `UiConfig`
-* associated properties/re-exports
-
-Keep useful narrowed speech configuration.
+This marks completion of the main audio migration.
 
 ---
 
-## 15D. Make configuration environment-independent
+# Speech-debug decision before native rollout
 
-Move runtime path calculation out of configuration data models.
+The native audio API deliberately does not include old debug-marker scheduling.
 
----
+Before Phase J/K, explicitly choose:
 
-## 15E. Consolidate Supertonic installation modules
+## Option A — Remove speech debug
 
-Combine the currently scattered optional-dependency/model/installer concerns into one focused Supertonic installation component.
+Preferred if the feature is not currently user-visible.
 
-Do not invent a general plugin framework.
+Remove remaining:
 
----
+* setting/config plumbing
+* application callbacks
+* UI no-op methods
+* tests for the obsolete feature
 
-## 15F. Correct dependency direction
+Handle existing persisted `speech_debug_enabled` safely.
 
-Aim for:
+Mention the user-visible removal in the changelog if appropriate.
 
-```text
-app composes everything
+## Option B — Temporarily exclude it from native playback
 
-domain/value models
-        ↑
-speech/input/platform adapters
-        ↑
-native/platform-specific implementation
-```
+If the feature is intentionally being retained for future work, document that the native rollout does not reproduce the currently non-rendered debug markers.
 
-Specific cleanups:
+Do not accidentally discover this discrepancy during dual-path comparison.
 
-* input capture should return raw text rather than importing speech normalization
-* move `NaturalVoice` value information to a neutral voice model if needed
-* config models should not depend on filesystem policy
-* clean package-level import cycles
+Note:
+
+Any WaveOut-specific debug-marker machinery removed with Python WaveOut in Phase N must **not** be requested for deletion a second time in the later debug cleanup.
 
 ---
 
-## 15G. Collapse redundant entry points
+# Separate Project 1 — SAPI event conversion
 
-Keep one clear startup path rather than forwarding through several `main()` layers.
+Do this after Phase O unless measurements justify doing it sooner.
 
----
+SAPI owns its own audio and does not depend on the native PCM migration.
 
-## 15H. Move packaging probes out of product startup
+Eventually replace:
 
-Release/build verification logic should live with build tooling rather than branching inside normal application startup.
+* idle worker polling
+* 10 ms playback polling
+* repeated status/word queries
+* polling completion
+* structure-pause polling
 
----
+with:
 
-# Phase 16 — Smaller safe cleanups
+* blocking idle wait
+* SAPI Word events
+* SAPI EndStream events
+* explicit pause/resume/stop
+* close/cancel wakeup
+* condition/timer-based pause-aware delays
 
-After the architecture is stable, review the remaining low-risk findings.
+Try Python COM events first.
 
-Examples from the audit include:
-
-* remove ignored backend-loading/ready messages
-* remove unused `activity` parameters
-* remove unused voice refresh/properties where confirmed
-* remove unreachable OCR-null branches
-* avoid rewriting settings on startup when unchanged
-* use explicit backend identity instead of class-name inspection
-* narrow overly broad Natural Voice fallback exception handling
-* align Python-version metadata with the versions actually supported/tested
-
-These should be individual, behaviour-preserving cleanups.
+Only consider native SAPI if Python event handling proves unreliable.
 
 ---
 
-# Phase 17 — Performance work that requires measurement
+# Separate Project 2 — Broader WinUI cleanup
 
-Do not mix these into the main migration.
+Only asynchronous played-word delivery belongs on the critical audio path.
 
-Only investigate after the architecture above is stable.
+After audio acceptance, consider:
 
-## Supertonic NumPy
+* persistent pipe reads
+* remove idle 20 ms polling
+* complete reconnect-state restoration
+* obsolete Tk-era interface removal
+* dead renderer methods
+* stale comments/contracts
 
-Potentially:
-
-* reduce temporary arrays
-* in-place clip/scale where ownership permits
-* reuse int16 output storage
-* avoid redundant dtype conversions
-
-But model inference likely dominates, so profile first.
-
-## Keeping audio device open
-
-Measure before changing device lifetime.
-
-## WASAPI
-
-Only investigate after event-driven native WaveOut is proven insufficient.
-
-Do not migrate simply because WASAPI is newer.
-
-## Native SAPI
-
-Only if Python SAPI events are problematic.
-
-## Adaptive chunk sizing
-
-Re-evaluate only after bounded backpressure exists, because previous telemetry was distorted by enormous buffered runway.
+Keep separate from native PCM implementation.
 
 ---
 
-# Things explicitly NOT to optimize/rewrite
+# Separate Project 3 — Post-audio Python architecture cleanup
 
-Do not:
+After Phase O:
 
-* move normalization into C++
-* move adaptive chunking into C++
-* move backend fallback policy into C++
-* move repeat-hotkey logic into C++
-* move `PlaybackSession` into C++
-* move Supertonic inference into C++
-* remove one played-word callback purely to reduce crossings
-* replace JSON UI messages solely for micro-performance
-* optimize voice-option sorting
-* optimize tiny dataclass allocations
-* combine an entire Natural Voice request into one synthesis operation
-* create a large Natural/Supertonic inheritance hierarchy
-* merge application `PlaybackSession` and backend `PlaybackController`
-* rewrite WaveOut to WASAPI during the native migration
-* reintroduce dead speech-debug plumbing into the new audio system
+## Configuration
 
-These either provide little benefit or risk altering behaviour.
+* remove unused config view models
+* make `_config` authoritative
+* move runtime-path policy out of config data
+* avoid unnecessary settings rewrites
+
+## Package structure
+
+* physically move `PlaybackSession` under `app` if not already done
+* collapse one-module infrastructure package where useful
+
+Do not duplicate the `PlaybackSession` relocation if it was already completed during Phase B.
+
+## Dependency direction
+
+* input capture returns raw text
+* app performs speech preparation
+* neutral voice models
+* config independent of runtime filesystem policy
+* clean import cycles
+
+## Entry points
+
+* remove redundant forwarding layers
+* move packaging probes out of normal application startup
+
+## Supertonic installation
+
+Consolidate dependency/model/installer readiness into one focused component.
+
+Do not create a generic plugin framework.
 
 ---
 
-# Work-package boundaries
+# Separate Project 4 — Measurement-only optimization
 
-The agent should treat these as separate implementation units.
+Only investigate with profiling evidence.
 
-Each unit must build/test before proceeding.
+Possible future work:
+
+* Supertonic NumPy allocation reduction
+* persistent audio device
+* WASAPI
+* adaptive chunk retuning
+* native SAPI if genuinely needed
+
+Do not include these in the native PCM migration.
+
+---
+
+# Package map
+
+The phase and package letters intentionally align.
 
 ## Package A — Baseline
 
-* tests/type-check baseline
-* behavioural regression coverage
+* behavioural baseline
+* telemetry
+* diagnostic baseline
+* persistent engineering results
 
-## Package B — Dead UI/debug cleanup
+## Package B — Lifecycle/ownership
 
-* speech-debug removal
-* WinUI contract cleanup
-* config duplicate removal
+* application shutdown
+* backend close/join
+* VoiceController ownership
 
-## Package C — Lifecycle
+## Package C — Interface-design checkpoint
 
-* `SelectSpeakApp.close()`
-* backend `close()`
-* deterministic worker shutdown
+Freeze all contracts before coding.
 
-## Package D — Ownership
+## Package D — Request/completion
 
-* `VoiceController` sole speaker ownership
+* `uint64 request_id`
+* statuses
+* ordering
+* remove wait threads
 
-## Package E — Completion
-
-* completion callbacks/results
-* remove `SpeechWait` threads
-
-## Package F — Playback controller
+## Package E — PlaybackController
 
 * simplify synchronization/state
 
-## Package G — Native ABI
+## Package F — Native ABI
 
-* centralize DLL declarations/error helpers
+* centralize declarations
+* errors
+* versioning
 
-## Package H — Playback interface/backpressure
+## Package G — PCM abstraction
 
-* stable PCM session contract
-* Natural bounded runway
-* Supertonic condition-driven capacity
+* stable `PcmPlaybackSession`
 
-## Package I — Native PCM engine
+### Package G1 — Temporary adapter
 
-* event-driven WaveOut player
-* independent tests
+* minimal Python WaveOut implementation of G
 
-## Package J — Natural integration
+## Package H — Backpressure
 
-* native synthesis → native audio
-* native word scheduling
+* high/low-water
+* buffered frames
 
-## Package K — Supertonic integration
+## Package I — Async UI delivery
 
-* segment/boundary enqueue
+* non-blocking played-word callbacks
 
-## Package L — Delete Python WaveOut
+## Package J — Native PCM engine
 
-* remove transitional audio implementation
+* session handles
+* event WaveOut
+* deterministic tests
 
-## Package M — UI event path
+## Package K — Natural integration
 
-* asynchronous writer
-* event-driven bridge
+* native synthesis → native playback
 
-## Package N — SAPI events
+### Package K1 — Exact Natural identity
 
-* remove polling
+* package + SDK voice
+* persistence migration
 
-## Package O — Python structural cleanup
+## Package L — Supertonic integration
 
-* packages
-* configuration
-* dependencies
-* entry points
-* Supertonic installation
+* PCM/boundary native enqueue
 
-## Package P — Measurement-only optimization
+## Package M — Dual-path rollout
 
-* Supertonic NumPy
-* WASAPI
-* audio-device persistence
-* other measured improvements
+* opt-in
+* native-default soak
+* comparison
+
+## Package N — Delete Python WaveOut
+
+* delete old engine
+* delete adapter
+* delete rollout switch
+
+## Package O — Audio acceptance
+
+* final validation
+* final engineering comparison
 
 ---
 
-# Rules for the AI agent while implementing
+# Implementation rules for AI agents
 
-## Rule 1 — Do not jump ahead
+## Rule 1 — Check whether code will be deleted
 
-Before changing a subsystem, check whether a later phase replaces it.
+Do not heavily optimize something scheduled for removal.
 
-If it will be deleted, do not heavily refactor it now.
+---
 
-## Rule 2 — Preserve behaviour over optimization
+## Rule 2 — Package C is authoritative
 
-A measurable performance improvement is not acceptable if it causes intermittent rendering, timing or lifecycle regressions.
+Later agents may not silently redesign:
 
-## Rule 3 — One source of truth
+* request IDs
+* PCM ownership
+* terminal statuses
+* callback ordering
+* frame units
+* handles
+* boundary semantics
+* backpressure
+* errors
+* shutdown guarantees
 
-Whenever ownership is consolidated, remove the previous duplicate owner rather than keeping both synchronized.
+Any required contract change must be identified explicitly before implementation continues.
 
-## Rule 4 — Avoid transitional APIs becoming permanent
+---
 
-Any compatibility layer introduced during migration should be marked for deletion in the exact later package that supersedes it.
+## Rule 3 — Preserve behaviour over optimization
 
-## Rule 5 — Do not broaden scope within a package
+Performance improvements do not justify regressions in:
 
-Example:
+* highlighting
+* speech timing
+* pause/resume
+* cancellation
+* stop
+* shutdown
+* UI behaviour
 
-While implementing native WaveOut, do not also:
+---
+
+## Rule 4 — One source of truth
+
+When ownership moves, remove the previous duplicate owner.
+
+---
+
+## Rule 5 — Native callbacks never perform UI I/O
+
+Callbacks may:
+
+* validate
+* update small state
+* enqueue work
+
+They must return quickly.
+
+---
+
+## Rule 6 — Never invoke Python while native locks are held
+
+Copy needed callback data.
+
+Release native locks.
+
+Then call Python.
+
+---
+
+## Rule 7 — No callback after close
+
+When session/speaker destruction returns, its callbacks are finished permanently.
+
+---
+
+## Rule 8 — Exactly one terminal result
+
+Every accepted request ends exactly once.
+
+---
+
+## Rule 9 — Transitional code has a deletion package
+
+* G1 is deleted by N
+* rollout switch M is deleted by N
+* Python WaveOut is deleted by N
+* temporary old-path telemetry disappears after O
+
+Do not leave compatibility paths behind.
+
+---
+
+## Rule 10 — Do not broaden scope
+
+During native WaveOut migration do not also:
 
 * switch to WASAPI
-* change audio format
-* change chunk policy
-* change highlighting semantics
-
-## Rule 6 — Validate after every package
-
-Do not wait until the whole architecture migration is complete to test.
-
-## Rule 7 — Preserve unrelated working-tree changes
-
-Do not revert or rewrite unrelated work.
-
-## Rule 8 — Investigate regressions against the package that introduced them
-
-Do not respond to a regression by changing several neighboring systems at once.
+* change PCM formats
+* redesign adaptive chunking
+* redesign UI rendering
+* restructure unrelated Python packages
 
 ---
 
-# Final expected architecture
+## Rule 11 — Validate every package
 
-When all planned work is complete:
+Do not wait until Phase O to discover regressions.
+
+---
+
+## Rule 12 — Preserve unrelated working-tree changes
+
+Do not revert or rewrite unrelated modifications.
+
+---
+
+## Rule 13 — Fix regressions in the package that introduced them
+
+Do not compensate for one regression by modifying several neighboring systems.
+
+---
+
+# Final architecture
 
 ```text
-                       ┌─────────────────────┐
-                       │    SelectSpeakApp   │
-                       │ application/session │
-                       └─────────┬───────────┘
-                                 │
-                       ┌─────────▼───────────┐
-                       │   VoiceController   │
-                       │ speaker ownership   │
-                       └─────────┬───────────┘
-                                 │
-             ┌───────────────────┼───────────────────┐
-             │                   │                   │
-             ▼                   ▼                   ▼
-       Natural Voice         Supertonic            SAPI
-          Python               Python              Python
-        coordinator           inference          COM/events
-             │                   │
-             │ text chunk         │ PCM + boundaries
-             ▼                   ▼
-       ┌───────────────────────────────────────┐
-       │          Native SelectSpeak DLL       │
-       │                                       │
-       │ Natural synthesis                     │
-       │ Native PCM playback                   │
-       │ Event-driven WaveOut                   │
-       │ PCM buffers/backpressure               │
-       │ Played-frame position                  │
-       │ Boundary scheduling                    │
-       │ Pause / resume / stop                  │
-       └──────────────────┬────────────────────┘
-                          │
-                played-word/state events
-                          │
-                          ▼
-                 Python application
-                          │
-                    queued UI state
-                          │
-                          ▼
+                     ┌─────────────────────┐
+                     │    SelectSpeakApp   │
+                     │ application/session │
+                     └─────────┬───────────┘
+                               │
+                     uint64 request_id
+                               │
+                     ┌─────────▼───────────┐
+                     │   VoiceController   │
+                     │ speaker ownership   │
+                     └─────────┬───────────┘
+                               │
+           ┌───────────────────┼───────────────────┐
+           │                   │                   │
+           ▼                   ▼                   ▼
+     Natural Voice         Supertonic            SAPI
+        Python               Python              Python
+      coordinator           inference          COM/events
+           │                   │
+       text/request       PCM/boundaries
+           │                   │
+           ▼                   ▼
+      ┌─────────────────────────────────────────┐
+      │          Native SelectSpeak DLL         │
+      │                                         │
+      │ Natural synthesis                       │
+      │ PCM session handles                     │
+      │ Event-driven WaveOut                    │
+      │ PCM buffers                             │
+      │ Capacity signalling                     │
+      │ Played-frame position                   │
+      │ Boundary scheduling                     │
+      │ Pause / resume / stop                   │
+      └──────────────────┬──────────────────────┘
+                         │
+               ordered request events
+                         │
+                         ▼
+                  Python application
+                         │
+                 queued UI updates
+                         │
+                         ▼
                        WinUI
 ```
 
-The important separation is:
+The final division is:
 
-**Python owns meaning and policy.**
+**Python owns application meaning, request identity and speech policy.**
 
-**Native owns Windows audio mechanics and timing.**
+**Native owns Windows PCM mechanics and playback timing.**
 
-**WinUI owns rendering.**
+**Natural synthesis feeds native playback directly.**
 
-That is the common direction supported by both audits, while the ordering above prevents the Python simplification work from refactoring components immediately before the audio migration replaces them.
+**Supertonic inference stays Python and hands completed PCM segments to native.**
+
+**WinUI only renders asynchronously delivered state.**
+
+The most important implementation rule is that the request/completion/PCM contract is frozen before the migration starts. Everything after that should be replacing implementations behind stable seams rather than repeatedly redesigning those seams.
