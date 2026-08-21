@@ -4,6 +4,7 @@ import threading
 from dataclasses import dataclass
 from enum import Enum, auto
 from queue import Empty, Queue
+from typing import Final
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,17 +19,21 @@ class PlaybackCommand(Enum):
     RESUME = auto()
 
 
+_CLOSE: Final = object()
+
+
 class PlaybackController:
     """Own the thread-safe request lifecycle shared by speech backends."""
 
     def __init__(self) -> None:
         self._condition = threading.Condition()
-        self._queue: Queue[SpeechRequest] = Queue()
+        self._queue: Queue[SpeechRequest | object] = Queue()
         self._generation = 0
         self._active_generation: int | None = None
         self._completed_generation = 0
         self._paused = False
         self._failed = False
+        self._closed = False
         self._pause_requested = threading.Event()
         self._resume_requested = threading.Event()
 
@@ -54,6 +59,8 @@ class PlaybackController:
 
     def submit(self, text: str) -> tuple[SpeechRequest, bool]:
         with self._condition:
+            if self._closed:
+                raise RuntimeError("The speech backend is closed")
             if self._failed:
                 raise RuntimeError("The speech worker has failed")
             self._generation += 1
@@ -68,6 +75,8 @@ class PlaybackController:
 
     def cancel(self) -> tuple[int, bool]:
         with self._condition:
+            if self._closed:
+                return self._generation, False
             self._generation += 1
             self._drain_queue()
             was_active = self._active_generation is not None
@@ -77,8 +86,29 @@ class PlaybackController:
             self._condition.notify_all()
             return self._generation, was_active
 
-    def next_request(self, timeout: float | None = None) -> SpeechRequest:
-        return self._queue.get(timeout=timeout)
+    def next_request(self, timeout: float | None = None) -> SpeechRequest | None:
+        item = self._queue.get(timeout=timeout)
+        if item is _CLOSE:
+            return None
+        if not isinstance(item, SpeechRequest):
+            raise RuntimeError("Invalid speech request queued")
+        return item
+
+    def close(self) -> bool:
+        """Reject new work, supersede active work, and wake the worker."""
+        with self._condition:
+            if self._closed:
+                return False
+            self._closed = True
+            self._generation += 1
+            self._drain_queue()
+            was_active = self._active_generation is not None
+            self._paused = False
+            self._pause_requested.clear()
+            self._resume_requested.set()
+            self._queue.put(_CLOSE)
+            self._condition.notify_all()
+            return was_active
 
     def begin(self, generation: int) -> bool:
         with self._condition:
@@ -113,11 +143,15 @@ class PlaybackController:
         with self._condition:
             self._condition.wait_for(
                 lambda: (
-                    self._failed or self._generation != generation or self._completed_generation >= generation
+                    self._closed
+                    or self._failed
+                    or self._generation != generation
+                    or self._completed_generation >= generation
                 )
             )
             return (
-                not self._failed
+                not self._closed
+                and not self._failed
                 and self._generation == generation
                 and self._completed_generation >= generation
             )

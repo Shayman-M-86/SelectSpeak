@@ -1,3 +1,4 @@
+import threading
 from types import SimpleNamespace
 from typing import Any
 
@@ -272,3 +273,46 @@ def test_natural_voice_uses_the_shared_persistent_stream() -> None:
     assert [value for event, value in player.events if event == "silence"] == [pytest.approx(0.1)]
     boundary_positions = [value[1] for event, value in player.events if event == "boundary"]
     assert boundary_positions == sorted(boundary_positions)
+
+
+def test_natural_voice_close_cancels_joins_and_releases_engine() -> None:
+    events: list[str] = []
+
+    class Player:
+        def request_stop(self) -> None:
+            events.append("player.request_stop")
+
+        def wait_until_stopped(self) -> None:
+            events.append("player.wait_until_stopped")
+
+    class Engine:
+        def stop(self) -> None:
+            events.append("engine.stop")
+
+        def close(self) -> None:
+            events.append("engine.close")
+
+    class Worker:
+        def join(self) -> None:
+            events.append("worker.join")
+
+    speaker = object.__new__(NaturalVoiceSpeaker)
+    speaker._close_lock = threading.Lock()
+    speaker._closed = False
+    speaker._playback = PlaybackController()
+    request, _active = speaker._playback.submit("Read this")
+    assert speaker._playback.begin(request.generation)
+    speaker._player = Player()
+    speaker._engine = Engine()
+    speaker._thread = Worker()
+
+    speaker.close()
+    speaker.close()
+
+    assert events == [
+        "player.request_stop",
+        "engine.stop",
+        "player.wait_until_stopped",
+        "worker.join",
+        "engine.close",
+    ]

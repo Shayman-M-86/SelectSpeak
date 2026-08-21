@@ -304,13 +304,15 @@ class NaturalVoiceSpeaker:
         self._segment_text_offset = 0
         self._segment_audio_base = 0
         self._generation_statistics = GenerationStatistics()
+        self._close_lock = threading.Lock()
+        self._closed = False
         self._player = WaveOutPlayer(
             self._on_played_word,
             config.speech_volume,
             debug_callback=debug_callback,
         )
         self._engine: _Engine = NaturalVoiceEngine(config, self._on_engine_audio, self._on_engine_boundary)
-        self._thread = threading.Thread(target=self._run, daemon=True, name="NaturalVoiceSpeaker")
+        self._thread = threading.Thread(target=self._run, name="NaturalVoiceSpeaker")
         self._thread.start()
 
     @property
@@ -357,8 +359,7 @@ class NaturalVoiceSpeaker:
     def stop(self) -> None:
         _generation, active = self._playback.cancel()
         if active:
-            self._player.stop()
-            self._engine.stop()
+            self._stop_active()
 
     def pause(self) -> None:
         if self._playback.pause_now():
@@ -371,9 +372,38 @@ class NaturalVoiceSpeaker:
     def wait_until_done(self, generation: int) -> bool:
         return self._playback.wait_until_done(generation)
 
+    def close(self) -> None:
+        with self._close_lock:
+            if self._closed:
+                return
+            self._closed = True
+        active = self._playback.close()
+        if active:
+            try:
+                self._stop_active()
+            except Exception:
+                logger.exception("natural_voice.close_stop_failed")
+        try:
+            self._thread.join()
+        finally:
+            self._engine.close()
+        logger.info("natural_voice.closed")
+
+    def _stop_active(self) -> None:
+        # Silence first, then cancel the synthesizer before waiting for WaveOut
+        # cleanup. This avoids both audible delay and the former one-second wait.
+        self._player.request_stop()
+        try:
+            self._engine.stop()
+        finally:
+            self._player.wait_until_stopped()
+
     def _run(self) -> None:
         while True:
             request = self._playback.next_request()
+            if request is None:
+                logger.debug("natural_voice.worker.closed")
+                return
             if not self._playback.is_current(request.generation):
                 continue
             try:

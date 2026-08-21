@@ -252,6 +252,11 @@ class WaveOutPlayer:
             self._check(self._winmm.waveOutRestart(self._handle), "resume audio")
 
     def stop(self) -> None:
+        self.request_stop()
+        self.wait_until_stopped()
+
+    def request_stop(self) -> None:
+        """Reset the device immediately without waiting for worker cleanup."""
         self._stopped.set()
         self._paused = False
         with self._audio_condition:
@@ -261,9 +266,11 @@ class WaveOutPlayer:
             reset_started_at = time.monotonic()
             self._winmm.waveOutReset(self._handle)
             self._telemetry.stop_reset_ms = (time.monotonic() - reset_started_at) * 1000
-            self._done.wait(timeout=1)
         else:
             self._done.set()
+
+    def wait_until_stopped(self, timeout: float = 1.0) -> bool:
+        return self._done.wait(timeout=timeout)
 
     def _open(self) -> None:
         wave_format = _WaveFormat(

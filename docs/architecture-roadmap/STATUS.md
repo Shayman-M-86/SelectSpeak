@@ -12,8 +12,8 @@ is absent. A new agent resumes `Active`; otherwise it selects the earliest eligi
 | Package | Focus | Gate or sequencing note | Status | Evidence, blocker, or next action |
 | --- | --- | --- | --- | --- |
 | A | Baseline and telemetry | First package; preserve results for O | Complete | Repeatable Natural/Supertonic workload, temporary telemetry, clean diagnostics, and durable comparison evidence delivered. [Report](reports/package-a-baseline.md) |
-| B | Lifecycle and ownership | Use A behaviour baseline | Ready | Assess authoritative shutdown, backend close/join, speaker ownership, and the one-second Natural stop settlement observed by A. |
-| C | Interface checkpoint | Explicit review/freeze before D–J interface work | Unassessed | Reconcile proposed contracts with current code, then obtain freeze decision. |
+| B | Lifecycle and ownership | Use A behaviour baseline | Complete | Sole speaker ownership, partial-safe ordered shutdown, deterministic backend close/join, and session relocation delivered. [Report](reports/package-b-lifecycle.md) |
+| C | Interface checkpoint | Explicit review/freeze before D–J interface work | Ready | Reconcile the unified-plan contracts with current Python/native seams, record the freeze artifact, then obtain the explicit freeze decision. |
 | D | Request and completion | C frozen | Unassessed | Trace identity and completion through the direct path. |
 | E | `PlaybackController` | D stable | Unassessed | Simplify state without pulling in audio migration. |
 | F | Native ABI | C frozen; matching DLL and tests required | Unassessed | Identify and centralize current ABI declarations. |

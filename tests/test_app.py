@@ -1,5 +1,7 @@
 from collections.abc import Callable
+from typing import Any, cast
 
+from selectspeak.app import application as application_module
 from selectspeak.app import voices as voices_module
 from selectspeak.app.application import (
     SelectSpeakApp,
@@ -101,6 +103,13 @@ def test_delayed_clipboard_fallback_stops_speech_active_at_keypress() -> None:
             del generation
             return True
 
+        def close(self) -> None:
+            pass
+
+    class Voices:
+        def __init__(self, speaker: Speaker) -> None:
+            self.speaker = speaker
+
     class Player:
         @staticmethod
         def call_soon(callback: Callable[[], None]) -> None:
@@ -114,7 +123,7 @@ def test_delayed_clipboard_fallback_stops_speech_active_at_keypress() -> None:
     speaker = Speaker()
     setattr(app, "_hotkeys", Hotkeys())
     setattr(app, "_clipboard", Clipboard())
-    setattr(app, "_speaker", speaker)
+    setattr(app, "_voices", Voices(speaker))
     setattr(app, "_player", Player())
     app._session.start(
         speaker,
@@ -178,6 +187,13 @@ def test_stop_targets_the_speaker_that_started_the_active_request() -> None:
             del generation
             return True
 
+        def close(self) -> None:
+            pass
+
+    class Voices:
+        def __init__(self, speaker: Speaker) -> None:
+            self.speaker = speaker
+
     class Player:
         @staticmethod
         def call_soon(callback: Callable[[], None]) -> None:
@@ -190,7 +206,7 @@ def test_stop_targets_the_speaker_that_started_the_active_request() -> None:
     app = SelectSpeakApp()
     old_speaker = Speaker()
     new_speaker = Speaker()
-    setattr(app, "_speaker", new_speaker)
+    setattr(app, "_voices", Voices(new_speaker))
     setattr(app, "_player", Player())
     app._session.start(old_speaker, 1, "Active speech", "selection", 1.0)
 
@@ -198,3 +214,110 @@ def test_stop_targets_the_speaker_that_started_the_active_request() -> None:
 
     assert old_speaker.stop_count == 1
     assert new_speaker.stop_count == 0
+
+
+def test_voice_controller_creates_owns_and_closes_initial_speaker(monkeypatch) -> None:
+    class Speaker:
+        close_count = 0
+
+        def close(self) -> None:
+            self.close_count += 1
+
+    speaker = Speaker()
+    monkeypatch.setattr(voices_module, "create_speaker", lambda *_args: speaker)
+    monkeypatch.setattr(voices_module, "speaker_backend", lambda _speaker: "test")
+    monkeypatch.setattr(VoiceController, "publish_options", lambda *_args: None)
+    controller = VoiceController(
+        AppConfig(),
+        cast(Any, object()),
+        word_callback=lambda *_args: None,
+        debug_callback=lambda _event: None,
+        on_activated=lambda *_args: None,
+        on_stop_playback=lambda: None,
+        on_shutdown_requested=lambda: None,
+    )
+
+    controller.start()
+
+    assert controller.speaker is speaker
+    assert controller.backend == "test"
+    controller.close()
+    controller.close()
+    assert speaker.close_count == 1
+
+
+def test_shutdown_is_ordered_idempotent_and_continues_after_cleanup_failure(monkeypatch) -> None:
+    events: list[str] = []
+
+    class Resource:
+        def __init__(self, name: str, method: str, *, fail: bool = False) -> None:
+            self.name = name
+            self.fail = fail
+            setattr(self, method, self.run)
+
+        def run(self) -> None:
+            events.append(self.name)
+            if self.fail:
+                raise RuntimeError(f"{self.name} failed")
+
+    class Speaker:
+        def speak(self, text: str) -> int:
+            del text
+            return 1
+
+        def stop(self) -> None:
+            events.append("active_playback")
+
+        def pause(self) -> None:
+            pass
+
+        def resume(self) -> None:
+            pass
+
+        def wait_until_done(self, generation: int) -> bool:
+            del generation
+            return False
+
+        def close(self) -> None:
+            pass
+
+    app = SelectSpeakApp()
+    speaker = Speaker()
+    app._session.start(speaker, 1, "Active speech", "selection", 1.0)
+    setattr(app, "_hotkeys", Resource("hotkeys", "close", fail=True))
+    setattr(app, "_ocr_capture", Resource("ocr", "stop"))
+    setattr(app, "_voices", Resource("voices", "close"))
+    setattr(app, "_tray", Resource("tray", "stop"))
+    setattr(app, "_player", Resource("player", "destroy"))
+    monkeypatch.setattr(
+        application_module,
+        "shutdown_native_bridge",
+        lambda: events.append("native_bridge"),
+    )
+
+    app.shutdown()
+    app.shutdown()
+
+    assert events == [
+        "hotkeys",
+        "ocr",
+        "active_playback",
+        "voices",
+        "tray",
+        "player",
+        "native_bridge",
+    ]
+
+
+def test_shutdown_after_partial_startup_still_releases_native_bridge(monkeypatch) -> None:
+    events: list[str] = []
+    app = SelectSpeakApp()
+    monkeypatch.setattr(
+        application_module,
+        "shutdown_native_bridge",
+        lambda: events.append("native_bridge"),
+    )
+
+    app.shutdown()
+
+    assert events == ["native_bridge"]

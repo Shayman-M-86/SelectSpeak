@@ -122,11 +122,7 @@ def _stop_during_playback(speaker: Speaker) -> None:
 
 
 def _best_effort_cleanup(speaker: Speaker) -> None:
-    speaker.stop()
-    engine = getattr(speaker, "_engine", None)
-    close = getattr(engine, "close", None)
-    if close is not None:
-        close()
+    speaker.close()
 
 
 def main() -> int:

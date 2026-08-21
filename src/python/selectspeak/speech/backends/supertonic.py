@@ -159,6 +159,8 @@ class SupertonicSpeaker:
         self._synthesis_lock = threading.Lock()
         self._request_text = ""
         self._generation_statistics = GenerationStatistics()
+        self._close_lock = threading.Lock()
+        self._closed = False
         logger.info("supertonic.model.loading")
         self._tts = TTS(model_dir=model_dir("supertonic3"), auto_download=True)
         self._style = self._tts.get_voice_style(config.supertonic_voice)
@@ -170,7 +172,7 @@ class SupertonicSpeaker:
             backend_name="supertonic",
             debug_callback=debug_callback,
         )
-        self._thread = threading.Thread(target=self._run, daemon=True, name="SupertonicSpeaker")
+        self._thread = threading.Thread(target=self._run, name="SupertonicSpeaker")
         self._thread.start()
         logger.info(
             "supertonic.model.loaded voice=%s language=%s sample_rate=%s",
@@ -203,9 +205,28 @@ class SupertonicSpeaker:
     def wait_until_done(self, generation: int) -> bool:
         return self._playback.wait_until_done(generation)
 
+    def close(self) -> None:
+        with self._close_lock:
+            if self._closed:
+                return
+            self._closed = True
+        active = self._playback.close()
+        if active:
+            try:
+                self._player.stop()
+            except Exception:
+                logger.exception("supertonic.close_stop_failed")
+        # Supertonic cannot cancel an ONNX inference. Joining here guarantees
+        # that it has settled before application/native teardown continues.
+        self._thread.join()
+        logger.info("supertonic.closed")
+
     def _run(self) -> None:
         while True:
             request = self._playback.next_request()
+            if request is None:
+                logger.debug("supertonic.worker.closed")
+                return
             if not self._playback.is_current(request.generation):
                 continue
             try:

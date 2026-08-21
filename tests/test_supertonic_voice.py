@@ -1,3 +1,4 @@
+import threading
 from typing import Any
 
 import numpy as np
@@ -170,3 +171,29 @@ def test_synthesis_statistics_learn_from_observed_generation() -> None:
 
     assert statistics.observations == 1
     assert after > before
+
+
+def test_supertonic_close_stops_playback_and_joins_inference_worker() -> None:
+    events: list[str] = []
+
+    class Player:
+        def stop(self) -> None:
+            events.append("player.stop")
+
+    class Worker:
+        def join(self) -> None:
+            events.append("worker.join")
+
+    speaker = object.__new__(SupertonicSpeaker)
+    speaker._close_lock = threading.Lock()
+    speaker._closed = False
+    speaker._playback = PlaybackController()
+    request, _active = speaker._playback.submit("Read this")
+    assert speaker._playback.begin(request.generation)
+    speaker._player = Player()
+    speaker._thread = Worker()
+
+    speaker.close()
+    speaker.close()
+
+    assert events == ["player.stop", "worker.join"]

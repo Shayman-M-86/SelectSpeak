@@ -84,7 +84,7 @@ class SapiWorker:
         self._config = config
         self._playback = playback
         self._word_callback = word_callback
-        self._thread = threading.Thread(target=self._run, daemon=True, name="SapiSpeaker")
+        self._thread = threading.Thread(target=self._run, name="SapiSpeaker")
 
     def start(self) -> None:
         self._thread.start()
@@ -99,6 +99,8 @@ class SapiWorker:
                     request = self._playback.next_request(timeout=0.1)
                 except Empty:
                     continue
+                if request is None:
+                    return
                 if self._playback.is_current(request.generation):
                     self._play_request(voice, request)
         except Exception:
@@ -112,6 +114,9 @@ class SapiWorker:
         voice = cast(SapiVoice, win32com.client.Dispatch("SAPI.SpVoice"))
         self._configure_voice(voice)
         return voice
+
+    def join(self) -> None:
+        self._thread.join()
 
     def _configure_voice(self, voice: SapiVoice) -> None:
         tokens = voice.GetVoices()
@@ -229,6 +234,8 @@ class SapiSpeaker:
         self._config = config
         self._playback = PlaybackController()
         self._worker = SapiWorker(config, self._playback, word_callback)
+        self._close_lock = threading.Lock()
+        self._closed = False
         self._worker.start()
         logger.info(
             "speaker.worker.started preferred_voice=%s rate=%s volume=%s structure_pause_seconds=%s",
@@ -269,3 +276,12 @@ class SapiSpeaker:
 
     def wait_until_done(self, generation: int) -> bool:
         return self._playback.wait_until_done(generation)
+
+    def close(self) -> None:
+        with self._close_lock:
+            if self._closed:
+                return
+            self._closed = True
+        self._playback.close()
+        self._worker.join()
+        logger.info("speaker.closed backend=sapi")

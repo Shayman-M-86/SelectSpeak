@@ -19,6 +19,7 @@ import subprocess
 import threading
 from collections.abc import Callable
 from queue import Empty, SimpleQueue
+from typing import Any, cast
 
 import pywintypes
 import win32event
@@ -558,8 +559,10 @@ class WinUiPlayer:
                 win32event.WaitForSingleObject(overlapped.hEvent, win32event.INFINITE)
                 return None
             count = win32file.GetOverlappedResult(pipe, overlapped, False)
-            # AllocateReadBuffer returns a memoryview; the stub understates it.
-            return bytes(buffer[:count]) if count else b""  # ty: ignore[not-subscriptable]
+            # PyOVERLAPPEDReadBuffer supports slicing at runtime, but the
+            # types-pywin32 stub does not expose that part of its interface.
+            read_buffer = cast(Any, buffer)
+            return bytes(read_buffer[:count]) if count else b""
         finally:
             win32file.CloseHandle(overlapped.hEvent)
 
