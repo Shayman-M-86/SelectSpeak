@@ -8,14 +8,15 @@
 
 namespace selectspeak::abi {
 
-template <typename Size>
-Size CopyString(const std::string& value, char* buffer, Size capacity)
+template <typename Character, typename Size>
+Size CopyString(const std::basic_string<Character>& value, Character* buffer,
+                Size capacity)
 {
     const auto required = static_cast<Size>(value.size() + 1);
     if (buffer != nullptr && capacity > 0) {
         const auto count = std::min<Size>(capacity - 1, required - 1);
-        std::memcpy(buffer, value.data(), count);
-        buffer[count] = '\0';
+        std::memcpy(buffer, value.data(), count * sizeof(Character));
+        buffer[count] = Character{};
     }
     return required;
 }

@@ -11,7 +11,7 @@ class HotkeyManager:
     def __init__(
         self,
         hotkey: str,
-        handler: Callable[[str, float], None],
+        handler: Callable[[str, float, str], None],
         activation_handler: Callable[[], bool],
         *,
         native_dll: str = "",

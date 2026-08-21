@@ -4,7 +4,7 @@ from typing import Literal
 
 from ..speech.normalization import prepare_for_speech
 
-CaptureSource = Literal["selection", "clipboard", "clipboard_fallback"]
+CaptureSource = Literal["selection", "clipboard_fallback", "empty"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,14 +18,19 @@ def resolve_capture(
     selected_text: str,
     read_clipboard: Callable[[], str | None],
     *,
-    force_clipboard: bool,
+    allow_clipboard_fallback: bool,
 ) -> CaptureResult:
-    """Prefer meaningful selected text, otherwise fall back to the clipboard."""
-    if not force_clipboard:
-        cleaned_selection = prepare_for_speech(selected_text)
-        if cleaned_selection:
-            return CaptureResult("selection", selected_text, cleaned_selection)
+    """Prefer selected text and use the clipboard only as an enabled fallback."""
+    cleaned_selection = prepare_for_speech(selected_text)
+    if cleaned_selection:
+        return CaptureResult("selection", selected_text, cleaned_selection)
+
+    if not allow_clipboard_fallback:
+        return CaptureResult("empty", selected_text, "")
 
     clipboard_text = read_clipboard() or ""
-    source: CaptureSource = "clipboard" if force_clipboard else "clipboard_fallback"
-    return CaptureResult(source, clipboard_text, prepare_for_speech(clipboard_text))
+    return CaptureResult(
+        "clipboard_fallback",
+        clipboard_text,
+        prepare_for_speech(clipboard_text),
+    )

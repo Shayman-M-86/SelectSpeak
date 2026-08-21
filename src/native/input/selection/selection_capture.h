@@ -13,6 +13,9 @@ enum class CaptureSource : unsigned int {
 
 struct SelectionCapture {
     std::wstring text;
+    // What the clipboard held before this capture touched it. Copied by value
+    // up front so a fallback read never depends on restoration succeeding.
+    std::wstring clipboard_fallback_text;
     CaptureSource source = CaptureSource::None;
     std::string error;
     std::string trace;

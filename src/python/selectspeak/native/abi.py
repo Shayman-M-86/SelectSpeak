@@ -187,6 +187,12 @@ def configure_native_library(library: Any) -> None:
     )
     _declare(
         library,
+        "ss_input_last_clipboard_fallback",
+        [ctypes.c_wchar_p, ctypes.c_uint32],
+        ctypes.c_uint32,
+    )
+    _declare(
+        library,
         "ss_input_last_error",
         [ctypes.c_char_p, ctypes.c_uint32],
         ctypes.c_uint32,

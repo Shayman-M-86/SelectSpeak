@@ -108,6 +108,18 @@ if(BUILD_TESTING)
     endif()
     add_test(NAME selection_policy COMMAND selectspeak_selection_policy_tests)
 
+    add_executable(selectspeak_clipboard_snapshot_tests
+        input/selection/clipboard_snapshot_tests.cpp)
+    target_compile_features(selectspeak_clipboard_snapshot_tests PRIVATE cxx_std_17)
+    target_compile_definitions(selectspeak_clipboard_snapshot_tests PRIVATE
+        WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_link_libraries(selectspeak_clipboard_snapshot_tests PRIVATE ole32 oleaut32)
+    if(MSVC)
+        target_compile_options(selectspeak_clipboard_snapshot_tests PRIVATE
+            /utf-8 /W4 /permissive- /sdl /Zc:__cplusplus)
+    endif()
+    add_test(NAME clipboard_snapshot COMMAND selectspeak_clipboard_snapshot_tests)
+
     if(SELECTSPEAK_ENABLE_NATURAL_VOICE)
         add_executable(selectspeak_speech_runtime_config_tests
             natural_voice/speech_runtime_config.cpp

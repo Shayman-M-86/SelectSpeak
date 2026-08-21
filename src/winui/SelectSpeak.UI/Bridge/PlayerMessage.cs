@@ -19,7 +19,7 @@ namespace SelectSpeak.UI.Bridge;
 /// <param name="Speaking">Whether playback is active.</param>
 /// <param name="Paused">Whether active playback is paused.</param>
 /// <param name="AutoHide">Settings: hide the player once reading finishes.</param>
-/// <param name="ClipboardMode">Settings: read the clipboard rather than the selection.</param>
+/// <param name="ClipboardMode">Settings: use clipboard text when selection is empty.</param>
 /// <param name="DebugEnabled">Settings: speech diagnostics are collected.</param>
 /// <param name="Hotkey">Settings: the shortcut that starts a read.</param>
 /// <param name="OcrHotkey">Settings: the shortcut that captures text on screen.</param>

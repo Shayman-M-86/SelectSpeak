@@ -24,7 +24,7 @@ class NativeInputAdapter:
     def __init__(
         self,
         hotkey: str,
-        handler: Callable[[str, float], None],
+        handler: Callable[[str, float, str], None],
         activation_handler: Callable[[], bool],
         dll_path: str = "",
     ) -> None:
@@ -77,6 +77,7 @@ class NativeInputAdapter:
         kernel.GetTickCount64.restype = ctypes.c_ulonglong
         capture_latency_ms = max(0, kernel.GetTickCount64() - activated_ms)
         activated_at = time.monotonic() - capture_latency_ms / 1000
+        clipboard_fallback = self._last_clipboard_fallback()
         source_id = self._dll.ss_input_last_capture_source()
         source = {
             1: "ui_automation",
@@ -98,7 +99,7 @@ class NativeInputAdapter:
         )
         threading.Thread(
             target=self._run_handler,
-            args=(captured, activated_at),
+            args=(captured, activated_at, clipboard_fallback),
             daemon=True,
             name="NativeInputCapture",
         ).start()
@@ -110,9 +111,9 @@ class NativeInputAdapter:
             logger.exception("native_input.activation_handler.failed")
             return 0
 
-    def _run_handler(self, text: str, activated_at: float) -> None:
+    def _run_handler(self, text: str, activated_at: float, clipboard_fallback: str) -> None:
         try:
-            self._handler(text, activated_at)
+            self._handler(text, activated_at, clipboard_fallback)
         except Exception:
             logger.exception("native_input.handler.failed")
 
@@ -121,6 +122,18 @@ class NativeInputAdapter:
         buffer = ctypes.create_string_buffer(max(required, 1))
         self._dll.ss_input_last_error(buffer, len(buffer))
         return buffer.value.decode("utf-8", errors="replace")
+
+    def _last_clipboard_fallback(self) -> str:
+        """Read what the clipboard held before this capture touched it.
+
+        The native layer copies this by value before it empties the clipboard
+        to probe for a selection, so it stays correct even when restoring the
+        clipboard afterwards fails.
+        """
+        required = self._dll.ss_input_last_clipboard_fallback(None, 0)
+        buffer = ctypes.create_unicode_buffer(max(required, 1))
+        self._dll.ss_input_last_clipboard_fallback(buffer, len(buffer))
+        return buffer.value
 
     def _last_capture_trace(self) -> str:
         required = self._dll.ss_input_last_capture_trace(None, 0)

@@ -112,6 +112,8 @@ SS_API unsigned int ss_input_last_capture_source();
 SS_API unsigned long long ss_input_last_activation_time_ms();
 SS_API unsigned int ss_input_last_capture_trace(char* buffer,
                                                  unsigned int length);
+SS_API unsigned int ss_input_last_clipboard_fallback(wchar_t* buffer,
+                                                     unsigned int length);
 SS_API unsigned int ss_input_last_error(char* buffer, unsigned int length);
 
 SS_API int ss_ocr_start(unsigned int modifiers, unsigned int virtual_key,

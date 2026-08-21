@@ -36,7 +36,7 @@ def was_speaking_at(activated_at: float, speech_started_at: float, speech_ended_
 
 
 def should_stop_clipboard_speech_immediately(*, speaking: bool, source: str) -> bool:
-    return speaking and source in {"clipboard", "clipboard_fallback"}
+    return speaking and source == "clipboard_fallback"
 
 
 class SelectSpeakApp:
@@ -251,7 +251,10 @@ class SelectSpeakApp:
             config = self._config
         self._player.set_clipboard_mode(enabled)
         self._save_settings(config)
-        logger.info("capture.mode.changed mode=%s", "clipboard" if enabled else "auto")
+        logger.info(
+            "capture.mode.changed mode=%s",
+            "selection_with_clipboard_fallback" if enabled else "selection_only",
+        )
 
     def toggle_auto_hide(self) -> None:
         with self._state_lock:
@@ -317,7 +320,7 @@ class SelectSpeakApp:
         except Exception:
             logger.exception("app.shutdown.resource_failed resource=%s", name)
 
-    def _on_hotkey(self, selected_text: str, activated_at: float) -> None:
+    def _on_hotkey(self, selected_text: str, activated_at: float, clipboard_fallback: str = "") -> None:
         if self._shutting_down:
             return
         logger.info("hotkey.activated hotkey=%s", self._hotkeys.hotkey)
@@ -333,14 +336,22 @@ class SelectSpeakApp:
             speaking_now = session.speaking
             speaking_at_activation = was_speaking_at(activated_at, session.started_at, session.ended_at)
 
-        requested_mode = "clipboard" if clipboard_mode else "auto"
+        requested_mode = "selection_with_clipboard_fallback" if clipboard_mode else "selection_only"
         logger.info(
             "capture.started mode=%s already_speaking=%s speaking_now=%s",
             requested_mode,
             speaking_at_activation,
             speaking_now,
         )
-        capture = resolve_capture(selected_text, self._clipboard.read_text, force_clipboard=clipboard_mode)
+        # Capturing a selection can empty the clipboard to probe for one, so
+        # the native layer copies the original text out beforehand. Prefer
+        # that snapshot: re-reading the clipboard here would see whatever
+        # survived the probe, which is empty when nothing was selected.
+        capture = resolve_capture(
+            selected_text,
+            lambda: clipboard_fallback or self._clipboard.read_text(),
+            allow_clipboard_fallback=clipboard_mode,
+        )
         if capture.source == "clipboard_fallback":
             logger.info(
                 "capture.fallback_to_clipboard selected_length=%d clipboard_length=%d",
@@ -388,7 +399,6 @@ class SelectSpeakApp:
         with self._state_lock:
             if self._shutting_down:
                 return True
-            clipboard_mode = self._clipboard_mode
             session = self._session.snapshot()
             stop_clipboard_speech = should_stop_clipboard_speech_immediately(
                 speaking=session.speaking, source=session.source
@@ -403,10 +413,6 @@ class SelectSpeakApp:
             self.stop()
             with self._state_lock:
                 self._last_hotkey_time = 0.0
-            return True
-        if clipboard_mode:
-            logger.debug("hotkey.clipboard_mode.direct_capture")
-            self._on_hotkey("", time.monotonic())
             return True
         return False
 

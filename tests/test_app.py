@@ -74,6 +74,221 @@ def test_clipboard_speech_stops_before_selection_capture() -> None:
     assert not should_stop_clipboard_speech_immediately(speaking=True, source="selection")
 
 
+def test_clipboard_fallback_survives_a_capture_that_emptied_the_clipboard() -> None:
+    """Capturing a selection can empty the clipboard while probing for one.
+
+    The native layer copies the original text out before that happens, so the
+    fallback must use its snapshot rather than re-reading the clipboard the
+    probe just cleared.
+    """
+
+    class Hotkeys:
+        hotkey = "alt+s"
+        capturing = False
+
+    class Clipboard:
+        read_count = 0
+
+        def read_text(self) -> str:
+            # What a re-read would see after the capture probe cleared it.
+            self.read_count += 1
+            return ""
+
+    class Speaker:
+        spoken: list[str] = []
+
+        def speak(self, request_id: int, text: str, callback: Callable[..., None]) -> bool:
+            del request_id, callback
+            self.spoken.append(text)
+            return True
+
+        def stop(self) -> None:
+            pass
+
+        def pause(self) -> None:
+            pass
+
+        def resume(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    class Voices:
+        switching = False
+        activity = ""
+
+        def __init__(self, speaker: Speaker) -> None:
+            self.speaker = speaker
+
+    class Player:
+        @staticmethod
+        def call_soon(callback: Callable[[], None]) -> None:
+            callback()
+
+        @staticmethod
+        def set_playback(**_values: object) -> None:
+            pass
+
+        @staticmethod
+        def reset_speech_debug() -> None:
+            pass
+
+        @staticmethod
+        def show() -> None:
+            pass
+
+    app = SelectSpeakApp()
+    speaker = Speaker()
+    clipboard = Clipboard()
+    setattr(app, "_hotkeys", Hotkeys())
+    setattr(app, "_clipboard", clipboard)
+    setattr(app, "_voices", Voices(speaker))
+    setattr(app, "_player", Player())
+    setattr(app, "_clipboard_mode", True)
+
+    app._on_hotkey("", 10.0, "Text the probe erased.")
+
+    assert speaker.spoken == ["Text the probe erased."]
+    assert clipboard.read_count == 0
+
+
+def test_clipboard_fallback_is_ignored_when_text_is_selected() -> None:
+    class Hotkeys:
+        hotkey = "alt+s"
+        capturing = False
+
+    class Clipboard:
+        @staticmethod
+        def read_text() -> str:
+            return "Clipboard text."
+
+    class Speaker:
+        spoken: list[str] = []
+
+        def speak(self, request_id: int, text: str, callback: Callable[..., None]) -> bool:
+            del request_id, callback
+            self.spoken.append(text)
+            return True
+
+        def stop(self) -> None:
+            pass
+
+        def pause(self) -> None:
+            pass
+
+        def resume(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    class Voices:
+        switching = False
+        activity = ""
+
+        def __init__(self, speaker: Speaker) -> None:
+            self.speaker = speaker
+
+    class Player:
+        @staticmethod
+        def call_soon(callback: Callable[[], None]) -> None:
+            callback()
+
+        @staticmethod
+        def set_playback(**_values: object) -> None:
+            pass
+
+        @staticmethod
+        def reset_speech_debug() -> None:
+            pass
+
+        @staticmethod
+        def show() -> None:
+            pass
+
+    app = SelectSpeakApp()
+    speaker = Speaker()
+    setattr(app, "_hotkeys", Hotkeys())
+    setattr(app, "_clipboard", Clipboard())
+    setattr(app, "_voices", Voices(speaker))
+    setattr(app, "_player", Player())
+    setattr(app, "_clipboard_mode", True)
+
+    app._on_hotkey("Selected sentence.", 10.0, "Clipboard snapshot.")
+
+    assert speaker.spoken == ["Selected sentence."]
+
+
+def test_clipboard_snapshot_is_unused_when_fallback_is_disabled() -> None:
+    class Hotkeys:
+        hotkey = "alt+s"
+        capturing = False
+
+    class Clipboard:
+        @staticmethod
+        def read_text() -> str:
+            return "Clipboard text."
+
+    class Speaker:
+        spoken: list[str] = []
+
+        def speak(self, request_id: int, text: str, callback: Callable[..., None]) -> bool:
+            del request_id, callback
+            self.spoken.append(text)
+            return True
+
+        def stop(self) -> None:
+            pass
+
+        def pause(self) -> None:
+            pass
+
+        def resume(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    class Voices:
+        switching = False
+        activity = ""
+
+        def __init__(self, speaker: Speaker) -> None:
+            self.speaker = speaker
+
+    class Player:
+        shown = False
+
+        @staticmethod
+        def call_soon(callback: Callable[[], None]) -> None:
+            callback()
+
+        @staticmethod
+        def set_playback(**_values: object) -> None:
+            pass
+
+        @staticmethod
+        def reset_speech_debug() -> None:
+            pass
+
+        @classmethod
+        def show(cls) -> None:
+            cls.shown = True
+
+    app = SelectSpeakApp()
+    speaker = Speaker()
+    setattr(app, "_hotkeys", Hotkeys())
+    setattr(app, "_clipboard", Clipboard())
+    setattr(app, "_voices", Voices(speaker))
+    setattr(app, "_player", Player())
+    setattr(app, "_clipboard_mode", False)
+
+    app._on_hotkey("", 10.0, "Clipboard snapshot.")
+
+    assert speaker.spoken == []
+
+
 def test_delayed_clipboard_fallback_stops_speech_active_at_keypress() -> None:
     class Hotkeys:
         hotkey = "alt+s"
@@ -160,6 +375,16 @@ def test_hotkey_is_consumed_while_voice_backend_is_loading() -> None:
 
     assert app._on_hotkey_activation()
     assert Player.loading_activity == "installing"
+
+
+def test_clipboard_fallback_setting_does_not_bypass_selection_capture() -> None:
+    class Voices:
+        switching = False
+
+    app = SelectSpeakApp(AppConfig(clipboard_mode=True))
+    setattr(app, "_voices", Voices())
+
+    assert not app._on_hotkey_activation()
 
 
 def test_application_allocates_request_ids_and_consumes_ordered_events() -> None:
@@ -318,7 +543,7 @@ def test_shutdown_is_ordered_idempotent_and_continues_after_cleanup_failure(monk
         def close(self) -> None:
             pass
 
-    app = SelectSpeakApp()
+    app = SelectSpeakApp(AppConfig(clipboard_mode=True))
     speaker = Speaker()
     app._session.start(speaker, 1, "Active speech", "selection", 1.0)
     setattr(app, "_hotkeys", Resource("hotkeys", "close", fail=True))

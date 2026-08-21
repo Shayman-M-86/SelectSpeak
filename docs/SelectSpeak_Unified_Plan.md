@@ -970,35 +970,37 @@ Implement:
 
 ---
 
-# Phase G — Stable PCM session abstraction
+# Phase G — Native PCM session abstraction
 
-Implement `PcmPlaybackSession`.
+Implement PcmPlaybackSession against the new native XAudio2 path.
 
-Do not couple backend code directly to Python `WaveOutPlayer`.
+Backend code must not depend directly on Python WaveOutPlayer.
 
----
+Python WaveOut remains legacy code only until the native path is proven and switched on. Do not build a compatibility adapter between the old and new playback systems.
 
-# Phase G1 — Optional minimal WaveOut compatibility adapter
+No:
 
-Create this adapter only if the dual-path rollout requires the old engine behind
-the final PCM abstraction. Otherwise leave the existing WaveOut path isolated
-and migrate directly to the native XAudio2 session.
+WaveOut implementation of PcmPlaybackSession
+compatibility wrapper
+dual playback abstraction
+effort spent making WaveOut conform to the new architecture
 
-If required, wrap existing Python WaveOut only enough to satisfy the final PCM abstraction.
+Instead the migration becomes:
 
-Do not heavily optimize it.
+existing WaveOut path
+→ remains untouched temporarily
 
-Allowed:
+while separately building:
 
-* return minimal buffered-frame telemetry if required
-* minimal correctness changes
+new PcmPlaybackSession
+→ native C++
+→ XAudio2
 
-Avoid:
+Then integration moves Natural/Supertonic onto the new path.
 
-* major buffer rewrite
-* full Python event-engine rewrite
-* major thread refactor
-* architectural polish on code scheduled for deletion
+Once the new path passes the Package A comparisons:
+
+delete WaveOut
 
 ---
 
@@ -1421,10 +1423,6 @@ The phase and package letters intentionally align.
 
 * stable `PcmPlaybackSession`
 
-### Package G1 — Optional temporary adapter
-
-* optional minimal Python WaveOut compatibility implementation of G
-
 ## Package H — Backpressure
 
 * interruptible bounded submission
@@ -1557,7 +1555,6 @@ Every accepted request ends exactly once.
 
 ## Rule 9 — Transitional code has a deletion package
 
-* G1, if needed, is deleted by N
 * rollout switch M is deleted by N
 * Python WaveOut is deleted by N
 * temporary old-path telemetry disappears after O

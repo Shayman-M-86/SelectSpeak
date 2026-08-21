@@ -50,6 +50,7 @@ struct RuntimeState {
     std::mutex error_mutex;
     std::string last_error;
     std::string last_capture_trace;
+    std::wstring last_clipboard_fallback;
 };
 
 struct OcrHotkeyRegistration {
@@ -81,6 +82,8 @@ void CompleteCapture(ULONGLONG requested_at, SelectionCapture capture)
     {
         std::lock_guard lock(g_runtime.error_mutex);
         g_runtime.last_capture_trace = std::move(capture.trace);
+        g_runtime.last_clipboard_fallback =
+            std::move(capture.clipboard_fallback_text);
     }
     SetError(capture.error);
     if (g_runtime.callback != nullptr) {
@@ -378,6 +381,13 @@ unsigned int LastCaptureTrace(char* buffer, unsigned int length)
     std::lock_guard lock(g_runtime.error_mutex);
     return selectspeak::abi::CopyString(g_runtime.last_capture_trace, buffer,
                                         length);
+}
+
+unsigned int LastClipboardFallback(wchar_t* buffer, unsigned int length)
+{
+    std::lock_guard lock(g_runtime.error_mutex);
+    return selectspeak::abi::CopyString(g_runtime.last_clipboard_fallback,
+                                        buffer, length);
 }
 
 unsigned int LastError(char* buffer, unsigned int length)

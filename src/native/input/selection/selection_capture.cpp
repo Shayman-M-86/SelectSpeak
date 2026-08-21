@@ -691,7 +691,9 @@ SelectionCapture CaptureSelectedText(unsigned int active_modifiers,
           << " focus_retried=" << focus_retried
           << " focused_class=" << focused_class;
     if (!ui.text.empty()) {
-        SelectionCapture result{ui.text, CaptureSource::UiAutomation, {}};
+        SelectionCapture result;
+        result.text = ui.text;
+        result.source = CaptureSource::UiAutomation;
         result.trace = finish_trace("uia");
         return result;
     }
@@ -715,36 +717,42 @@ SelectionCapture CaptureSelectedText(unsigned int active_modifiers,
         ClipboardOwnerWindow owner_window;
         const HWND clipboard_owner = owner_window.get();
 
+        // Take the clipboard's text by value before anything below empties
+        // it. This is the fallback source, so it must not depend on the
+        // restore below succeeding against an uncooperative application.
+        const auto fallback_started = std::chrono::steady_clock::now();
+        std::string fallback_error;
+        result.clipboard_fallback_text =
+            ReadClipboardText(clipboard_owner, fallback_error);
+        trace << " fallback_read_ms=" << ElapsedMs(fallback_started)
+              << " fallback_text_length="
+              << result.clipboard_fallback_text.size();
+
+        // Preserving the other formats is a courtesy to the user's clipboard,
+        // never a correctness requirement. Duplicate the data eagerly:
+        // OleGetClipboard only hands back a proxy to the source application's
+        // data, which EmptyClipboard below would destroy.
         const auto snapshot_started = std::chrono::steady_clock::now();
-        winrt::com_ptr<IDataObject> ole_snapshot;
-        const HRESULT ole_snapshot_result =
-            OleGetClipboard(ole_snapshot.put());
         bool manual_snapshot_complete = false;
         std::string preservation_diagnostic;
         std::unique_ptr<ClipboardSnapshot> manual_snapshot;
-        if (FAILED(ole_snapshot_result) || !ole_snapshot) {
-            try {
-                manual_snapshot = SnapshotClipboard(
-                    clipboard_owner, manual_snapshot_complete,
-                    preservation_diagnostic);
-            } catch (const std::exception& error) {
-                preservation_diagnostic = error.what();
-            } catch (...) {
-                preservation_diagnostic = "unknown_snapshot_exception";
-            }
+        try {
+            manual_snapshot = SnapshotClipboard(
+                clipboard_owner, manual_snapshot_complete,
+                preservation_diagnostic);
+        } catch (const std::exception& error) {
+            preservation_diagnostic = error.what();
+        } catch (...) {
+            preservation_diagnostic = "unknown_snapshot_exception";
         }
-        const char* snapshot_status = ole_snapshot
-                                          ? "ole"
-                                      : manual_snapshot == nullptr
+        const char* snapshot_status = manual_snapshot == nullptr
                                           ? "failed"
                                       : manual_snapshot_complete
                                           ? "manual_complete"
                                           : "manual_partial";
         trace << " snapshot_ms=" << ElapsedMs(snapshot_started)
               << " snapshot_status=" << snapshot_status
-              << " snapshot_warning=" << !preservation_diagnostic.empty()
-              << " ole_snapshot_result="
-              << static_cast<long>(ole_snapshot_result);
+              << " snapshot_warning=" << !preservation_diagnostic.empty();
 
         // Prefer a command message because it does not disturb keyboard state.
         // Chromium host windows consistently ignore WM_COPY, so do not touch
@@ -801,31 +809,24 @@ SelectionCapture CaptureSelectedText(unsigned int active_modifiers,
         if (captured_sequence == 0) {
             captured_sequence = GetClipboardSequenceNumber();
         }
+        // One attempt only. The fallback text is already held by value, so a
+        // failed restore costs the user's clipboard, not this capture.
         const auto restore_started = std::chrono::steady_clock::now();
         const char* restore_status = "unavailable";
-        HRESULT ole_restore_result = E_FAIL;
         const ClipboardRestoreDecision restore_decision = DecideClipboardRestore(
-            ole_snapshot || manual_snapshot != nullptr, captured_sequence,
+            manual_snapshot != nullptr, captured_sequence,
             GetClipboardSequenceNumber());
         if (restore_decision ==
             ClipboardRestoreDecision::SkipNewerContent) {
             restore_status = "skipped_newer_content";
-        } else if (restore_decision == ClipboardRestoreDecision::Restore &&
-                   ole_snapshot) {
-            ole_restore_result = OleSetClipboard(ole_snapshot.get());
-            restore_status = SUCCEEDED(ole_restore_result) ? "complete"
-                                                           : "failed";
-        } else if (restore_decision == ClipboardRestoreDecision::Restore &&
-                   manual_snapshot != nullptr) {
+        } else if (restore_decision == ClipboardRestoreDecision::Restore) {
             const bool restored = manual_snapshot->Restore(clipboard_owner);
             restore_status = !restored ? "failed"
                              : manual_snapshot_complete ? "complete"
                                                         : "partial";
         }
         trace << " restore_ms=" << ElapsedMs(restore_started)
-              << " restore_status=" << restore_status
-              << " ole_restore_result="
-              << static_cast<long>(ole_restore_result);
+              << " restore_status=" << restore_status;
         } catch (const std::exception& error) {
             result.error = error.what();
         } catch (...) {

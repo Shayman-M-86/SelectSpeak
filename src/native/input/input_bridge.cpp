@@ -58,6 +58,16 @@ unsigned int ss_input_last_capture_trace(char* buffer, unsigned int length)
         [&] { return selectspeak::input::LastCaptureTrace(buffer, length); });
 }
 
+unsigned int ss_input_last_clipboard_fallback(wchar_t* buffer,
+                                              unsigned int length)
+{
+    return selectspeak::abi::GuardResult<unsigned int>(
+        0, [](const std::string&) {},
+        [&] {
+            return selectspeak::input::LastClipboardFallback(buffer, length);
+        });
+}
+
 unsigned int ss_input_last_error(char* buffer, unsigned int length)
 {
     return selectspeak::abi::GuardResult<unsigned int>(

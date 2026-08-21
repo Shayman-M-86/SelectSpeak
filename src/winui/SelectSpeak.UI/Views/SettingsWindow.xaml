@@ -159,9 +159,9 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <StackPanel VerticalAlignment="Center" Grid.Column="0">
-                            <TextBlock Text="Always read the clipboard" />
+                            <TextBlock Text="Use clipboard fallback" />
                             <TextBlock
-                                Text="Otherwise the selection is read, falling back to the clipboard."
+                                Text="Read selected text first, or the clipboard when nothing is selected."
                                 Style="{ThemeResource CaptionTextBlockStyle}"
                                 TextWrapping="Wrap"
                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}" />

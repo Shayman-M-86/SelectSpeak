@@ -20,6 +20,7 @@ void Stop();
 unsigned int LastCaptureSource();
 unsigned long long LastActivationTimeMs();
 unsigned int LastCaptureTrace(char* buffer, unsigned int length);
+unsigned int LastClipboardFallback(wchar_t* buffer, unsigned int length);
 unsigned int LastError(char* buffer, unsigned int length);
 void SetLastError(const std::string& message);
 
