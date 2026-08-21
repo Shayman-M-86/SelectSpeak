@@ -1,121 +1,143 @@
-# Architecture Roadmap Execution
+# Let’s Execute the Architecture Roadmap
 
-Use this guide to continue the
-[unified architecture roadmap](../SelectSpeak_Unified_Plan.md). The package
-letters describe implementation boundaries; they do not require one agent session
-each. [STATUS.md](STATUS.md) is the cursor that tells each new agent where to
-resume.
+This guide helps each agent pick up the baton, understand the current package,
+and turn the roadmap into working, validated software. The
+[unified architecture roadmap](../SelectSpeak_Unified_Plan.md) provides the
+direction. [STATUS.md](STATUS.md) shows exactly where the work stands.
 
-## Generic continuation prompt
+Package letters are implementation boundaries, not session limits. An agent keeps
+working on the current package while safe, actionable work remains.
 
-Give every implementation agent this same prompt:
+## The mission
 
-> Continue executing the SelectSpeak architecture roadmap. Read
-> `docs/SelectSpeak_Unified_Plan.md`,
-> `docs/architecture-roadmap/EXECUTION.md`, and
-> `docs/architecture-roadmap/STATUS.md`. Use STATUS.md to select or resume the
-> current package; do not ask me to choose one unless a recorded gate or
-> architectural decision genuinely requires my input. Perform the bounded
-> preflight, then Proceed, Adapt, or Escalate according to EXECUTION.md. Make the
-> smallest coherent change that advances the selected package, validate it
-> proportionally, preserve unrelated working-tree changes, update the package
-> report and STATUS.md, and leave a concise handoff. Do not begin work beyond a
-> blocked or unmet gate. Do not commit or publish unless explicitly requested.
+Move the selected package to a real outcome:
 
-## Selecting the current package
+1. **Pick up the current work.** Resume `Active`, or select the earliest eligible
+   package from `STATUS.md`.
+2. **Understand the live implementation.** Trace the code and tests that directly
+   carry the responsibility.
+3. **Choose the right route.** Proceed, Adapt, or Escalate based on evidence.
+4. **Build the package.** Make the code, test, configuration, or measurement
+   changes needed to satisfy its outcomes.
+5. **Prove the result.** Run focused checks and the broader validation justified
+   by the change.
+6. **Leave a clear trail.** Update the rolling package report and `STATUS.md` so
+   the next agent can continue immediately.
+
+Keep moving until the package is **Complete** or a concrete decision outside the
+agent’s authority makes it **Blocked**. A preflight, investigation, partial
+baseline, or report is useful progress, but it is not a stopping point while
+implementable package work remains.
+
+## Choosing the current package
 
 Use this order:
 
 1. Resume the package marked `Active`.
-2. Otherwise select the earliest roadmap package marked `Ready` whose gate is
-   satisfied.
-3. Otherwise select the earliest `Unassessed` package whose preceding gate is
-   satisfied and perform its preflight.
-4. Do not skip an earlier `Blocked` package when it gates later work. Report the
-   concrete decision needed instead.
-5. If status and code disagree, investigate the discrepancy and correct the
-   ledger using current evidence.
+2. Otherwise, take the earliest `Ready` package whose gate is satisfied.
+3. Otherwise, preflight the earliest eligible `Unassessed` package.
+4. When an earlier `Blocked` package gates the path, surface the exact decision
+   needed to unlock it.
+5. When status and code disagree, investigate the difference and bring the ledger
+   back in line with current evidence.
 
-Mark the selected package `Active` when implementation begins. Keep at most one
-package `Active` unless the roadmap explicitly calls for independent concurrent
-work.
+Mark implementation work `Active` and keep one package active at a time unless the
+roadmap explicitly identifies independent concurrent work.
 
-## Bounded preflight
+## A quick, useful preflight
 
-Before editing, establish:
+Build a confident picture of:
 
-- the observable result the assignment must produce
-- how current code performs that responsibility
-- whether the work is absent, partial, complete, or based on a stale assumption
-- the direct callers, callees, ownership path, interfaces, and tests involved
-- whether affected code is transitional and which later package deletes it
-- whether the work conflicts with a frozen Package C contract or a package gate
+- the observable result this package must deliver
+- the code that currently owns the responsibility
+- the exact gap between today’s implementation and the package outcome
+- direct callers, callees, ownership paths, interfaces, and relevant tests
+- transitional code and the later package responsible for removing it
+- frozen Package C contracts and gates that shape the implementation
 
-Investigate proportionally:
+Match the investigation to the work:
 
-| Change | Inspect by default |
+| Change | Useful default depth |
 | --- | --- |
 | Small test, configuration, or cleanup | Target files, implementation under test, and nearby tests |
 | Behaviour or ownership | Target implementation, direct dependencies, ownership path, and relevant tests |
-| Native or cross-layer contract | That specific path through the necessary Python, C++, and UI layers |
+| Native or cross-layer contract | The specific path through the necessary Python, C++, and UI layers |
 
-Expand only when concrete code evidence shows that the change reaches farther.
-Packages A, C, and O are intentionally broad. Cross-layer packages such as D, F,
-G, J, K, and L normally require tracing their specific interface end to end.
+Follow concrete dependencies when they lead farther. Packages A, C, and O are
+intentionally broad; D, F, G, J, K, and L usually need an end-to-end look at their
+specific interface.
 
-## Decide how to proceed
+## Choose the route and act
 
-- **Proceed** — the package still matches current code closely enough to implement
-  as written.
-- **Adapt** — the objective remains valid, but bounded implementation details must
-  change while preserving architectural intent and frozen contracts.
-- **Escalate** — stop for a decision because a frozen contract must change, a
-  material assumption is false, scope expands substantially, ownership would be
-  duplicated, or major work would be spent on code scheduled for deletion.
+- **Proceed** — the roadmap matches the live implementation. Build the package as
+  designed.
+- **Adapt** — the goal is right and implementation details have evolved. Adjust
+  the route while preserving the architectural destination and frozen contracts.
+- **Escalate** — a genuine design decision is needed because a frozen contract,
+  package gate, ownership model, or major roadmap assumption must change. Present
+  the concrete evidence and the smallest decision that unlocks progress.
 
-If work is already complete, validate the package outcomes and record the evidence
-instead of reimplementing it. Minor differences normally belong under `Adapt`, not
-`Escalate`.
+When the package is already partly implemented, validate what exists and finish
+the remaining outcomes. When it is already complete, prove that with current
+evidence and close it confidently.
 
-## Scope and validation
+## Build with focus
 
-- Make the smallest coherent change that completely satisfies the assignment.
-- Do not clean up neighboring code, redesign later packages, or build speculative
-  abstractions.
-- Do not optimize transitional code beyond what its migration seam requires.
-- Package C contracts are authoritative after explicit review and freeze; do not
-  silently redesign them.
-- Preserve user-visible behaviour unless the assigned package changes it.
-- If behaviour regresses broadly or implementation drifts substantially, compare
-  the affected path with the known-good feature-branch commit recorded in the
-  unified plan before making broad corrective changes.
-- Run tests directly related to changed behaviour, followed by the normal checks
-  for the affected area.
-- Use full-system checks when required by the package, cross-layer risk, or targeted
-  failures. State clearly what could not be run.
+- Deliver the smallest coherent implementation that fully satisfies the package.
+- Keep neighboring systems stable and preserve unrelated working-tree changes.
+- Give transitional code exactly the seam it needs for migration, with its
+  deletion package kept visible.
+- Treat reviewed Package C contracts as the shared foundation for later work.
+- Preserve today’s working user experience unless the package intentionally
+  changes a behaviour.
+- When several behaviours regress or the implementation loses its bearings,
+  compare the affected path with the known-good feature-branch commit recorded in
+  the unified plan and recover the proven semantics.
+- Keep commits and publishing as deliberate user-controlled actions.
 
-## Handoff
+## Validate like the result matters
 
-When work begins on a package, create or update its one small durable report at:
+Start with tests closest to the changed behaviour. Follow with the normal checks
+for the affected area, then use integration or full-system validation when the
+package or risk calls for it.
+
+Record what passed, what failed, and what the environment could not exercise. A
+targeted check is valuable evidence; label it accurately rather than presenting it
+as complete project validation.
+
+## Package report and handoff
+
+Create or update one rolling report for the active package:
 
 ```text
-reports/package-[id]-short-name.md
+docs/architecture-roadmap/reports/package-[id]-short-name.md
 ```
 
-The report is a rolling outcome and handoff artifact, not a session transcript.
-Keep it brief:
+Keep it crisp and useful:
 
-- **Found:** important differences between roadmap assumptions and current code
-- **Changed:** the main implementation results
-- **Validation:** checks and outcomes
-- **Remaining:** only genuine unfinished work, blockers, or later-package gates
+- **Found:** discoveries that changed or confirmed the approach
+- **Changed:** concrete implementation and artifact outcomes
+- **Validation:** checks, results, and meaningful limitations
+- **Remaining:** exact package work still actionable, or the gate that blocks it
 
-Link the report from [STATUS.md](STATUS.md) and update that package's status,
-blocker, and next action after every working session. Use the same four headings
-in the agent's final response. When another agent resumes the package, it updates
-the existing report rather than creating another session file.
+Link the report from [STATUS.md](STATUS.md) and update both after every working
+session. A later agent updates the same package report instead of creating a new
+session diary.
 
-If a package produces a contract freeze, baseline measurements, performance
-comparison, or other substantial evidence, store that evidence as its own artifact
-under `reports/` and link it from the package report. Do not create daily logs,
-raw reasoning records, or command-by-command transcripts.
+Store contract freezes, baseline measurements, performance comparisons, and other
+substantial evidence beside the package reports and link them. These artifacts
+should help future implementation; concise results are far more valuable than raw
+reasoning or command transcripts.
+
+## Definition of done
+
+A package is `Complete` when:
+
+- its roadmap outcomes are implemented or proven already present
+- relevant tests and checks support the result
+- important limitations and later-package dependencies are explicit
+- its package report captures the durable outcome
+- `STATUS.md` points the next agent to the next eligible work
+
+If safe, actionable work from the package remains, keep implementing it. The
+report records the journey; it never substitutes for delivering the package.

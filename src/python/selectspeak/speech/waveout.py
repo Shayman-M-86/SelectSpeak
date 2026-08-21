@@ -6,6 +6,9 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable
+from dataclasses import dataclass, field
+from math import ceil
+from statistics import median
 from typing import Any
 
 from .debug import SpeechDebugCallback, SpeechDebugEvent, with_queue_delay
@@ -67,6 +70,44 @@ class _MMTime(ctypes.Structure):
 _QueuedBlock = tuple[ctypes.Array[Any], _WaveHeader, int]
 
 
+@dataclass(slots=True)
+class _PlaybackTelemetry:
+    """Temporary old-path measurements retained until Package O."""
+
+    feed_sizes: list[int] = field(default_factory=list)
+    max_pending_bytes: int = 0
+    loop_iterations: int = 0
+    position_queries: int = 0
+    blocks_submitted: int = 0
+    boundary_delays_ms: list[float] = field(default_factory=list)
+    underruns: int = 0
+    stop_reset_ms: float | None = None
+    started_process_time: float = 0.0
+    started_thread_count: int = 0
+    peak_thread_count: int = 0
+
+    def reset(self, *, process_time: float, thread_count: int) -> None:
+        self.feed_sizes.clear()
+        self.max_pending_bytes = 0
+        self.loop_iterations = 0
+        self.position_queries = 0
+        self.blocks_submitted = 0
+        self.boundary_delays_ms.clear()
+        self.underruns = 0
+        self.stop_reset_ms = None
+        self.started_process_time = process_time
+        self.started_thread_count = thread_count
+        self.peak_thread_count = thread_count
+
+    @staticmethod
+    def distribution(values: list[int] | list[float]) -> tuple[float, float, float, float]:
+        if not values:
+            return 0.0, 0.0, 0.0, 0.0
+        ordered = sorted(values)
+        p95_index = max(0, ceil(len(ordered) * 0.95) - 1)
+        return float(ordered[0]), float(median(ordered)), float(ordered[p95_index]), float(ordered[-1])
+
+
 class WaveOutPlayer:
     """Play one persistent PCM stream and emit text boundaries at playback time."""
 
@@ -105,6 +146,7 @@ class WaveOutPlayer:
         self._playback_block_bytes = self._bytes_per_second // 10
         self._prebuffer_bytes = self._playback_block_bytes * 2
         self._started_at = 0.0
+        self._telemetry = _PlaybackTelemetry()
 
     @property
     def fed_bytes(self) -> int:
@@ -124,6 +166,8 @@ class WaveOutPlayer:
         self._submitted_bytes = 0
         self._fed_bytes = 0
         self._started_at = time.monotonic()
+        thread_count = threading.active_count()
+        self._telemetry.reset(process_time=time.process_time(), thread_count=thread_count)
         with self._boundary_lock:
             self._boundaries.clear()
         with self._debug_lock:
@@ -145,6 +189,11 @@ class WaveOutPlayer:
             with self._audio_condition:
                 self._pending_audio.extend(data)
                 self._fed_bytes += len(data)
+                self._telemetry.feed_sizes.append(len(data))
+                self._telemetry.max_pending_bytes = max(
+                    self._telemetry.max_pending_bytes,
+                    len(self._pending_audio),
+                )
                 self._audio_condition.notify_all()
 
     def feed_silence(self, seconds: float) -> None:
@@ -209,7 +258,9 @@ class WaveOutPlayer:
             self._synthesis_finished = True
             self._audio_condition.notify_all()
         if self._handle:
+            reset_started_at = time.monotonic()
             self._winmm.waveOutReset(self._handle)
+            self._telemetry.stop_reset_ms = (time.monotonic() - reset_started_at) * 1000
             self._done.wait(timeout=1)
         else:
             self._done.set()
@@ -248,6 +299,11 @@ class WaveOutPlayer:
             self._mark_playback_started()
 
             while not self._stopped.is_set():
+                self._telemetry.loop_iterations += 1
+                self._telemetry.peak_thread_count = max(
+                    self._telemetry.peak_thread_count,
+                    threading.active_count(),
+                )
                 self._process_playback_updates(queued)
                 self._fill_playback_queue(queued)
                 if self._playback_finished(queued):
@@ -341,11 +397,13 @@ class WaveOutPlayer:
             round((time.monotonic() - self._started_at) * 1000),
             self._stopped.is_set(),
         )
+        self._log_telemetry()
         self._done.set()
 
     def _log_underrun(self, started_at: float, ended_at: float) -> None:
         duration_ms = round((ended_at - started_at) * 1000)
         if duration_ms >= 20:
+            self._telemetry.underruns += 1
             logger.warning(
                 "audio.playback.underrun backend=%s duration_ms=%s buffered_seconds=%s",
                 self._backend_name,
@@ -402,6 +460,7 @@ class WaveOutPlayer:
             self._winmm.waveOutUnprepareHeader(self._handle, ctypes.byref(header), size)
             raise
         self._submitted_bytes += len(chunk)
+        self._telemetry.blocks_submitted += 1
         return buffer, header, len(chunk)
 
     def _release_completed(self, queued: deque[_QueuedBlock]) -> None:
@@ -414,6 +473,7 @@ class WaveOutPlayer:
             )
 
     def _update_playback_position(self) -> None:
+        self._telemetry.position_queries += 1
         position = _MMTime(TIME_BYTES)
         result = self._winmm.waveOutGetPosition(self._handle, ctypes.byref(position), ctypes.sizeof(position))
         if result:
@@ -432,12 +492,56 @@ class WaveOutPlayer:
 
     def _emit_boundaries(self) -> None:
         ready: list[tuple[int, int]] = []
+        position_observed_at = time.monotonic()
         with self._boundary_lock:
             while self._boundaries and self._boundaries[0][0] <= self._played_bytes:
                 _, position, length = self._boundaries.pop(0)
                 ready.append((position, length))
         for position, length in ready:
+            self._telemetry.boundary_delays_ms.append((time.monotonic() - position_observed_at) * 1000)
             self._callback(position, length)
+
+    def _log_telemetry(self) -> None:
+        elapsed_seconds = max(0.0, time.monotonic() - self._started_at)
+        process_seconds = max(0.0, time.process_time() - self._telemetry.started_process_time)
+        process_cpu_pct = process_seconds / elapsed_seconds * 100 if elapsed_seconds else 0.0
+        feed_min, feed_median, feed_p95, feed_max = self._telemetry.distribution(
+            self._telemetry.feed_sizes
+        )
+        delay_min, delay_median, delay_p95, delay_max = self._telemetry.distribution(
+            self._telemetry.boundary_delays_ms
+        )
+        logger.info(
+            "audio.playback.telemetry backend=%s feed_count=%s feed_size_bytes_min=%s "
+            "feed_size_bytes_median=%s feed_size_bytes_p95=%s feed_size_bytes_max=%s "
+            "total_fed_bytes=%s max_pending_bytes=%s loop_iterations=%s position_queries=%s "
+            "blocks_submitted=%s boundary_count=%s boundary_delay_ms_min=%.3f "
+            "boundary_delay_ms_median=%.3f boundary_delay_ms_p95=%.3f "
+            "boundary_delay_ms_max=%.3f underruns=%s stop_reset_ms=%s process_cpu_pct=%.2f "
+            "threads_start=%s threads_peak=%s threads_finish=%s",
+            self._backend_name,
+            len(self._telemetry.feed_sizes),
+            round(feed_min),
+            round(feed_median),
+            round(feed_p95),
+            round(feed_max),
+            self._fed_bytes,
+            self._telemetry.max_pending_bytes,
+            self._telemetry.loop_iterations,
+            self._telemetry.position_queries,
+            self._telemetry.blocks_submitted,
+            len(self._telemetry.boundary_delays_ms),
+            delay_min,
+            delay_median,
+            delay_p95,
+            delay_max,
+            self._telemetry.underruns,
+            None if self._telemetry.stop_reset_ms is None else round(self._telemetry.stop_reset_ms, 3),
+            process_cpu_pct,
+            self._telemetry.started_thread_count,
+            self._telemetry.peak_thread_count,
+            threading.active_count(),
+        )
 
     def _emit_debug_markers(self) -> None:
         if self._debug_callback is None:

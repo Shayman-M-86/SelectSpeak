@@ -1,8 +1,8 @@
 # Architecture Roadmap Status
 
-This is the live cross-session ledger for the
-[unified architecture roadmap](../SelectSpeak_Unified_Plan.md). Keep entries
-concise and link each completed package's small report from the final column.
+This is the roadmap’s baton: it tells every new agent what is active, what is
+ready, and what success unlocks next. Keep it current, concise, and connected to
+each package’s rolling report.
 
 Statuses: `Unassessed`, `Ready`, `Active`, `Blocked`, `Complete`.
 `Unassessed` means current code has not yet been checked; it does not mean the work
@@ -11,8 +11,8 @@ is absent. A new agent resumes `Active`; otherwise it selects the earliest eligi
 
 | Package | Focus | Gate or sequencing note | Status | Evidence, blocker, or next action |
 | --- | --- | --- | --- | --- |
-| A | Baseline and telemetry | First package; preserve results for O | Unassessed | Inventory existing tests and measurements before adding instrumentation. |
-| B | Lifecycle and ownership | Use A behaviour baseline | Unassessed | Assess shutdown, close/join, and speaker ownership. |
+| A | Baseline and telemetry | First package; preserve results for O | Complete | Repeatable Natural/Supertonic workload, temporary telemetry, clean diagnostics, and durable comparison evidence delivered. [Report](reports/package-a-baseline.md) |
+| B | Lifecycle and ownership | Use A behaviour baseline | Ready | Assess authoritative shutdown, backend close/join, speaker ownership, and the one-second Natural stop settlement observed by A. |
 | C | Interface checkpoint | Explicit review/freeze before D–J interface work | Unassessed | Reconcile proposed contracts with current code, then obtain freeze decision. |
 | D | Request and completion | C frozen | Unassessed | Trace identity and completion through the direct path. |
 | E | `PlaybackController` | D stable | Unassessed | Simplify state without pulling in audio migration. |

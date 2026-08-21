@@ -1,5 +1,6 @@
 import json
 import types
+from typing import Any, cast
 
 from selectspeak.app.application import SelectSpeakApp
 from selectspeak.ui.hints import shortcut_label
@@ -18,11 +19,12 @@ class _Session:
 
 def _app_with(*, speaking: bool, paused: bool) -> tuple[SelectSpeakApp, list[str]]:
     app = SelectSpeakApp()
-    app._session = _Session(speaking=speaking, paused=paused)
+    test_app = cast(Any, app)
+    test_app._session = _Session(speaking=speaking, paused=paused)
     calls: list[str] = []
-    app.pause = lambda: calls.append("pause")
-    app.resume = lambda: calls.append("resume")
-    app.replay = lambda: calls.append("replay")
+    test_app.pause = lambda: calls.append("pause")
+    test_app.resume = lambda: calls.append("resume")
+    test_app.replay = lambda: calls.append("replay")
     return app, calls
 
 
@@ -48,7 +50,9 @@ def _player_recording_sends() -> tuple[WinUiPlayer, list[dict[str, object]]]:
     """A player whose messages are captured instead of written to a pipe."""
     player = WinUiPlayer(hotkey="alt+s", ocr_hotkey="alt+d")
     sent: list[dict[str, object]] = []
-    player._send = lambda message_type, **fields: sent.append({"type": message_type, **fields})
+    cast(Any, player)._send = lambda message_type, **fields: sent.append(
+        {"type": message_type, **fields}
+    )
     return player, sent
 
 

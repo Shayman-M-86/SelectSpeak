@@ -559,7 +559,7 @@ class WinUiPlayer:
                 return None
             count = win32file.GetOverlappedResult(pipe, overlapped, False)
             # AllocateReadBuffer returns a memoryview; the stub understates it.
-            return bytes(buffer[:count]) if count else b""  # type: ignore[index]
+            return bytes(buffer[:count]) if count else b""  # ty: ignore[not-subscriptable]
         finally:
             win32file.CloseHandle(overlapped.hEvent)
 

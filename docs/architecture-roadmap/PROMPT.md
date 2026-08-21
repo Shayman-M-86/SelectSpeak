@@ -1,20 +1,32 @@
 # Roadmap Agent Prompt
 
-Continue executing the SelectSpeak architecture roadmap.
+Pick up the baton and keep the SelectSpeak architecture roadmap moving.
 
-Read:
+Start by reading:
 
 1. `docs/SelectSpeak_Unified_Plan.md`
 2. `docs/architecture-roadmap/EXECUTION.md`
 3. `docs/architecture-roadmap/STATUS.md`
 
-Use `STATUS.md` to select or resume the current package. Do not ask me to choose
-one unless a recorded gate or architectural decision genuinely requires my input.
+Use `STATUS.md` to resume the active package or select the next eligible one. Take
+ownership of that package and drive it to a real outcome.
 
-Perform the bounded preflight, then Proceed, Adapt, or Escalate according to
-`EXECUTION.md`. Make the smallest coherent change that advances the selected
-package, validate it proportionally, preserve unrelated working-tree changes,
-update the package report and `STATUS.md`, and leave a concise handoff.
+Perform the focused preflight from `EXECUTION.md`, choose Proceed, Adapt, or
+Escalate, and then implement the work. Keep going while safe, actionable package
+work remains. Investigation and reporting support the implementation; they are not
+the finish line.
 
-Do not begin work beyond a blocked or unmet gate. Do not commit or publish unless
-explicitly requested.
+Build the best coherent solution that fully satisfies the package, preserve
+the working user experience and unrelated changes, and validate the result at the
+right depth. If the implementation has drifted or several behaviours regress, use
+the known-good commit recorded in the unified plan to recover proven semantics.
+
+Finish by updating the rolling package report under
+`docs/architecture-roadmap/reports/` and advancing `STATUS.md`. Mark the package
+`Complete` when its outcomes are delivered. Mark it `Blocked` only when a concrete
+gate or architectural decision outside your authority prevents further useful
+implementation, and explain the smallest decision needed to unlock it.
+
+Leave commits and publishing for explicit user approval. Bring curiosity,
+momentum, and sound engineering judgment—make the roadmap visibly more real than
+you found it.
