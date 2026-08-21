@@ -9,7 +9,12 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from ...config import SpeechConfig
-from ...native import get_native_bridge
+from ...native import (
+    VoiceAudioCallback,
+    VoiceListCallback,
+    VoiceWordCallback,
+    get_native_bridge,
+)
 from ..contracts import SpeechEventCallback
 from ..debug import SpeechDebugCallback, emit_speech_debug
 from ..pipeline import AdaptiveSpeechSession, GenerationStatistics
@@ -36,24 +41,6 @@ class NaturalVoice:
     display_name: str
 
 
-_AUDIO_CALLBACK = ctypes.CFUNCTYPE(None, ctypes.POINTER(ctypes.c_uint8), ctypes.c_uint32, ctypes.c_void_p)
-_WORD_CALLBACK = ctypes.CFUNCTYPE(
-    None,
-    ctypes.c_uint64,
-    ctypes.c_uint32,
-    ctypes.c_uint32,
-    ctypes.c_void_p,
-)
-_VOICE_CALLBACK = ctypes.CFUNCTYPE(
-    None,
-    ctypes.c_wchar_p,
-    ctypes.c_char_p,
-    ctypes.c_char_p,
-    ctypes.c_char_p,
-    ctypes.c_void_p,
-)
-
-
 def _decode(value: bytes | None) -> str:
     return value.decode("utf-8", errors="replace") if value else ""
 
@@ -63,7 +50,7 @@ def discover_natural_voices(config: SpeechConfig) -> list[NaturalVoice]:
     dll = get_native_bridge(config.native_dll).library
     voices: list[NaturalVoice] = []
 
-    @_VOICE_CALLBACK
+    @VoiceListCallback
     def collect_voice(
         package_path: str,
         name: bytes,
@@ -80,8 +67,6 @@ def discover_natural_voices(config: SpeechConfig) -> list[NaturalVoice]:
             )
         )
 
-    dll.ss_voice_list.argtypes = [_VOICE_CALLBACK, ctypes.c_void_p]
-    dll.ss_voice_list.restype = ctypes.c_uint32
     dll.ss_voice_list(collect_voice, None)
     return voices
 
@@ -97,10 +82,9 @@ class NaturalVoiceEngine:
     ) -> None:
         self._bridge = get_native_bridge(config.native_dll)
         self._dll = self._bridge.library
-        self._configure_api()
-        self._audio_callback = _AUDIO_CALLBACK(self._on_audio)
-        self._word_callback = _WORD_CALLBACK(self._on_word)
-        self._voice_callback = _VOICE_CALLBACK(self._on_voice)
+        self._audio_callback = VoiceAudioCallback(self._on_audio)
+        self._word_callback = VoiceWordCallback(self._on_word)
+        self._voice_callback = VoiceListCallback(self._on_voice)
         self._audio_consumer = audio_callback
         self._boundary_consumer = boundary_callback
         self._voices: list[NaturalVoice] = []
@@ -201,29 +185,6 @@ class NaturalVoiceEngine:
 
     def close(self) -> None:
         self._dll.ss_voice_shutdown()
-
-    def _configure_api(self) -> None:
-        self._dll.ss_voice_list.argtypes = [_VOICE_CALLBACK, ctypes.c_void_p]
-        self._dll.ss_voice_list.restype = ctypes.c_uint32
-        self._dll.ss_voice_initialize.argtypes = [ctypes.c_wchar_p, ctypes.c_char_p]
-        self._dll.ss_voice_initialize.restype = ctypes.c_int
-        self._dll.ss_voice_set_audio_callback.argtypes = [
-            _AUDIO_CALLBACK,
-            ctypes.c_void_p,
-        ]
-        self._dll.ss_voice_set_word_callback.argtypes = [
-            _WORD_CALLBACK,
-            ctypes.c_void_p,
-        ]
-        self._dll.ss_voice_speak.argtypes = [ctypes.c_wchar_p]
-        self._dll.ss_voice_speak.restype = ctypes.c_int
-        self._dll.ss_voice_stop.restype = ctypes.c_int
-        self._dll.ss_voice_shutdown.restype = None
-        self._dll.ss_voice_last_error.argtypes = [
-            ctypes.c_char_p,
-            ctypes.c_uint32,
-        ]
-        self._dll.ss_voice_last_error.restype = ctypes.c_uint32
 
     def _on_audio(
         self,
@@ -412,7 +373,7 @@ class NaturalVoiceSpeaker:
                 return
 
     def _speak_request(self, request: _SpeechRequest) -> None:
-        if not self._playback.begin(request.generation):
+        if not self._playback.is_current(request.generation):
             return
         self._synthesize_request(request)
         self._playback.complete(request.generation)

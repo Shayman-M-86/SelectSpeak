@@ -8,7 +8,7 @@ from collections.abc import Callable
 from typing import Any
 
 from ..infrastructure.logging import text_preview
-from ..native import get_native_bridge
+from ..native import ActivationCallback, CaptureCallback, get_native_bridge
 from .keymap import to_windows_hotkey
 
 logger = logging.getLogger(__name__)
@@ -16,10 +16,6 @@ logger = logging.getLogger(__name__)
 
 class NativeInputError(RuntimeError):
     pass
-
-
-_CAPTURE_CALLBACK = ctypes.CFUNCTYPE(None, ctypes.c_wchar_p, ctypes.c_void_p)
-_ACTIVATION_CALLBACK = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p)
 
 
 class NativeInputAdapter:
@@ -37,9 +33,8 @@ class NativeInputAdapter:
         self._activation_handler = activation_handler
         self._bridge = get_native_bridge(dll_path)
         self._dll = self._bridge.library
-        self._configure_api()
-        self._callback = _CAPTURE_CALLBACK(self._on_capture)
-        self._activation_callback = _ACTIVATION_CALLBACK(self._on_activation)
+        self._callback = CaptureCallback(self._on_capture)
+        self._activation_callback = ActivationCallback(self._on_activation)
         self._started = False
 
     def start(self) -> None:
@@ -74,30 +69,6 @@ class NativeInputAdapter:
             self._dll.ss_input_stop()
             self._started = False
         logger.info("native_input.stopped hotkey=%s", self.hotkey)
-
-    def _configure_api(self) -> None:
-        self._dll.ss_input_start.argtypes = [
-            ctypes.c_uint,
-            ctypes.c_uint,
-            _CAPTURE_CALLBACK,
-            _ACTIVATION_CALLBACK,
-            ctypes.c_void_p,
-        ]
-        self._dll.ss_input_start.restype = ctypes.c_int
-        self._dll.ss_input_rebind.argtypes = [ctypes.c_uint, ctypes.c_uint]
-        self._dll.ss_input_rebind.restype = ctypes.c_int
-        self._dll.ss_input_capture_now.argtypes = []
-        self._dll.ss_input_capture_now.restype = ctypes.c_int
-        self._dll.ss_input_stop.argtypes = []
-        self._dll.ss_input_stop.restype = None
-        self._dll.ss_input_last_capture_source.argtypes = []
-        self._dll.ss_input_last_capture_source.restype = ctypes.c_uint
-        self._dll.ss_input_last_activation_time_ms.argtypes = []
-        self._dll.ss_input_last_activation_time_ms.restype = ctypes.c_ulonglong
-        self._dll.ss_input_last_capture_trace.argtypes = [ctypes.c_char_p, ctypes.c_uint]
-        self._dll.ss_input_last_capture_trace.restype = ctypes.c_uint
-        self._dll.ss_input_last_error.argtypes = [ctypes.c_char_p, ctypes.c_uint]
-        self._dll.ss_input_last_error.restype = ctypes.c_uint
 
     def _on_capture(self, text: str | None, _context: Any) -> None:
         captured = text or ""

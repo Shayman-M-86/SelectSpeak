@@ -135,7 +135,7 @@ class SapiWorker:
         )
 
     def _play_request(self, voice: SapiVoice, request: SpeechRequest) -> None:
-        if not self._playback.begin(request.generation):
+        if not self._playback.is_current(request.generation):
             return
         logger.info(
             "speaker.request.started generation=%s text_length=%s text_preview=%s",

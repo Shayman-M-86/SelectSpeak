@@ -234,7 +234,7 @@ class SupertonicSpeaker:
                 return
 
     def _speak_request(self, request: _SpeechRequest) -> None:
-        if not self._playback.begin(request.generation):
+        if not self._playback.is_current(request.generation):
             return
         self._synthesize_request(request)
         self._playback.complete(request.generation)

@@ -10,32 +10,13 @@ from PIL import Image, ImageDraw, ImageFont
 
 from selectspeak.input import ocr_capture
 from selectspeak.input.ocr_capture import OcrCaptureHotkey
-from selectspeak.native import get_native_bridge
+from selectspeak.native import OcrCallback, get_native_bridge
 
 RUNTIME_OCR_DLL = Path(__file__).parents[1] / ".runtime" / "native" / "selectspeak_native.dll"
-_OCR_TEST_CALLBACK = ctypes.CFUNCTYPE(
-    None,
-    ctypes.c_wchar_p,
-    ctypes.c_uint,
-    ctypes.c_void_p,
-)
-
-
 def _recognize_image(image: Image.Image) -> tuple[int, list[tuple[int, str]]]:
     results: list[tuple[int, str]] = []
-    callback = _OCR_TEST_CALLBACK(lambda text, status, _context: results.append((status, text or "")))
+    callback = OcrCallback(lambda text, status, _context: results.append((status, text or "")))
     dll = get_native_bridge(str(RUNTIME_OCR_DLL)).library
-    dll.ss_ocr_recognize_bgra.argtypes = [
-        ctypes.POINTER(ctypes.c_ubyte),
-        ctypes.c_uint64,
-        ctypes.c_uint,
-        ctypes.c_uint,
-        ctypes.c_uint,
-        ctypes.c_wchar_p,
-        _OCR_TEST_CALLBACK,
-        ctypes.c_void_p,
-    ]
-    dll.ss_ocr_recognize_bgra.restype = ctypes.c_int
     bgra = image.tobytes("raw", "BGRA")
     pixels = (ctypes.c_ubyte * len(bgra)).from_buffer_copy(bgra)
     return_code = dll.ss_ocr_recognize_bgra(
@@ -196,20 +177,9 @@ def test_built_bridge_reconstructs_visual_wraps_and_paragraphs() -> None:
 def test_built_bridge_rejects_an_undersized_bgra_buffer() -> None:
     dll = get_native_bridge(str(RUNTIME_OCR_DLL)).library
     callback_results: list[tuple[int, str]] = []
-    callback = _OCR_TEST_CALLBACK(
+    callback = OcrCallback(
         lambda text, status, _context: callback_results.append((status, text or ""))
     )
-    dll.ss_ocr_recognize_bgra.argtypes = [
-        ctypes.POINTER(ctypes.c_ubyte),
-        ctypes.c_uint64,
-        ctypes.c_uint,
-        ctypes.c_uint,
-        ctypes.c_uint,
-        ctypes.c_wchar_p,
-        _OCR_TEST_CALLBACK,
-        ctypes.c_void_p,
-    ]
-    dll.ss_ocr_recognize_bgra.restype = ctypes.c_int
     pixels = (ctypes.c_ubyte * 16)()
 
     result = dll.ss_ocr_recognize_bgra(

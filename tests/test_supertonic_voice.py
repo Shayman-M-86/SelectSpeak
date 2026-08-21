@@ -116,6 +116,7 @@ def test_supertonic_uses_one_stream_and_only_pauses_at_sentence_boundaries() -> 
     speaker._config = AppConfig(structure_pause_seconds=0.1).speech
     speaker._playback = PlaybackController()
     request, _active = speaker._playback.submit(1, text, lambda _event: None)
+    assert speaker._playback.next_request() == request
     speaker._request_generation = 0
     speaker._generation_statistics = GenerationStatistics()
     player = _FakePlayer()
@@ -188,7 +189,7 @@ def test_supertonic_close_stops_playback_and_joins_inference_worker() -> None:
     speaker._closed = False
     speaker._playback = PlaybackController()
     request, _active = speaker._playback.submit(1, "Read this", lambda _event: None)
-    assert speaker._playback.begin(request.generation)
+    assert speaker._playback.next_request() == request
     speaker._player = Player()
     speaker._thread = Worker()
 

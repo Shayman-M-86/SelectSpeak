@@ -21,6 +21,7 @@ configure_file(version.rc.in selectspeak_version.rc @ONLY)
 
 set(SELECTSPEAK_NATIVE_SOURCES
     api.cpp
+    audio/audio_api_stub.cpp
     input/input_bridge.cpp
     input/hotkeys/hotkey_runtime.cpp
     input/ocr/ocr_capture.cpp
@@ -74,6 +75,18 @@ if(SELECTSPEAK_ENABLE_NATURAL_VOICE)
 endif()
 
 if(BUILD_TESTING)
+    add_executable(selectspeak_audio_api_tests
+        audio/audio_api_stub.cpp
+        audio/audio_api_tests.cpp)
+    target_compile_features(selectspeak_audio_api_tests PRIVATE cxx_std_17)
+    target_compile_definitions(selectspeak_audio_api_tests PRIVATE
+        SELECTSPEAK_NATIVE_EXPORTS)
+    if(MSVC)
+        target_compile_options(selectspeak_audio_api_tests PRIVATE
+            /utf-8 /W4 /permissive- /sdl /Zc:__cplusplus)
+    endif()
+    add_test(NAME audio_api COMMAND selectspeak_audio_api_tests)
+
     add_executable(selectspeak_ocr_layout_tests
         input/ocr/ocr_layout.cpp
         input/ocr/ocr_layout_tests.cpp)

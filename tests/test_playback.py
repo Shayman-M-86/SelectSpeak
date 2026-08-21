@@ -1,5 +1,6 @@
 import threading
 from collections.abc import Callable
+from queue import Empty
 
 import pytest
 
@@ -49,7 +50,7 @@ def test_completion_delivers_words_then_exactly_one_terminal() -> None:
     playback = PlaybackController()
     events = EventRecorder()
     request, _active = playback.submit(1, "Read this", events)
-    assert playback.begin(request.generation)
+    assert playback.next_request() == request
 
     playback.played_word(request.generation, 0, 4)
     playback.complete(request.generation)
@@ -69,8 +70,7 @@ def test_completion_delivers_words_then_exactly_one_terminal() -> None:
 def test_pause_commands_change_shared_state_when_consumed() -> None:
     playback = PlaybackController()
     request, _active = playback.submit(1, "Read this", lambda _event: None)
-    assert playback.begin(request.generation)
-    playback.consume_command()  # Clear the submit-time resume signal.
+    assert playback.next_request() == request
 
     assert playback.request_pause()
     assert playback.consume_command() is PlaybackCommand.PAUSE
@@ -85,7 +85,7 @@ def test_close_rejects_new_work_wakes_worker_and_emits_closed() -> None:
     playback = PlaybackController()
     events = EventRecorder()
     request, _active = playback.submit(1, "Read this", events)
-    assert playback.begin(request.generation)
+    assert playback.next_request() == request
 
     assert playback.close()
 
@@ -96,6 +96,91 @@ def test_close_rejects_new_work_wakes_worker_and_emits_closed() -> None:
     ]
     with pytest.raises(RuntimeError, match="speech backend is closed"):
         playback.submit(2, "Too late", events)
+
+
+def test_close_wakes_a_worker_blocked_for_the_next_request() -> None:
+    playback = PlaybackController()
+    waiting = threading.Event()
+    result: list[object] = []
+
+    def wait_for_request() -> None:
+        waiting.set()
+        result.append(playback.next_request())
+
+    worker = threading.Thread(target=wait_for_request)
+    worker.start()
+    assert waiting.wait(timeout=1)
+
+    assert not playback.close()
+    worker.join(timeout=1)
+
+    assert not worker.is_alive()
+    assert result == [None]
+
+
+def test_failure_wakes_a_worker_blocked_for_the_next_request() -> None:
+    playback = PlaybackController()
+    waiting = threading.Event()
+    result: list[object] = []
+
+    def wait_for_request() -> None:
+        waiting.set()
+        result.append(playback.next_request())
+
+    worker = threading.Thread(target=wait_for_request)
+    worker.start()
+    assert waiting.wait(timeout=1)
+
+    playback.fail()
+    worker.join(timeout=1)
+
+    assert not worker.is_alive()
+    assert result == [None]
+    with pytest.raises(RuntimeError, match="speech worker has failed"):
+        playback.submit(1, "Too late", lambda _event: None)
+    playback.close()
+
+
+def test_next_request_timeout_matches_queue_contract() -> None:
+    playback = PlaybackController()
+
+    with pytest.raises(Empty):
+        playback.next_request(timeout=0)
+
+    playback.close()
+
+
+def test_superseding_request_clears_pending_control_command() -> None:
+    playback = PlaybackController()
+    first, _active = playback.submit(1, "First", lambda _event: None)
+    assert playback.next_request() == first
+    assert playback.request_pause()
+
+    second, _active = playback.submit(2, "Second", lambda _event: None)
+
+    assert playback.next_request() == second
+    assert playback.consume_command() is PlaybackCommand.NONE
+    playback.close()
+
+
+def test_event_callback_can_cancel_its_request_without_deadlocking() -> None:
+    playback = PlaybackController()
+    events: list[SpeechEvent] = []
+
+    def cancel_on_start(event: SpeechEvent) -> None:
+        events.append(event)
+        if isinstance(event, SpeechStarted):
+            playback.cancel()
+
+    playback.submit(1, "Read this", cancel_on_start)
+
+    assert events == [
+        SpeechStarted(1),
+        SpeechTerminal(1, TerminalStatus.CANCELLED),
+    ]
+    with pytest.raises(Empty):
+        playback.next_request(timeout=0)
+    playback.close()
 
 
 @pytest.mark.parametrize("request_id", [0, -1, UINT64_MAX + 1])
@@ -128,7 +213,7 @@ def test_non_success_terminal_statuses_are_delivered_once(
     playback = PlaybackController()
     events = EventRecorder()
     request, _active = playback.submit(1, "Read this", events)
-    assert playback.begin(request.generation)
+    assert playback.next_request() == request
 
     action(playback, request.generation)
     playback.complete(request.generation)

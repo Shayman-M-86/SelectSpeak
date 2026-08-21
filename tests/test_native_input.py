@@ -40,8 +40,9 @@ def test_native_bridge_rejects_an_incompatible_api(
             return self.result
 
     class FakeLibrary:
-        ss_api_version = FakeFunction(99)
-        ss_shutdown = FakeFunction()
+        def __init__(self) -> None:
+            self.ss_api_version = FakeFunction(99)
+            self.ss_shutdown = FakeFunction()
 
     class FakeDirectory:
         def close(self) -> None:
@@ -57,5 +58,5 @@ def test_native_bridge_rejects_an_incompatible_api(
         raising=False,
     )
 
-    with pytest.raises(NativeBridgeError, match="expected API 6, found 99"):
+    with pytest.raises(NativeBridgeError, match="expected API 7, found 99"):
         NativeBridge(dll)
