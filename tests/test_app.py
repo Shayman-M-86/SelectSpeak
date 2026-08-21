@@ -11,6 +11,7 @@ from selectspeak.app.application import (
 )
 from selectspeak.app.voices import VoiceController, confirm_supertonic_install
 from selectspeak.config import AppConfig
+from selectspeak.speech import SpeechStarted, SpeechTerminal, SpeechWord, TerminalStatus
 
 
 def test_supertonic_install_confirmation_uses_windows_yes_result(monkeypatch) -> None:
@@ -86,9 +87,9 @@ def test_delayed_clipboard_fallback_stops_speech_active_at_keypress() -> None:
     class Speaker:
         stop_count = 0
 
-        def speak(self, text: str) -> int:
-            del text
-            return 1
+        def speak(self, request_id: int, text: str, callback: Callable[..., None]) -> bool:
+            del request_id, text, callback
+            return True
 
         def stop(self) -> None:
             self.stop_count += 1
@@ -98,10 +99,6 @@ def test_delayed_clipboard_fallback_stops_speech_active_at_keypress() -> None:
 
         def resume(self) -> None:
             pass
-
-        def wait_until_done(self, generation: int) -> bool:
-            del generation
-            return True
 
         def close(self) -> None:
             pass
@@ -165,6 +162,55 @@ def test_hotkey_is_consumed_while_voice_backend_is_loading() -> None:
     assert Player.loading_activity == "installing"
 
 
+def test_application_allocates_request_ids_and_consumes_ordered_events() -> None:
+    class Speaker:
+        request_ids: list[int] = []
+
+        def speak(self, request_id: int, text: str, callback: Callable[..., None]) -> bool:
+            self.request_ids.append(request_id)
+            callback(SpeechStarted(request_id))
+            callback(SpeechWord(request_id, text, 0, 4))
+            callback(SpeechTerminal(request_id, TerminalStatus.COMPLETED))
+            return True
+
+    class Voices:
+        switching = False
+
+        def __init__(self, speaker: Speaker) -> None:
+            self.speaker = speaker
+
+    class Player:
+        highlights: list[tuple[int, int]] = []
+
+        @staticmethod
+        def call_soon(callback: Callable[[], None]) -> None:
+            callback()
+
+        @staticmethod
+        def reset_speech_debug() -> None:
+            pass
+
+        @staticmethod
+        def set_playback(**_values: object) -> None:
+            pass
+
+        @classmethod
+        def highlight_word(cls, position: int, length: int) -> None:
+            cls.highlights.append((position, length))
+
+    app = SelectSpeakApp()
+    speaker = Speaker()
+    setattr(app, "_voices", Voices(speaker))
+    setattr(app, "_player", Player())
+
+    app._begin_speech("Read this", source="selection")
+    app._begin_speech("Read that", source="selection")
+
+    assert speaker.request_ids == [1, 2]
+    assert Player.highlights == [(0, 4), (0, 4)]
+    assert app._session.snapshot().terminal_status is TerminalStatus.COMPLETED
+
+
 def test_stop_targets_the_speaker_that_started_the_active_request() -> None:
     class Speaker:
         def __init__(self) -> None:
@@ -173,19 +219,15 @@ def test_stop_targets_the_speaker_that_started_the_active_request() -> None:
         def stop(self) -> None:
             self.stop_count += 1
 
-        def speak(self, text: str) -> int:
-            del text
-            return 1
+        def speak(self, request_id: int, text: str, callback: Callable[..., None]) -> bool:
+            del request_id, text, callback
+            return True
 
         def pause(self) -> None:
             pass
 
         def resume(self) -> None:
             pass
-
-        def wait_until_done(self, generation: int) -> bool:
-            del generation
-            return True
 
         def close(self) -> None:
             pass
@@ -230,7 +272,6 @@ def test_voice_controller_creates_owns_and_closes_initial_speaker(monkeypatch) -
     controller = VoiceController(
         AppConfig(),
         cast(Any, object()),
-        word_callback=lambda *_args: None,
         debug_callback=lambda _event: None,
         on_activated=lambda *_args: None,
         on_stop_playback=lambda: None,
@@ -261,9 +302,9 @@ def test_shutdown_is_ordered_idempotent_and_continues_after_cleanup_failure(monk
                 raise RuntimeError(f"{self.name} failed")
 
     class Speaker:
-        def speak(self, text: str) -> int:
-            del text
-            return 1
+        def speak(self, request_id: int, text: str, callback: Callable[..., None]) -> bool:
+            del request_id, text, callback
+            return True
 
         def stop(self) -> None:
             events.append("active_playback")
@@ -273,10 +314,6 @@ def test_shutdown_is_ordered_idempotent_and_continues_after_cleanup_failure(monk
 
         def resume(self) -> None:
             pass
-
-        def wait_until_done(self, generation: int) -> bool:
-            del generation
-            return False
 
         def close(self) -> None:
             pass

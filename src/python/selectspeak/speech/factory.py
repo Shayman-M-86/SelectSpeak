@@ -1,7 +1,7 @@
 import logging
 
 from ..config import AppConfig
-from .contracts import Speaker, WordCallback
+from .contracts import Speaker
 from .debug import SpeechDebugCallback
 
 logger = logging.getLogger(__name__)
@@ -9,7 +9,6 @@ logger = logging.getLogger(__name__)
 
 def create_speaker(
     config: AppConfig,
-    word_callback: WordCallback | None = None,
     debug_callback: SpeechDebugCallback | None = None,
 ) -> Speaker:
     """Create the configured local speech backend."""
@@ -30,14 +29,14 @@ def create_speaker(
         else:
             from .backends.supertonic import SupertonicSpeaker
 
-            speaker = SupertonicSpeaker(config.speech, word_callback, debug_callback)
+            speaker = SupertonicSpeaker(config.speech, debug_callback)
             logger.info("speaker.backend.selected backend=%s", backend)
             return speaker
     if backend != "sapi":
         try:
             from .backends.natural import NaturalVoiceSpeaker
 
-            speaker = NaturalVoiceSpeaker(config.speech, word_callback, debug_callback)
+            speaker = NaturalVoiceSpeaker(config.speech, debug_callback)
             logger.info("speaker.backend.selected backend=%s", "natural")
             return speaker
         except Exception:
@@ -47,4 +46,4 @@ def create_speaker(
     from .backends.sapi import SapiSpeaker
 
     logger.info("speaker.backend.selected backend=%s", "sapi")
-    return SapiSpeaker(config.speech, word_callback)
+    return SapiSpeaker(config.speech)

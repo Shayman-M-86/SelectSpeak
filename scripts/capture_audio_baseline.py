@@ -7,6 +7,7 @@ Package O may remove them after the final comparison is preserved.
 from __future__ import annotations
 
 import argparse
+import itertools
 import logging
 import threading
 import time
@@ -15,7 +16,7 @@ from pathlib import Path
 
 from selectspeak.config.settings import SettingsStore
 from selectspeak.infrastructure.logging import configure_logging
-from selectspeak.speech.contracts import Speaker
+from selectspeak.speech.contracts import Speaker, SpeechEvent, SpeechTerminal, TerminalStatus
 
 COMPLETION_TEXT = (
     "SelectSpeak turns selected text into clear local speech. "
@@ -30,6 +31,23 @@ STOP_TEXT = (
 ) * 8
 
 logger = logging.getLogger("selectspeak.baseline")
+_REQUEST_IDS = itertools.count(1)
+
+
+class _TerminalWaiter:
+    def __init__(self) -> None:
+        self._settled = threading.Event()
+        self.status = TerminalStatus.NONE
+
+    def __call__(self, event: SpeechEvent) -> None:
+        if isinstance(event, SpeechTerminal):
+            self.status = event.status
+            self._settled.set()
+
+    def wait(self, timeout: float = 120.0) -> TerminalStatus:
+        if not self._settled.wait(timeout):
+            raise RuntimeError("Speech request did not settle within the workload timeout")
+        return self.status
 
 
 def _create_backend(config, backend: str) -> Speaker:
@@ -41,7 +59,14 @@ def _create_backend(config, backend: str) -> Speaker:
         return SupertonicSpeaker(config.speech)
     from selectspeak.speech.backends.natural import NaturalVoiceSpeaker
 
-    return NaturalVoiceSpeaker(config.speech, None)
+    return NaturalVoiceSpeaker(config.speech)
+
+
+def _submit(speaker: Speaker, text: str) -> _TerminalWaiter:
+    waiter = _TerminalWaiter()
+    if not speaker.speak(next(_REQUEST_IDS), text, waiter):
+        raise RuntimeError("Speech workload was rejected")
+    return waiter
 
 
 def _sample_resources(label: str, duration: float = 1.0) -> None:
@@ -79,16 +104,13 @@ def _wait_for_new_audio(speaker: Speaker, previous_start: float) -> None:
 
 
 def _speak_to_completion(speaker: Speaker) -> None:
-    generation = speaker.speak(COMPLETION_TEXT)
-    if generation is None or not speaker.wait_until_done(generation):
+    if _submit(speaker, COMPLETION_TEXT).wait() is not TerminalStatus.COMPLETED:
         raise RuntimeError("Completion workload did not complete normally")
 
 
 def _pause_and_resume(speaker: Speaker) -> None:
     previous_start = _playback_start(speaker)
-    generation = speaker.speak(PAUSE_TEXT)
-    if generation is None:
-        raise RuntimeError("Pause workload was rejected")
+    waiter = _submit(speaker, PAUSE_TEXT)
     _wait_for_new_audio(speaker, previous_start)
     time.sleep(0.35)
     pause_started_at = time.monotonic()
@@ -98,7 +120,7 @@ def _pause_and_resume(speaker: Speaker) -> None:
     resume_started_at = time.monotonic()
     speaker.resume()
     resume_call_ms = (time.monotonic() - resume_started_at) * 1000
-    if not speaker.wait_until_done(generation):
+    if waiter.wait() is not TerminalStatus.COMPLETED:
         raise RuntimeError("Pause/resume workload did not complete normally")
     logger.info(
         "baseline.pause_resume pause_call_ms=%.3f held_ms=300 resume_call_ms=%.3f",
@@ -109,15 +131,13 @@ def _pause_and_resume(speaker: Speaker) -> None:
 
 def _stop_during_playback(speaker: Speaker) -> None:
     previous_start = _playback_start(speaker)
-    generation = speaker.speak(STOP_TEXT)
-    if generation is None:
-        raise RuntimeError("Stop workload was rejected")
+    waiter = _submit(speaker, STOP_TEXT)
     _wait_for_new_audio(speaker, previous_start)
     time.sleep(0.35)
     stop_started_at = time.monotonic()
     speaker.stop()
     stop_call_ms = (time.monotonic() - stop_started_at) * 1000
-    settled = not speaker.wait_until_done(generation)
+    settled = waiter.wait() is TerminalStatus.CANCELLED
     logger.info("baseline.stop stop_call_ms=%.3f request_settled=%s", stop_call_ms, settled)
 
 

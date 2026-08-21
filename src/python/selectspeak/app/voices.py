@@ -76,7 +76,6 @@ class VoiceController:
         config: AppConfig,
         player: Player,
         *,
-        word_callback: Callable[[str, int, int], None],
         debug_callback: SpeechDebugCallback,
         on_activated: Callable[[str, str, AppConfig], None],
         on_stop_playback: Callable[[], None],
@@ -84,7 +83,6 @@ class VoiceController:
     ) -> None:
         self._config = config
         self._player = player
-        self._word_callback = word_callback
         self._debug_callback = debug_callback
         self._on_activated = on_activated
         self._on_stop_playback = on_stop_playback
@@ -157,7 +155,7 @@ class VoiceController:
             if self._closed:
                 raise RuntimeError("Voice controller is closed")
             config = self._config
-        speaker = create_speaker(config, self._word_callback, self._debug_callback)
+        speaker = create_speaker(config, self._debug_callback)
         backend = speaker_backend(speaker)
         with self._lock:
             if self._closed:
@@ -251,7 +249,7 @@ class VoiceController:
             if option.backend == "natural" and isinstance(speaker, NaturalVoiceSpeaker):
                 speaker.select_voice(option.package_path)
             elif speaker is None:
-                speaker = create_speaker(selected_config, self._word_callback, self._debug_callback)
+                speaker = create_speaker(selected_config, self._debug_callback)
                 created = True
 
             with self._lock:

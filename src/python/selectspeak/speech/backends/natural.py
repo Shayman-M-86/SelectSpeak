@@ -10,6 +10,7 @@ from typing import Any, Protocol
 
 from ...config import SpeechConfig
 from ...native import get_native_bridge
+from ..contracts import SpeechEventCallback
 from ..debug import SpeechDebugCallback, emit_speech_debug
 from ..pipeline import AdaptiveSpeechSession, GenerationStatistics
 from ..playback import PlaybackController, SpeechRequest
@@ -293,14 +294,12 @@ class NaturalVoiceSpeaker:
     def __init__(
         self,
         config: SpeechConfig,
-        word_callback: Callable[[str, int, int], None] | None,
         debug_callback: SpeechDebugCallback | None = None,
     ) -> None:
         self._config = config
-        self._word_callback = word_callback
         self._debug_callback = debug_callback
         self._playback = PlaybackController()
-        self._request_text = ""
+        self._request_generation = 0
         self._segment_text_offset = 0
         self._segment_audio_base = 0
         self._generation_statistics = GenerationStatistics()
@@ -344,17 +343,17 @@ class NaturalVoiceSpeaker:
         )
         return selected
 
-    def speak(self, text: str) -> int | None:
+    def speak(self, request_id: int, text: str, callback: SpeechEventCallback) -> bool:
         if len(text) < self._config.minimum_text_length:
-            return None
+            return False
         try:
-            request, active = self._playback.submit(text)
+            request, active = self._playback.submit(request_id, text, callback)
         except RuntimeError as error:
             raise NaturalVoiceError("The Natural Voice worker has failed") from error
         if active:
             self._player.stop()
             self._engine.stop()
-        return request.generation
+        return True
 
     def stop(self) -> None:
         _generation, active = self._playback.cancel()
@@ -368,9 +367,6 @@ class NaturalVoiceSpeaker:
     def resume(self) -> None:
         if self._playback.resume_now():
             self._player.resume()
-
-    def wait_until_done(self, generation: int) -> bool:
-        return self._playback.wait_until_done(generation)
 
     def close(self) -> None:
         with self._close_lock:
@@ -418,16 +414,14 @@ class NaturalVoiceSpeaker:
     def _speak_request(self, request: _SpeechRequest) -> None:
         if not self._playback.begin(request.generation):
             return
-        try:
-            self._synthesize_request(request)
-        finally:
-            self._playback.complete(request.generation)
+        self._synthesize_request(request)
+        self._playback.complete(request.generation)
 
     def _synthesize_request(self, request: _SpeechRequest) -> None:
         session = AdaptiveSpeechSession.start(request.text, "natural", self._generation_statistics)
         if session is None:
             return
-        self._request_text = request.text
+        self._request_generation = request.generation
         self._player.start()
         try:
             self._synthesize_chunks(request.generation, session)
@@ -471,8 +465,7 @@ class NaturalVoiceSpeaker:
         )
 
     def _on_played_word(self, position: int, length: int) -> None:
-        if self._word_callback:
-            self._word_callback(self._request_text, position, length)
+        self._playback.played_word(self._request_generation, position, length)
 
     def _is_superseded(self, generation: int) -> bool:
         return not self._playback.is_current(generation)

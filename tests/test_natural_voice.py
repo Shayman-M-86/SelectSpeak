@@ -253,9 +253,8 @@ def test_natural_voice_uses_the_shared_persistent_stream() -> None:
     )
     speaker = object.__new__(NaturalVoiceSpeaker)
     speaker._config = AppConfig(structure_pause_seconds=0.1).speech
-    speaker._word_callback = None
     speaker._playback = PlaybackController()
-    request, _active = speaker._playback.submit(text)
+    request, _active = speaker._playback.submit(1, text, lambda _event: None)
     speaker._request_text = ""
     speaker._segment_text_offset = 0
     speaker._segment_audio_base = 0
@@ -300,7 +299,7 @@ def test_natural_voice_close_cancels_joins_and_releases_engine() -> None:
     speaker._close_lock = threading.Lock()
     speaker._closed = False
     speaker._playback = PlaybackController()
-    request, _active = speaker._playback.submit("Read this")
+    request, _active = speaker._playback.submit(1, "Read this", lambda _event: None)
     assert speaker._playback.begin(request.generation)
     speaker._player = Player()
     speaker._engine = Engine()

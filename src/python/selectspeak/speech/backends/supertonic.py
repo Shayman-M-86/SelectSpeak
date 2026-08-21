@@ -11,7 +11,7 @@ from supertonic import TTS
 
 from ...config import SpeechConfig
 from ...config.paths import model_dir
-from ..contracts import WordCallback
+from ..contracts import SpeechEventCallback
 from ..debug import SpeechDebugCallback, emit_speech_debug
 from ..pipeline import AdaptiveSpeechSession, GenerationStatistics
 from ..playback import PlaybackController, SpeechRequest
@@ -146,18 +146,16 @@ class SupertonicSpeaker:
     def __init__(
         self,
         config: SpeechConfig,
-        word_callback: WordCallback | None = None,
         debug_callback: SpeechDebugCallback | None = None,
     ) -> None:
         self._config = config
-        self._word_callback = word_callback
         self._debug_callback = debug_callback
         self._playback = PlaybackController()
         # A cancelled inference cannot be interrupted by the Supertonic API.
         # Serialize it with the next request so two ONNX runs cannot contend
         # for the CPU and turn a cancellation into a large startup outlier.
         self._synthesis_lock = threading.Lock()
-        self._request_text = ""
+        self._request_generation = 0
         self._generation_statistics = GenerationStatistics()
         self._close_lock = threading.Lock()
         self._closed = False
@@ -181,13 +179,13 @@ class SupertonicSpeaker:
             self._sample_rate,
         )
 
-    def speak(self, text: str) -> int | None:
+    def speak(self, request_id: int, text: str, callback: SpeechEventCallback) -> bool:
         if len(text) < self._config.minimum_text_length:
-            return None
-        request, active = self._playback.submit(text)
+            return False
+        request, active = self._playback.submit(request_id, text, callback)
         if active:
             self._player.stop()
-        return request.generation
+        return True
 
     def stop(self) -> None:
         _generation, active = self._playback.cancel()
@@ -201,9 +199,6 @@ class SupertonicSpeaker:
     def resume(self) -> None:
         if self._playback.resume_now():
             self._player.resume()
-
-    def wait_until_done(self, generation: int) -> bool:
-        return self._playback.wait_until_done(generation)
 
     def close(self) -> None:
         with self._close_lock:
@@ -232,6 +227,8 @@ class SupertonicSpeaker:
             try:
                 self._speak_request(request)
             except Exception:
+                if self._is_superseded(request.generation):
+                    continue
                 logger.exception("supertonic.request.failed generation=%s", request.generation)
                 self._playback.fail(request.generation)
                 return
@@ -239,10 +236,8 @@ class SupertonicSpeaker:
     def _speak_request(self, request: _SpeechRequest) -> None:
         if not self._playback.begin(request.generation):
             return
-        try:
-            self._synthesize_request(request)
-        finally:
-            self._playback.complete(request.generation)
+        self._synthesize_request(request)
+        self._playback.complete(request.generation)
 
     def _synthesize_request(self, request: _SpeechRequest) -> None:
         session = AdaptiveSpeechSession.start(request.text, "supertonic", self._generation_statistics)
@@ -251,7 +246,7 @@ class SupertonicSpeaker:
         prepared = self._prepare_chunk(session)
         if self._is_superseded(request.generation):
             return
-        self._request_text = request.text
+        self._request_generation = request.generation
         self._player.start()
         try:
             self._queue_chunks(request.generation, session, prepared)
@@ -352,8 +347,7 @@ class SupertonicSpeaker:
         )
 
     def _on_played_word(self, position: int, length: int) -> None:
-        if self._word_callback:
-            self._word_callback(self._request_text, position, length)
+        self._playback.played_word(self._request_generation, position, length)
 
     def _wait_for_buffer_capacity(self, generation: int) -> bool:
         while self._player.buffered_seconds > MAX_BUFFERED_AUDIO_SECONDS:

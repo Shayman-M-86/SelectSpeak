@@ -15,7 +15,7 @@ def test_sapi_close_wakes_and_joins_worker_once() -> None:
     speaker._close_lock = threading.Lock()
     speaker._closed = False
     speaker._playback = PlaybackController()
-    request, _active = speaker._playback.submit("Read this")
+    request, _active = speaker._playback.submit(1, "Read this", lambda _event: None)
     assert speaker._playback.begin(request.generation)
     speaker._worker = Worker()
 

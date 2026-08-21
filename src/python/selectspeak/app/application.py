@@ -14,7 +14,7 @@ from ..input.hotkeys import HotkeyManager
 from ..input.keymap import to_windows_hotkey
 from ..input.ocr_capture import OcrCaptureError, OcrCaptureHotkey
 from ..native import shutdown_native_bridge
-from ..speech import Speaker
+from ..speech import Speaker, SpeechEvent, SpeechStarted, SpeechTerminal, SpeechWord, TerminalStatus
 from ..speech.debug import SpeechDebugEvent
 from ..speech.normalization import prepare_for_speech
 from ..ui.contracts import Player
@@ -57,7 +57,7 @@ class SelectSpeakApp:
         self._speech_debug_enabled = config.speech_debug_enabled
         self._last_hotkey_time = 0.0
         self._shutting_down = False
-        self._speech_waiters: set[threading.Thread] = set()
+        self._last_request_id = 0
         logger.debug(
             "app.created app_name=%s default_hotkey=%s",
             config.app_name,
@@ -123,7 +123,6 @@ class SelectSpeakApp:
             self._voices = VoiceController(
                 self._config,
                 self._player,
-                word_callback=self._on_word,
                 debug_callback=self._on_speech_debug,
                 on_activated=self._on_voice_activated,
                 on_stop_playback=self.stop,
@@ -302,11 +301,10 @@ class SelectSpeakApp:
 
         state = self._session.snapshot()
         if state.speaker is not None:
-            self._session.stop(state.speaker, time.monotonic())
+            self._session.stop(state.speaker, time.monotonic(), TerminalStatus.CLOSED)
             self._cleanup("active_playback", state.speaker.stop)
 
         self._cleanup("voices", lambda: getattr(self, "_voices", None) and self._voices.close())
-        self._join_speech_waiters()
         self._cleanup("tray", lambda: getattr(self, "_tray", None) and self._tray.stop())
         self._cleanup("player", lambda: getattr(self, "_player", None) and self._player.destroy())
         self._cleanup("native_bridge", shutdown_native_bridge)
@@ -318,14 +316,6 @@ class SelectSpeakApp:
             action()
         except Exception:
             logger.exception("app.shutdown.resource_failed resource=%s", name)
-
-    def _join_speech_waiters(self) -> None:
-        current = threading.current_thread()
-        with self._state_lock:
-            waiters = tuple(self._speech_waiters)
-        for waiter in waiters:
-            if waiter is not current:
-                waiter.join()
 
     def _on_hotkey(self, selected_text: str, activated_at: float) -> None:
         if self._shutting_down:
@@ -436,45 +426,82 @@ class SelectSpeakApp:
         )
         speaker = self._voices.speaker
         self._player.call_soon(self._player.reset_speech_debug)
+        with self._state_lock:
+            if self._last_request_id == (1 << 64) - 1:
+                logger.error("speech.queue.rejected request_id_exhausted")
+                return
+            self._last_request_id += 1
+            request_id = self._last_request_id
         try:
-            generation = speaker.speak(text)
+            accepted = speaker.speak(
+                request_id,
+                text,
+                lambda event: self._on_speech_event(speaker, text, source, event),
+            )
         except RuntimeError:
             logger.exception("speech.queue.failed")
             return
-        if generation is None:
+        if not accepted:
             logger.warning(
-                "speech.queue.rejected text_length=%d minimum_length=%d",
+                "speech.queue.rejected request_id=%d text_length=%d minimum_length=%d",
+                request_id,
                 len(text),
                 self._config.minimum_text_length,
             )
             return
-        self._session.start(speaker, generation, text, source, time.monotonic())
-        self._update_player(speaking=True, text=text)
-        logger.info("speech.queued generation=%d text_length=%d", generation, len(text))
-        waiter = threading.Thread(
-            target=self._wait_for_speech,
-            args=(speaker, generation, text),
-            name=f"SpeechWait-{generation}",
-        )
-        with self._state_lock:
-            self._speech_waiters.add(waiter)
-        waiter.start()
+        logger.info("speech.queued request_id=%d text_length=%d", request_id, len(text))
 
-    def _wait_for_speech(self, speaker: Speaker, generation: int, text: str) -> None:
-        try:
-            logger.debug("speech.wait.started generation=%d", generation)
-            if not speaker.wait_until_done(generation):
-                logger.info("speech.wait.superseded generation=%d", generation)
-                return
-            if not self._session.complete(speaker, generation, time.monotonic()):
-                logger.debug("speech.completion.stale generation=%d", generation)
-                return
-            if not self._shutting_down:
-                self._update_player(speaking=False, text=text)
-            logger.info("speech.completed generation=%d", generation)
-        finally:
+    def _on_speech_event(
+        self,
+        speaker: Speaker,
+        text: str,
+        source: str,
+        event: SpeechEvent,
+    ) -> None:
+        if isinstance(event, SpeechStarted):
             with self._state_lock:
-                self._speech_waiters.discard(threading.current_thread())
+                stale = event.request_id != self._last_request_id
+                shutting_down = self._shutting_down
+            if shutting_down or stale:
+                logger.debug("speech.started.stale request_id=%d", event.request_id)
+                return
+            self._session.start(speaker, event.request_id, text, source, time.monotonic())
+            self._update_player(speaking=True, text=text)
+            logger.info("speech.started request_id=%d", event.request_id)
+            return
+        if isinstance(event, SpeechWord):
+            state = self._session.snapshot()
+            if self._shutting_down or state.request_id != event.request_id:
+                return
+            logger.debug(
+                "speech.word_boundary request_id=%d position=%d length=%d",
+                event.request_id,
+                event.position,
+                event.length,
+            )
+            self._player.highlight_word(event.position, event.length)
+            return
+        if not isinstance(event, SpeechTerminal):
+            raise TypeError(f"Unknown speech event: {type(event).__name__}")
+        if not self._session.complete(
+            speaker,
+            event.request_id,
+            event.status,
+            time.monotonic(),
+        ):
+            logger.debug(
+                "speech.terminal.stale request_id=%d status=%s",
+                event.request_id,
+                event.status.name.casefold(),
+            )
+            return
+        if not self._shutting_down:
+            self._update_player(speaking=False, text=text)
+        logger.info(
+            "speech.terminal request_id=%d status=%s",
+            event.request_id,
+            event.status.name.casefold(),
+        )
 
     def _update_player(self, *, speaking: bool, paused: bool = False, text: str = "") -> None:
         logger.debug(
@@ -484,12 +511,6 @@ class SelectSpeakApp:
             len(text),
         )
         self._player.call_soon(lambda: self._player.set_playback(speaking=speaking, paused=paused, text=text))
-
-    def _on_word(self, _text: str, position: int, length: int) -> None:
-        if self._shutting_down:
-            return
-        logger.debug("speech.word_boundary position=%d length=%d", position, length)
-        self._player.highlight_word(position, length)
 
     def _on_speech_debug(self, event: SpeechDebugEvent) -> None:
         if self._shutting_down:

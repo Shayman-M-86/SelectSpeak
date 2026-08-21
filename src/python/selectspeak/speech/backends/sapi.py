@@ -13,7 +13,7 @@ import win32com.client
 
 from ...config import SpeechConfig
 from ...infrastructure.logging import text_preview
-from ..contracts import WordCallback
+from ..contracts import SpeechEventCallback
 from ..playback import PlaybackCommand, PlaybackController, SpeechRequest
 from ..segments import SpeechSegment, split_speech_segments
 
@@ -79,11 +79,9 @@ class SapiWorker:
         self,
         config: SpeechConfig,
         playback: PlaybackController,
-        word_callback: WordCallback | None,
     ) -> None:
         self._config = config
         self._playback = playback
-        self._word_callback = word_callback
         self._thread = threading.Thread(target=self._run, name="SapiSpeaker")
 
     def start(self) -> None:
@@ -158,13 +156,15 @@ class SapiWorker:
                     return
         except Exception:
             logger.exception("speaker.request.failed generation=%s", request.generation)
-        finally:
+            self._playback.fail(request.generation)
+        else:
             self._playback.complete(request.generation)
+        finally:
             logger.info(
-                "speaker.request.finished generation=%s current_generation=%s completed_generation=%s",
+                "speaker.request.finished request_id=%s generation=%s current_generation=%s",
+                request.request_id,
                 request.generation,
                 self._playback.generation,
-                self._playback.completed_generation,
             )
 
     def _play_segment(
@@ -198,11 +198,9 @@ class SapiWorker:
         request: SpeechRequest,
         tracker: WordTracker,
     ) -> None:
-        if self._word_callback is None:
-            return
         boundary = tracker.read(status)
         if boundary is not None:
-            self._word_callback(request.text, *boundary)
+            self._playback.played_word(request.generation, *boundary)
 
     def _cancel_voice(self, voice: SapiVoice) -> None:
         if self._playback.paused:
@@ -230,10 +228,10 @@ class SapiWorker:
 class SapiSpeaker:
     """Thread-safe facade for the Windows SAPI backend."""
 
-    def __init__(self, config: SpeechConfig, word_callback: WordCallback | None = None) -> None:
+    def __init__(self, config: SpeechConfig) -> None:
         self._config = config
         self._playback = PlaybackController()
-        self._worker = SapiWorker(config, self._playback, word_callback)
+        self._worker = SapiWorker(config, self._playback)
         self._close_lock = threading.Lock()
         self._closed = False
         self._worker.start()
@@ -253,16 +251,16 @@ class SapiSpeaker:
     def paused(self) -> bool:
         return self._playback.paused
 
-    def speak(self, text: str) -> int | None:
+    def speak(self, request_id: int, text: str, callback: SpeechEventCallback) -> bool:
         if len(text) < self._config.minimum_text_length:
-            return None
-        request, _was_active = self._playback.submit(text)
+            return False
+        request, _was_active = self._playback.submit(request_id, text, callback)
         logger.info(
             "speaker.request.queued generation=%s text_length=%s",
             request.generation,
             len(text),
         )
-        return request.generation
+        return True
 
     def stop(self) -> None:
         generation, _was_active = self._playback.cancel()
@@ -273,9 +271,6 @@ class SapiSpeaker:
 
     def resume(self) -> None:
         self._playback.request_resume()
-
-    def wait_until_done(self, generation: int) -> bool:
-        return self._playback.wait_until_done(generation)
 
     def close(self) -> None:
         with self._close_lock:
