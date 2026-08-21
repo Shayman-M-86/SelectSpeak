@@ -100,21 +100,43 @@ Do not migrate these into C++.
 
 ---
 
-## 2. Native owns PCM playback
+## 2. Native owns PCM playback through XAudio2
 
-The final native audio subsystem owns:
+The final audio path uses a thin SelectSpeak-owned C++ session over Windows
+XAudio2. SelectSpeak owns the application-facing audio contract; XAudio2 owns
+the physical playback engine and device-facing mechanics.
 
-* audio-device resources
-* PCM buffers
+Keep one XAudio2 engine/mastering voice for the native audio runtime. Create one
+source voice for each accepted PCM speech request and destroy it at that
+request's completion, cancellation, supersession, failure, or close. Do not
+reuse a source voice across application requests.
+
+The SelectSpeak native session owns:
+
 * prebuffering
 * bounded queueing
+* PCM lifetime until XAudio2 buffer completion
 * played-frame position
 * word-boundary scheduling
 * pause/resume
-* stop/reset
+* stop/supersede settlement
 * playback completion
 * underrun detection
 * deterministic audio shutdown
+
+XAudio2 owns:
+
+* mastering/source voices and audio-device output
+* asynchronous PCM buffer consumption
+* source-voice start/stop
+* buffer-completion callbacks
+* device-rate conversion where required
+
+Do not build a second device engine around XAudio2. Native code may wrap its
+callbacks and queue state only as required to satisfy SelectSpeak request,
+boundary, capacity, error, and shutdown semantics. XAudio2 callbacks signal
+SelectSpeak-owned non-audio work and return immediately; they never invoke
+Python or perform UI I/O.
 
 The current Python `WaveOutPlayer` is transitional and will eventually be deleted.
 
@@ -133,7 +155,7 @@ Python
        ▼
 C++ Natural Voice synthesis
        │
-       ├── PCM ───────────────► native PCM playback
+       ├── PCM ───────────────► native session ─► XAudio2
        │
        └── boundaries ────────► native boundary scheduler
                                       │
@@ -162,7 +184,7 @@ PCM segment + boundaries
 native PCM session enqueue
           │
           ▼
-native playback
+native session ─► XAudio2
 ```
 
 Do not migrate Supertonic inference into C++.
@@ -428,30 +450,26 @@ Do not expose stale process-global audio errors belonging to another session.
 
 # Audio-session ownership
 
-## 17. Use opaque native session handles
+## 17. Use request-scoped opaque native handles
 
 Conceptually:
 
 ```text
-ss_audio_session_create(...)
-ss_audio_session_begin(handle, request_id, ...)
-ss_audio_session_enqueue(...)
-ss_audio_session_enqueue_silence(...)
-ss_audio_session_finish_input(...)
-ss_audio_session_wait_for_capacity(...)
-ss_audio_session_buffered_frames(...)
-ss_audio_session_pause(...)
-ss_audio_session_resume(...)
-ss_audio_session_stop(...)
-ss_audio_session_destroy(...)
+ss_audio_request_create(request_id, format, ...) -> handle
+ss_audio_request_submit(handle, pcm, boundaries) -> submit_result
+ss_audio_request_finish_input(handle)
+ss_audio_request_pause(handle)
+ss_audio_request_resume(handle)
+ss_audio_request_stop(handle, terminal_reason)
+ss_audio_request_destroy(handle)
 ```
 
-The application may still enforce one active audible request, but explicit handles simplify:
+One handle owns one immutable request ID and one XAudio2 source voice. It is
+never reset or reused for a later request. Explicit handles simplify:
 
 * ownership
 * testing
 * callback contexts
-* cached speakers
 * Natural/Supertonic format differences
 
 ---
@@ -460,16 +478,16 @@ The application may still enforce one active audible request, but explicit handl
 
 Rules:
 
-* `stop` is idempotent
-* `destroy` either:
-
-  * is idempotent, or
-  * returns a clear `invalid_handle` after destruction
-* no new operation may begin once destruction starts
-* destroy wakes capacity waiters
-* callback contexts remain valid until destroy returns
+* lifecycle is `accepting -> draining -> terminal -> destroyed`
+* `stop`, pause, and resume are idempotent where valid
+* no new operation may begin once terminal settlement/destruction starts
+* destroy interrupts blocked submission and destroys the source voice from a
+  non-XAudio2-callback thread
+* callback contexts and request PCM remain valid until destroy returns
 * Python retains native callback objects until destroy returns
-* after destroy returns, no callbacks may occur
+* native operations after destroy return `invalid_handle`; Python `close()` is
+  independently idempotent
+* after destroy returns, no callbacks or PCM reads may occur
 
 ---
 
@@ -502,9 +520,9 @@ Natural and Supertonic may use different sample rates.
 
 ---
 
-## 20. Enqueue ownership
+## 20. Submission ownership
 
-When native enqueue returns successfully:
+When native submission returns successfully:
 
 **native has copied everything it needs.**
 
@@ -515,6 +533,10 @@ This includes:
 * associated request metadata
 
 Python/NumPy does not need to retain the input buffer after return.
+
+This is the C ABI ownership rule, not a claim that XAudio2 copies the sample
+payload. The native session retains its own PCM storage until XAudio2 reports
+that the corresponding buffer is no longer in use.
 
 ---
 
@@ -544,7 +566,7 @@ Native converts chunk-relative SDK positions into complete-request text position
 
 ## 22. Boundary validation
 
-Before accepting an enqueue:
+Before accepting a submission:
 
 * `frame_offset` values must be monotonic
 * `frame_offset` must not exceed submitted segment frame count
@@ -553,7 +575,7 @@ Before accepting an enqueue:
 
 Invalid boundaries must either:
 
-* reject the enqueue explicitly
+* reject the submission explicitly
 
 or, if a specifically documented policy is chosen:
 
@@ -567,19 +589,15 @@ Prefer rejecting invalid input during development because it exposes upstream bu
 
 # Buffered runway
 
-## 23. `PcmPlaybackSession` exposes buffered frames
+## 23. Buffered frames are telemetry, not synchronization
 
-Python adaptive chunking still needs current playback runway.
+Python adaptive chunking and diagnostics may still use current playback runway.
+Return `buffered_frames_after_submit` from submission/synthesis results, or expose
+an equivalent request-scoped telemetry query if measurements justify it.
 
-Provide:
-
-```text
-buffered_frames(request_id) -> int
-```
-
-or equivalent session-specific method.
-
-`wait_for_capacity()` may additionally return remaining buffered frames, but an explicit query is useful for adaptive chunk calculations and telemetry.
+Do not require a separate `wait_for_capacity()` ABI or use `buffered_frames` as
+a two-step wait/enqueue protocol. One interruptible bounded `submit` operation
+owns admission and avoids that race.
 
 ---
 
@@ -587,14 +605,18 @@ or equivalent session-specific method.
 
 Backpressure values are expressed conceptually in seconds but stored/compared in frames.
 
-For example:
+The feasibility check supplies provisional starting values:
 
 ```text
-high_water_frames = sample_rate × 10
-low_water_frames  = sample_rate × 6
+high_water_frames = sample_rate × 3
+low_water_frames  = sample_rate × 1
+capacity_frames   = sample_rate × 4
 ```
 
-Do not assume Natural and Supertonic share a sample rate.
+Do not assume Natural and Supertonic share a sample rate. The existing
+Supertonic path polls above 12 buffered seconds, while Natural's adaptive
+controller uses a `0.68` runway safety factor. These are migration reference
+points, not the final native defaults.
 
 ---
 
@@ -602,27 +624,25 @@ Do not assume Natural and Supertonic share a sample rate.
 
 ## 25. Backpressure stays outside low-level device mechanics
 
-Use high-water/low-water hysteresis.
-
-Initial example:
+Use interruptible bounded admission. High/low-water hysteresis is the intended
+first implementation but not an ABI promise. The provisional values above may
+be tuned by Package H/J from measurements. The required invariant is:
 
 ```text
-high water = 10 seconds
-low water  = 6 seconds
+0 <= low_water_frames < high_water_frames <= capacity_frames
 ```
-
-These are tuning values, not permanent architecture.
 
 Rules:
 
-* first chunk may bypass normal capacity wait
 * structural silence counts toward buffered duration
-* when high water is reached, generation waits
-* generation resumes only after low water is reached
 * pause must not allow synthesis to fill indefinitely
-* cancellation wakes waiters immediately
-* stop wakes waiters immediately
-* close wakes waiters immediately
+* large Supertonic segments are sliced into bounded submissions without
+  changing inference or waveform content
+* cancellation, supersession, failure, stop, and close wake blocked producers
+  immediately
+
+XAudio2 buffer-completion notifications wake blocked producers. Do not poll
+XAudio2 queue state as the normal backpressure mechanism.
 
 ---
 
@@ -634,7 +654,7 @@ Conceptually:
 
 ```text
 ss_voice_synthesize_to_audio(
-    audio_session,
+    audio_request,
     request_id,
     text,
     text_base_offset
@@ -655,7 +675,7 @@ Return at least:
 status
 generated_frames
 synthesis_duration
-buffered_frames_after_enqueue
+buffered_frames_after_submit
 ```
 
 This allows Python to preserve:
@@ -673,7 +693,7 @@ If useful, return a fixed result structure rather than several follow-up native 
 
 * PCM stays native
 * word boundaries stay native until playback reaches them
-* played-word callbacks originate from the audio-session event path
+* played-word callbacks originate from the native request event path
 * stop remains callable from another Python thread while synthesis is blocked
 * native locks must not be held while Python callbacks execute
 * stop coordinates:
@@ -681,7 +701,7 @@ If useful, return a fixed result structure rather than several follow-up native 
   * synthesis cancellation
   * playback stop
   * boundary discard
-  * capacity waiter wakeup
+  * blocked producer wakeup
   * exactly one terminal result
 
 ---
@@ -731,17 +751,18 @@ Create one narrow abstraction that survives migration.
 Conceptually:
 
 ```text
-begin
-enqueue
-enqueue_silence
+create(request_id, format, callback)
+submit
+submit_silence
 finish_input
-wait_for_capacity
-buffered_frames
 pause
 resume
 stop
 close
 ```
+
+`submit` performs interruptible bounded admission and may return buffered-frame
+telemetry. The abstraction does not expose a separate capacity wait.
 
 Events:
 
@@ -757,17 +778,17 @@ underrun/error
 Python directly uses:
 
 ```text
-enqueue
-enqueue_silence
+submit
+submit_silence
 ```
 
 because Python owns Supertonic PCM.
 
 ### Natural Voice
 
-Python does not enqueue PCM.
+Python does not submit Natural PCM.
 
-It supplies text/request metadata and the native audio-session handle to native synthesis.
+It supplies text/request metadata and the native audio-request handle to native synthesis.
 
 ---
 
@@ -862,7 +883,13 @@ If deferred, perform the physical move during post-audio Python cleanup.
 
 **Do not begin implementation of the new request/audio interfaces until this checkpoint is reviewed and frozen.**
 
-Freeze together:
+The checkpoint fixes XAudio2 as the Windows playback foundation. Its focused
+feasibility evidence validates one persistent engine/mastering voice, one source
+voice per request, incremental PCM, latency-corrected word timing, pause/resume,
+prompt destruction, supersession, buffer reclamation, and callback quiescence.
+See the [XAudio2 feasibility report](architecture-roadmap/reports/package-c-xaudio2-feasibility.md).
+
+Freeze these SelectSpeak-visible outcomes together:
 
 * `uint64 request_id`
 * terminal statuses
@@ -872,16 +899,19 @@ Freeze together:
 * frame units
 * boundary representation
 * boundary validation
-* enqueue ownership
+* submission ownership
 * native error model
 * opaque handle lifecycle
-* `buffered_frames`
-* backpressure policy
+* bounded producer admission
+* optional buffered-frame telemetry meaning
 * Natural synthesis result structure
 * callback threading/reentrancy
 * exact shutdown guarantees
 
-Packages D through J must not independently redesign these rules.
+Do not freeze XAudio2's private queue layout, dispatcher topology, hysteresis
+algorithm, or exact capacity tuning. Packages D through J must not
+independently redesign the visible rules or replace XAudio2 without reopening
+Package C.
 
 ---
 
@@ -948,16 +978,19 @@ Do not couple backend code directly to Python `WaveOutPlayer`.
 
 ---
 
-# Phase G1 — Minimal temporary WaveOut adapter
+# Phase G1 — Optional minimal WaveOut compatibility adapter
 
-Wrap existing Python WaveOut only enough to satisfy the final PCM abstraction.
+Create this adapter only if the dual-path rollout requires the old engine behind
+the final PCM abstraction. Otherwise leave the existing WaveOut path isolated
+and migrate directly to the native XAudio2 session.
+
+If required, wrap existing Python WaveOut only enough to satisfy the final PCM abstraction.
 
 Do not heavily optimize it.
 
 Allowed:
 
-* expose `buffered_frames`
-* capacity signalling/waiting required by final interface
+* return minimal buffered-frame telemetry if required
 * minimal correctness changes
 
 Avoid:
@@ -971,7 +1004,8 @@ Avoid:
 
 # Phase H — Backpressure
 
-Implement high/low-water capacity management through `PcmPlaybackSession`.
+Define bounded, interruptible submission through `PcmPlaybackSession`; implement
+its native wakeup and capacity accounting with the XAudio2 request in J.
 
 Natural and Supertonic use the final interface.
 
@@ -1000,25 +1034,29 @@ Do not expand this phase into broad WinUI cleanup.
 
 # Phase J — Native PCM engine
 
-Implement:
+Implement the thin SelectSpeak session over XAudio2:
 
-* opaque audio handles
-* event-driven WaveOut
-* reusable buffers
-* played-frame accounting
-* boundary scheduling
-* high/low capacity signalling
+* one persistent XAudio2 engine/mastering voice
+* one opaque handle and fresh source voice per request
+* normal PCM retained until `OnBufferEnd`; cancelled PCM retained until
+  `DestroyVoice()` returns
+* callback-to-dispatcher signalling with no Python work on XAudio2 threads
+* active-request position with reported-output-latency correction
+* event-driven boundary scheduling
+* bounded producer signalling
 * pause/resume/stop
 * deterministic close
-* session-specific failure reporting
+* session-specific failure reporting and device-failure translation
 
-Do not switch to WASAPI.
+Do not implement raw WASAPI, a custom WaveOut engine, source-voice pooling, or a
+second general-purpose audio engine. Stop/supersede settlement destroys the
+request source voice and does not depend on `FlushSourceBuffers` callback order.
 
 ---
 
 ## J1. Deterministic fake audio sink
 
-Separate scheduler/session logic from the real WaveOut sink.
+Separate scheduler/session logic from the real XAudio2 sink.
 
 Tests must run without physical speakers.
 
@@ -1026,8 +1064,8 @@ Required tests include:
 
 * normal prebuffer
 * short input below prebuffer
-* reusable buffers
-* high/low capacity
+* request-scoped source-voice lifetime
+* bounded submission
 * pause/resume frame progression
 * word timing
 * stop during playback
@@ -1038,18 +1076,18 @@ Required tests include:
 * final-frame boundary
 * invalid boundary rejection
 * stale request rejection
-* enqueue after stop
+* submit after stop
 * underrun start/end
-* partial device-write failure
+* XAudio2 voice/device failure
 * exactly-once terminal
 * callback ordering
 * callback reentrancy
 * close during playback
 * no callback after close
-* capacity wait wake on stop
-* capacity wait wake on close
+* blocked submission wake on stop
+* blocked submission wake on close
 
-Keep a separate real WaveOut Windows smoke test.
+Keep a separate real XAudio2 Windows smoke test.
 
 ---
 
@@ -1096,7 +1134,7 @@ PCM
 boundaries
 request_id
     ↓
-native enqueue
+native bounded submission
 ```
 
 Native copies data before return.
@@ -1359,7 +1397,8 @@ The phase and package letters intentionally align.
 
 ## Package C — Interface-design checkpoint
 
-Freeze all contracts before coding.
+* freeze SelectSpeak-visible contracts before coding
+* validate and select XAudio2 as the playback foundation
 
 ## Package D — Request/completion
 
@@ -1382,14 +1421,14 @@ Freeze all contracts before coding.
 
 * stable `PcmPlaybackSession`
 
-### Package G1 — Temporary adapter
+### Package G1 — Optional temporary adapter
 
-* minimal Python WaveOut implementation of G
+* optional minimal Python WaveOut compatibility implementation of G
 
 ## Package H — Backpressure
 
-* high/low-water
-* buffered frames
+* interruptible bounded submission
+* optional buffered-frame telemetry
 
 ## Package I — Async UI delivery
 
@@ -1397,8 +1436,8 @@ Freeze all contracts before coding.
 
 ## Package J — Native PCM engine
 
-* session handles
-* event WaveOut
+* request-scoped handles/source voices
+* thin XAudio2 playback sink
 * deterministic tests
 
 ## Package K — Natural integration
@@ -1457,6 +1496,8 @@ Later agents may not silently redesign:
 * shutdown guarantees
 
 Any required contract change must be identified explicitly before implementation continues.
+XAudio2 is the chosen device engine; its internal queue/thread mechanics are not
+part of the public contract unless Package C explicitly says otherwise.
 
 ---
 
@@ -1516,7 +1557,7 @@ Every accepted request ends exactly once.
 
 ## Rule 9 — Transitional code has a deletion package
 
-* G1 is deleted by N
+* G1, if needed, is deleted by N
 * rollout switch M is deleted by N
 * Python WaveOut is deleted by N
 * temporary old-path telemetry disappears after O
@@ -1584,9 +1625,10 @@ Do not compensate for one regression by modifying several neighboring systems.
       │          Native SelectSpeak DLL         │
       │                                         │
       │ Natural synthesis                       │
-      │ PCM session handles                     │
-      │ Event-driven WaveOut                    │
-      │ PCM buffers                             │
+      │ Request-scoped PCM handles              │
+      │ SelectSpeak request/boundary semantics  │
+      │ Persistent engine; source voice/request │
+      │ PCM buffer lifetime                     │
       │ Capacity signalling                     │
       │ Played-frame position                   │
       │ Boundary scheduling                     │

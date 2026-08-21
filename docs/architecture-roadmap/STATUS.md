@@ -13,15 +13,15 @@ is absent. A new agent resumes `Active`; otherwise it selects the earliest eligi
 | --- | --- | --- | --- | --- |
 | A | Baseline and telemetry | First package; preserve results for O | Complete | Repeatable Natural/Supertonic workload, temporary telemetry, clean diagnostics, and durable comparison evidence delivered. [Report](reports/package-a-baseline.md) |
 | B | Lifecycle and ownership | Use A behaviour baseline | Complete | Sole speaker ownership, partial-safe ordered shutdown, deterministic backend close/join, and session relocation delivered. [Report](reports/package-b-lifecycle.md) |
-| C | Interface checkpoint | Explicit review/freeze before D–J interface work | Ready | Reconcile the unified-plan contracts with current Python/native seams, record the freeze artifact, then obtain the explicit freeze decision. |
-| D | Request and completion | C frozen | Unassessed | Trace identity and completion through the direct path. |
+| C | Interface checkpoint | Explicit review/freeze before D–J interface work | Complete | Request-scoped XAudio2 feasibility passed 29/29 in three final runs; the maintainer explicitly approved and froze the simplified contract on 2026-08-21. [Report](reports/package-c-interface-checkpoint.md) [Contract](reports/package-c-interface-contract.md) [Evidence](reports/package-c-xaudio2-feasibility.md) |
+| D | Request and completion | C Complete with contract Frozen | Ready | Implement application-issued `uint64 request_id`, terminal status/order, exactly-once completion, and remove per-request speech-wait threads. |
 | E | `PlaybackController` | D stable | Unassessed | Simplify state without pulling in audio migration. |
-| F | Native ABI | C frozen; matching DLL and tests required | Unassessed | Identify and centralize current ABI declarations. |
-| G | PCM abstraction | C frozen | Unassessed | Establish the stable Python playback seam. |
-| G1 | Temporary WaveOut adapter | G stable; deleted by N | Unassessed | Implement only what G requires. |
-| H | Backpressure | G/G1 available; C policy frozen | Unassessed | Add high/low-water capacity without polling. |
+| F | Native ABI | C Complete with contract Frozen; matching DLL and tests required | Unassessed | Identify and centralize current ABI declarations. |
+| G | PCM abstraction | C Complete with contract Frozen | Unassessed | Establish the stable Python playback seam. |
+| G1 | Optional WaveOut adapter | G stable; create only if rollout compatibility needs it; deleted by N | Unassessed | Avoid rewriting backpressure or events in code scheduled for deletion. |
+| H | Bounded admission | G available; coordinate native wakeup/accounting with J | Unassessed | Add interruptible bounded submission without polling; tune provisional thresholds from evidence. |
 | I | Async UI delivery | Before native played-word callbacks | Unassessed | Keep scope to non-blocking delivery. |
-| J | Native PCM engine | F–I seams ready | Unassessed | Include deterministic fake-sink tests and WaveOut smoke. |
+| J | Native XAudio2 requests | F–I seams ready | Unassessed | Implement one persistent runtime and one source voice/handle per request, with deterministic fake-sink tests and a real-device smoke. |
 | K | Natural integration | J ready | Unassessed | Connect native synthesis directly to native playback. |
 | K1 | Exact Natural identity | Separately reviewable; coordinate with K | Unassessed | Limit work to package + SDK voice identity and migration. |
 | L | Supertonic integration | J ready | Unassessed | Change transport only; keep inference unchanged. |
