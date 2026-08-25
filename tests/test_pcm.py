@@ -1,5 +1,6 @@
 import ctypes
 import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -14,6 +15,7 @@ from selectspeak.native import (
     NativeStatus,
 )
 from selectspeak.speech import pcm as pcm_module
+from selectspeak.speech.admission import AdmissionPolicy
 from selectspeak.speech.contracts import TerminalStatus
 from selectspeak.speech.pcm import (
     PcmBoundary,
@@ -377,3 +379,168 @@ def test_package_f_stub_rejects_session_without_emitting_started() -> None:
 
     assert failure.value.status is NativeStatus.DEVICE_ERROR
     assert events == []
+
+
+class _BlockingAudioDll(_FakeAudioDll):
+    """A fake whose submit blocks, standing in for native bounded capacity.
+
+    Package J implements the real interruptible wait inside native. This models
+    only the visible contract: submit does not return until capacity admits the
+    slice, and a control thread is what releases it.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.capacity = threading.Event()
+        self.entered_submit = threading.Event()
+
+    def ss_audio_request_submit(
+        self,
+        _handle: Any,
+        pcm: Any,
+        pcm_byte_length: int,
+        boundaries: Any,
+        boundary_count: int,
+        result: Any,
+    ) -> int:
+        self.entered_submit.set()
+        self.capacity.wait(5)
+        return super().ss_audio_request_submit(
+            _handle, pcm, pcm_byte_length, boundaries, boundary_count, result
+        )
+
+
+def test_bounded_submit_slices_oversized_pcm(monkeypatch: pytest.MonkeyPatch) -> None:
+    session, dll, _ = _session(monkeypatch)
+    policy = AdmissionPolicy(low_water_frames=10, high_water_frames=100, hard_capacity_frames=200)
+
+    result = session.submit_bounded(b"\x01\x02" * 250, policy=policy)
+
+    assert len(dll.submissions) == 3
+    assert result.accepted_frames == 250
+    assert b"".join(payload for payload, _ in dll.submissions) == b"\x01\x02" * 250
+
+
+def test_bounded_submit_reports_the_latest_buffer_telemetry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session, _, _ = _session(monkeypatch)
+
+    result = session.submit_bounded(b"\x01\x02" * 40)
+
+    assert result.buffered_frames_after_submit == 17
+
+
+def test_bounded_submit_uses_one_call_when_the_slice_already_fits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session, dll, _ = _session(monkeypatch)
+
+    session.submit_bounded(b"\x01\x02" * 40)
+
+    assert len(dll.submissions) == 1
+
+
+def test_bounded_submit_carries_boundaries_onto_their_slice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session, dll, _ = _session(monkeypatch)
+    policy = AdmissionPolicy(low_water_frames=10, high_water_frames=100, hard_capacity_frames=200)
+    boundaries = [PcmBoundary(0, 0, 1), PcmBoundary(120, 1, 2)]
+
+    session.submit_bounded(b"\x01\x02" * 250, boundaries, policy=policy)
+
+    assert dll.submissions[0][1] == [(0, 0, 1)]
+    assert dll.submissions[1][1] == [(20, 1, 2)]
+    assert dll.submissions[2][1] == []
+
+
+def test_stop_interrupts_a_producer_between_slices(monkeypatch: pytest.MonkeyPatch) -> None:
+    session, dll, _ = _session(monkeypatch)
+    policy = AdmissionPolicy(low_water_frames=10, high_water_frames=100, hard_capacity_frames=200)
+    session.stop(TerminalStatus.CANCELLED)
+
+    with pytest.raises(pcm_module.PcmAdmissionInterrupted) as error:
+        session.submit_bounded(b"\x01\x02" * 250, policy=policy)
+
+    assert error.value.request_id == 7
+    assert dll.submissions == []
+
+
+def test_a_control_thread_releases_a_blocked_submission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dll = _BlockingAudioDll()
+    monkeypatch.setattr(
+        pcm_module,
+        "get_native_bridge",
+        lambda _path: SimpleNamespace(library=dll),
+    )
+    session = PcmPlaybackSession(7, "A😀B", PcmFormat(24_000), lambda _event: None)
+    failures: list[BaseException] = []
+
+    def produce() -> None:
+        try:
+            session.submit_bounded(b"\x01\x02" * 40)
+        except BaseException as error:  # noqa: BLE001 - recorded for the assertion
+            failures.append(error)
+
+    worker = threading.Thread(target=produce)
+    worker.start()
+    assert dll.entered_submit.wait(5)
+
+    # The blocked worker must never be responsible for interrupting itself.
+    dll.capacity.set()
+    worker.join(5)
+
+    assert not worker.is_alive()
+    assert failures == []
+
+
+def test_close_stops_a_producer_from_offering_further_slices(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session, dll, _ = _session(monkeypatch)
+    policy = AdmissionPolicy(low_water_frames=10, high_water_frames=100, hard_capacity_frames=200)
+    session.close()
+
+    with pytest.raises(pcm_module.PcmAdmissionInterrupted):
+        session.submit_bounded(b"\x01\x02" * 250, policy=policy)
+
+
+def test_a_terminal_event_interrupts_further_bounded_submission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session, dll, _ = _session(monkeypatch)
+    policy = AdmissionPolicy(low_water_frames=10, high_water_frames=100, hard_capacity_frames=200)
+    dll.emit(NativeAudioEventKind.TERMINAL, terminal_status=TerminalStatus.SUPERSEDED)
+
+    with pytest.raises(pcm_module.PcmAdmissionInterrupted):
+        session.submit_bounded(b"\x01\x02" * 250, policy=policy)
+
+
+def test_bounded_submit_is_rejected_from_the_event_callback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failures: list[BaseException] = []
+
+    def callback(event: Any) -> None:
+        try:
+            session.submit_bounded(b"\x01\x02" * 10)
+        except BaseException as error:  # noqa: BLE001 - recorded for the assertion
+            failures.append(error)
+
+    session, dll, _ = _session(monkeypatch, callback=callback, emit_started=False)
+    dll.emit(NativeAudioEventKind.STARTED)
+
+    assert failures and isinstance(failures[0], RuntimeError)
+
+
+def test_needs_more_audio_follows_the_low_water_mark(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session, _, _ = _session(monkeypatch)
+    policy = AdmissionPolicy(low_water_frames=10, high_water_frames=100, hard_capacity_frames=200)
+
+    assert session.needs_more_audio(9, policy=policy)
+    assert not session.needs_more_audio(10, policy=policy)

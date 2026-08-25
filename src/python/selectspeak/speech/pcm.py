@@ -6,7 +6,7 @@ import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from ..native import (
     AudioEventCallback,
@@ -23,6 +23,9 @@ from ..native import (
     get_native_bridge,
 )
 from .contracts import TerminalStatus
+
+if TYPE_CHECKING:
+    from .admission import AdmissionPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +114,22 @@ PcmEvent = PcmStarted | PcmPlayedWord | PcmUnderrun | PcmTerminal
 PcmEventCallback = Callable[[PcmEvent], None]
 
 
+class PcmAdmissionInterrupted(RuntimeError):
+    """Bounded submission was woken by stop, supersede, failure, or close.
+
+    This is the ordinary way a producer learns its request is over while it is
+    offering audio. It is not an error condition to report to the user.
+    """
+
+    def __init__(self, request_id: int, submitted_frames: int) -> None:
+        self.request_id = request_id
+        self.submitted_frames = submitted_frames
+        super().__init__(
+            f"PCM admission interrupted for request {request_id} "
+            f"after {submitted_frames} accepted frames"
+        )
+
+
 def utf16_code_unit_offset(text: str, codepoint_offset: int) -> int:
     if not 0 <= codepoint_offset <= len(text):
         raise ValueError("codepoint_offset must identify an edge in the text")
@@ -165,6 +184,10 @@ class PcmPlaybackSession:
         self._terminal = False
         self._closing = False
         self._closed = False
+        # Set by any path that closes admission, so a producer blocked inside
+        # bounded submission stops offering slices. The contract requires the
+        # interrupting thread to be a different one from the blocked worker.
+        self._interrupted = False
         self._native_callback = AudioEventCallback(self._on_native_event)
 
         native_format = NativeAudioFormat(
@@ -248,6 +271,68 @@ class PcmPlaybackSession:
             native_result.buffered_frames_after_submit,
         )
 
+    def submit_bounded(
+        self,
+        pcm: bytes | bytearray | memoryview,
+        boundaries: Sequence[PcmBoundary] = (),
+        *,
+        policy: AdmissionPolicy | None = None,
+    ) -> PcmSubmitResult:
+        """Submit PCM through bounded admission, slicing when it is oversized.
+
+        Each slice is offered with the plain :meth:`submit` call, which the
+        contract defines as synchronous and interruptibly blocking until native
+        capacity admits it. Native performs the wait in Package J; this method
+        never polls, sleeps, or asks native how much room is free before
+        offering, because a separate wait/enqueue step would add a race without
+        adding capability.
+
+        Raises :class:`PcmAdmissionInterrupted` when stop, supersede, failure,
+        or close ends the request while slices remain. Frames already accepted
+        by native stay accepted; the caller stops producing rather than
+        retrying.
+        """
+        from .admission import slice_for_admission
+
+        self._ensure_not_callback()
+        active_policy = policy or self._default_policy()
+        slices = slice_for_admission(pcm, boundaries, self.pcm_format, active_policy)
+
+        submitted_frames = 0
+        buffered_frames = 0
+        for admission_slice in slices:
+            if self._admission_interrupted():
+                raise PcmAdmissionInterrupted(self.request_id, submitted_frames)
+            result = self.submit(admission_slice.pcm, admission_slice.boundaries)
+            submitted_frames += result.accepted_frames
+            buffered_frames = result.buffered_frames_after_submit
+        return PcmSubmitResult(submitted_frames, buffered_frames)
+
+    def needs_more_audio(
+        self,
+        buffered_frames: int,
+        *,
+        policy: AdmissionPolicy | None = None,
+    ) -> bool:
+        """Whether the producer should keep generating ahead of playback.
+
+        Callers pass the ``buffered_frames_after_submit`` telemetry they
+        already hold. This deliberately consults no native state: buffer
+        telemetry is advisory, not a synchronization API.
+        """
+        active_policy = policy or self._default_policy()
+        return active_policy.needs_more_audio(buffered_frames)
+
+    def _default_policy(self) -> AdmissionPolicy:
+        # Imported here because admission builds on this module's value types.
+        from .admission import AdmissionPolicy as Policy
+
+        return Policy.for_format(self.pcm_format)
+
+    def _admission_interrupted(self) -> bool:
+        with self._state_lock:
+            return self._interrupted or self._closing or self._closed
+
     def finish_input(self) -> None:
         self._ensure_not_callback()
         handle = self._operation_handle(require_accepting=True)
@@ -276,6 +361,7 @@ class PcmPlaybackSession:
         check_native_status(status, "stop PCM playback")
         with self._state_lock:
             self._accepting = False
+            self._interrupted = True
 
     def close(self) -> None:
         self._ensure_not_callback()
@@ -284,6 +370,7 @@ class PcmPlaybackSession:
                 if self._closed:
                     return
                 self._closing = True
+                self._interrupted = True
                 handle = self._handle
             try:
                 status = self._dll.ss_audio_request_destroy(AudioRequestHandle(handle))
@@ -437,6 +524,7 @@ class PcmPlaybackSession:
             diagnostic = diagnostic or "Native emitted the non-terminal sentinel"
         self._terminal = True
         self._accepting = False
+        self._interrupted = True
         return PcmTerminal(
             self.request_id,
             terminal_status,
