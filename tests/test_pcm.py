@@ -11,7 +11,6 @@ from selectspeak.native import (
     NativeAudioEvent,
     NativeAudioEventKind,
     NativeAudioSubmitResult,
-    NativeCallError,
     NativeStatus,
 )
 from selectspeak.speech import pcm as pcm_module
@@ -365,20 +364,30 @@ def test_utf16_helpers_convert_codepoint_boundaries_without_splitting_surrogates
     sys.platform != "win32" or not RUNTIME_NATIVE_DLL.is_file(),
     reason="built Windows native bridge is unavailable",
 )
-def test_package_f_stub_rejects_session_without_emitting_started() -> None:
+def test_staged_package_j_engine_accepts_and_closes_a_session() -> None:
     events: list[Any] = []
+    started = threading.Event()
 
-    with pytest.raises(NativeCallError) as failure:
-        PcmPlaybackSession(
-            1,
-            "Read this",
-            PcmFormat(24_000),
-            events.append,
-            dll_path=str(RUNTIME_NATIVE_DLL),
-        )
+    def on_event(event: Any) -> None:
+        events.append(event)
+        if isinstance(event, PcmStarted):
+            started.set()
 
-    assert failure.value.status is NativeStatus.DEVICE_ERROR
-    assert events == []
+    session = PcmPlaybackSession(
+        1,
+        "Read this",
+        PcmFormat(24_000),
+        on_event,
+        dll_path=str(RUNTIME_NATIVE_DLL),
+    )
+
+    assert started.wait(2)
+    session.close()
+
+    assert events == [
+        PcmStarted(1),
+        PcmTerminal(1, TerminalStatus.CLOSED, NativeStatus.OK),
+    ]
 
 
 class _BlockingAudioDll(_FakeAudioDll):

@@ -436,6 +436,68 @@ def test_application_allocates_request_ids_and_consumes_ordered_events() -> None
     assert app._session.snapshot().terminal_status is TerminalStatus.COMPLETED
 
 
+def test_played_word_delivery_is_queued_after_request_validation() -> None:
+    class Speaker:
+        def speak(self, request_id: int, text: str, callback: Callable[..., None]) -> bool:
+            callback(SpeechStarted(request_id))
+            callback(SpeechWord(request_id, text, 0, 4))
+            return True
+
+        def stop(self) -> None:
+            pass
+
+        def pause(self) -> None:
+            pass
+
+        def resume(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    class Voices:
+        switching = False
+
+        def __init__(self, speaker: Speaker) -> None:
+            self.speaker = speaker
+
+    class Player:
+        callbacks: list[Callable[[], None]] = []
+        highlights: list[tuple[int, int]] = []
+
+        @classmethod
+        def call_soon(cls, callback: Callable[[], None]) -> None:
+            cls.callbacks.append(callback)
+
+        @staticmethod
+        def reset_speech_debug() -> None:
+            pass
+
+        @staticmethod
+        def set_playback(**_values: object) -> None:
+            pass
+
+        @classmethod
+        def highlight_word(cls, position: int, length: int) -> None:
+            cls.highlights.append((position, length))
+
+    app = SelectSpeakApp()
+    speaker = Speaker()
+    setattr(app, "_voices", Voices(speaker))
+    setattr(app, "_player", Player())
+
+    app._begin_speech("Read this", source="selection")
+
+    assert Player.highlights == []
+    queued_after_current_word = len(Player.callbacks)
+    app._on_speech_event(speaker, "Stale", "selection", SpeechWord(2, "Stale", 0, 5))
+    assert len(Player.callbacks) == queued_after_current_word
+
+    for callback in Player.callbacks:
+        callback()
+    assert Player.highlights == [(0, 4)]
+
+
 def test_stop_targets_the_speaker_that_started_the_active_request() -> None:
     class Speaker:
         def __init__(self) -> None:

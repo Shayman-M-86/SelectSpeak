@@ -219,6 +219,12 @@ class PcmPlaybackSession:
         with self._state_lock:
             return self._closed
 
+    def native_handle_for_request(self, request_id: int) -> AudioRequestHandle:
+        """Return this session's handle for a same-request native producer."""
+        if request_id != self.request_id:
+            raise ValueError("native producer request_id does not match the PCM session")
+        return AudioRequestHandle(self._operation_handle(require_accepting=True))
+
     def submit(
         self,
         pcm: bytes | bytearray | memoryview,

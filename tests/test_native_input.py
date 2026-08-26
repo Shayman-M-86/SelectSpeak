@@ -58,5 +58,5 @@ def test_native_bridge_rejects_an_incompatible_api(
         raising=False,
     )
 
-    with pytest.raises(NativeBridgeError, match="expected API 7, found 99"):
+    with pytest.raises(NativeBridgeError, match="expected API 8, found 99"):
         NativeBridge(dll)

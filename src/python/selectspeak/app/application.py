@@ -485,7 +485,12 @@ class SelectSpeakApp:
                 event.position,
                 event.length,
             )
-            self._player.highlight_word(event.position, event.length)
+            self._player.call_soon(
+                lambda position=event.position, length=event.length: self._player.highlight_word(
+                    position,
+                    length,
+                )
+            )
             return
         if not isinstance(event, SpeechTerminal):
             raise TypeError(f"Unknown speech event: {type(event).__name__}")

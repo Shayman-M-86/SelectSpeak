@@ -4,7 +4,7 @@ import ctypes
 from enum import IntEnum
 from typing import Any, Final
 
-NATIVE_API_VERSION: Final = 7
+NATIVE_API_VERSION: Final = 8
 
 
 class NativeStatus(IntEnum):
@@ -260,6 +260,19 @@ def configure_native_library(library: Any) -> None:
         None,
     )
     _declare(library, "ss_voice_speak", [ctypes.c_wchar_p], ctypes.c_int)
+    _declare(library, "ss_voice_set_volume", [ctypes.c_uint32], ctypes.c_uint32)
+    _declare(
+        library,
+        "ss_voice_synthesize_to_audio",
+        [
+            AudioRequestHandle,
+            ctypes.c_uint64,
+            ctypes.c_wchar_p,
+            ctypes.c_uint32,
+            ctypes.POINTER(NativeNaturalSynthesisResult),
+        ],
+        ctypes.c_uint32,
+    )
     _declare(library, "ss_voice_stop", [], ctypes.c_int)
     _declare(library, "ss_voice_shutdown", [], None)
     _declare(

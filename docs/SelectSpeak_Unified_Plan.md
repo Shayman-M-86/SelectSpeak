@@ -1033,7 +1033,6 @@ A separate WinUI writer performs pipe I/O.
 Do not expand this phase into broad WinUI cleanup.
 
 ---
-
 # Phase J — Native PCM engine
 
 Implement the thin SelectSpeak session over XAudio2:
@@ -1053,6 +1052,7 @@ Implement the thin SelectSpeak session over XAudio2:
 Do not implement raw WASAPI, a custom WaveOut engine, source-voice pooling, or a
 second general-purpose audio engine. Stop/supersede settlement destroys the
 request source voice and does not depend on `FlushSourceBuffers` callback order.
+
 
 ---
 

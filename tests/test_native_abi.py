@@ -1,5 +1,6 @@
 import ctypes
 import sys
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -74,13 +75,14 @@ def test_native_bridge_configures_the_complete_abi(
     assert library.ss_input_start.argtypes is not None
     assert library.ss_ocr_recognize_bgra.argtypes is not None
     assert library.ss_voice_speak.argtypes == [ctypes.c_wchar_p]
+    assert library.ss_voice_synthesize_to_audio.restype is ctypes.c_uint32
     assert library.ss_audio_request_create.restype is ctypes.c_uint32
     assert library.ss_audio_request_destroy.argtypes == [AudioRequestHandle]
     bridge.close()
 
 
 def test_python_audio_wire_values_and_layout_match_the_frozen_contract() -> None:
-    assert NATIVE_API_VERSION == 7
+    assert NATIVE_API_VERSION == 8
     assert list(NativeStatus) == [
         NativeStatus.OK,
         NativeStatus.INVALID_HANDLE,
@@ -122,12 +124,21 @@ def test_native_status_checker_preserves_unknown_future_codes() -> None:
     sys.platform != "win32" or not RUNTIME_NATIVE_DLL.is_file(),
     reason="built Windows native bridge is unavailable",
 )
-def test_staged_bridge_matches_version_7_audio_abi() -> None:
+def test_staged_bridge_matches_version_8_audio_abi() -> None:
     bridge = NativeBridge(RUNTIME_NATIVE_DLL)
-    events: list[int] = []
-    callback = AudioEventCallback(
-        lambda event, _context: events.append(event.contents.kind)
-    )
+    events: list[tuple[int, int]] = []
+    started = threading.Event()
+    terminal = threading.Event()
+
+    def on_event(event: Any, _context: Any) -> None:
+        native_event = event.contents
+        events.append((native_event.kind, native_event.terminal_status))
+        if native_event.kind == NativeAudioEventKind.STARTED:
+            started.set()
+        if native_event.kind == NativeAudioEventKind.TERMINAL:
+            terminal.set()
+
+    callback = AudioEventCallback(on_event)
     audio_format = NativeAudioFormat(
         ctypes.sizeof(NativeAudioFormat),
         24_000,
@@ -136,17 +147,28 @@ def test_staged_bridge_matches_version_7_audio_abi() -> None:
     )
     handle = AudioRequestHandle(99)
 
-    status = bridge.library.ss_audio_request_create(
-        1,
-        ctypes.byref(audio_format),
-        10,
-        callback,
-        None,
-        ctypes.byref(handle),
-    )
+    try:
+        status = bridge.library.ss_audio_request_create(
+            1,
+            ctypes.byref(audio_format),
+            10,
+            callback,
+            None,
+            ctypes.byref(handle),
+        )
 
-    assert status == NativeStatus.DEVICE_ERROR
-    assert handle.value == 0
-    assert events == []
-    assert bridge.library.ss_audio_request_destroy(handle) == NativeStatus.INVALID_HANDLE
-    bridge.close()
+        assert status == NativeStatus.OK
+        assert handle.value != 0
+        assert started.wait(2)
+        assert bridge.library.ss_audio_request_stop(
+            handle, NativeTerminalStatus.CLOSED
+        ) == NativeStatus.OK
+        assert terminal.wait(2)
+        assert events == [
+            (NativeAudioEventKind.STARTED, NativeTerminalStatus.NONE),
+            (NativeAudioEventKind.TERMINAL, NativeTerminalStatus.CLOSED),
+        ]
+        assert bridge.library.ss_audio_request_destroy(handle) == NativeStatus.OK
+        assert bridge.library.ss_audio_request_destroy(handle) == NativeStatus.INVALID_HANDLE
+    finally:
+        bridge.close()

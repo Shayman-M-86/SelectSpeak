@@ -8,7 +8,7 @@
 #define SS_API extern "C" __declspec(dllimport)
 #endif
 
-inline constexpr std::uint32_t SELECTSPEAK_NATIVE_API_VERSION = 7;
+inline constexpr std::uint32_t SELECTSPEAK_NATIVE_API_VERSION = 8;
 
 enum ss_status_t : std::uint32_t {
     SS_STATUS_OK = 0,
@@ -137,6 +137,11 @@ SS_API void ss_voice_set_audio_callback(ss_audio_callback_t callback,
 SS_API void ss_voice_set_word_callback(ss_word_callback_t callback,
                                        void* context);
 SS_API int ss_voice_speak(const wchar_t* text);
+SS_API std::uint32_t ss_voice_set_volume(std::uint32_t volume_percent);
+SS_API std::uint32_t ss_voice_synthesize_to_audio(
+    ss_audio_request_handle_t audio_request, std::uint64_t request_id,
+    const wchar_t* text, std::uint32_t text_base_offset_utf16,
+    ss_natural_synthesis_result_t* result);
 SS_API int ss_voice_stop();
 SS_API void ss_voice_shutdown();
 SS_API std::uint32_t ss_voice_last_error(char* buffer,

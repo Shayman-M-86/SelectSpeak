@@ -1,5 +1,7 @@
 #include "../api.h"
 #include "../abi_guard.h"
+#include "../audio/audio_engine.h"
+#include "../audio/pcm_volume.h"
 
 #include "speech_runtime_config.h"
 
@@ -8,6 +10,7 @@
 #include <condition_variable>
 #include <cstring>
 #include <memory>
+#include <limits>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -28,6 +31,7 @@ using namespace Microsoft::CognitiveServices::Speech::Audio;
 namespace {
 std::mutex state_mutex;
 std::mutex lifecycle_mutex;
+std::mutex speak_mutex;
 std::condition_variable started_condition;
 std::condition_variable speaking_condition;
 std::condition_variable callback_condition;
@@ -39,7 +43,49 @@ std::uint64_t generation = 0;
 std::uint64_t speaking_generation = 0;
 std::size_t callbacks_in_flight = 0;
 std::string last_error;
+std::uint32_t voice_volume_percent = 100;
 
+struct DirectSynthesis {
+    std::mutex mutex;
+    std::vector<std::uint8_t> pcm;
+    std::vector<ss_audio_boundary_t> boundaries;
+    std::uint32_t text_base_offset_utf16 = 0;
+    std::uint32_t volume_percent = 100;
+    bool invalid_audio = false;
+    bool invalid_boundary = false;
+    bool cancelled = false;
+};
+
+DirectSynthesis* direct_synthesis = nullptr;
+
+class DirectRegistration {
+public:
+    bool Activate(DirectSynthesis& operation)
+    {
+        std::lock_guard lock(state_mutex);
+        if (direct_synthesis) {
+            return false;
+        }
+        operation_ = &operation;
+        direct_synthesis = operation_;
+        return true;
+    }
+
+    ~DirectRegistration()
+    {
+        if (!operation_) {
+            return;
+        }
+        std::unique_lock lock(state_mutex);
+        callback_condition.wait(lock, [] { return callbacks_in_flight == 0; });
+        if (direct_synthesis == operation_) {
+            direct_synthesis = nullptr;
+        }
+    }
+
+private:
+    DirectSynthesis* operation_ = nullptr;
+};
 
 ss_audio_callback_t audio_callback = nullptr;
 void* audio_context = nullptr;
@@ -253,6 +299,7 @@ int ss_voice_initialize(const wchar_t* voice_path, const char* voice_name)
                                  std::uint32_t length) -> int {
                 ss_audio_callback_t callback;
                 void* context;
+                DirectSynthesis* direct;
                 {
                     std::lock_guard lock(state_mutex);
                     if (generation != session_generation) {
@@ -260,16 +307,33 @@ int ss_voice_initialize(const wchar_t* voice_path, const char* voice_name)
                     }
                     callback = audio_callback;
                     context = audio_context;
-                    if (callback) {
+                    direct = direct_synthesis;
+                    if (callback || direct) {
                         ++callbacks_in_flight;
                     }
                 }
-                if (callback) {
+                if (direct) {
+                    std::lock_guard lock(direct->mutex);
+                    try {
+                        if ((length % 2) != 0 ||
+                            direct->pcm.size() >
+                                std::numeric_limits<std::size_t>::max() - length) {
+                            direct->invalid_audio = true;
+                        } else {
+                            direct->pcm.insert(direct->pcm.end(), data,
+                                               data + length);
+                        }
+                    } catch (...) {
+                        direct->invalid_audio = true;
+                    }
+                } else if (callback) {
                     try {
                         callback(data, length, context);
                     } catch (...) {
                         set_error("The Natural Voice audio callback failed");
                     }
+                }
+                if (callback || direct) {
                     {
                         std::lock_guard lock(state_mutex);
                         --callbacks_in_flight;
@@ -299,6 +363,7 @@ int ss_voice_initialize(const wchar_t* voice_path, const char* voice_name)
             }
             ss_word_callback_t callback;
             void* context;
+            DirectSynthesis* direct;
             {
                 std::lock_guard lock(state_mutex);
                 if (generation != session_generation) {
@@ -306,17 +371,46 @@ int ss_voice_initialize(const wchar_t* voice_path, const char* voice_name)
                 }
                 callback = word_callback;
                 context = word_context;
-                if (callback) {
+                direct = direct_synthesis;
+                if (callback || direct) {
                     ++callbacks_in_flight;
                 }
             }
-            if (callback) {
+            if (direct) {
+                std::lock_guard lock(direct->mutex);
+                const auto absolute_position =
+                    static_cast<std::uint64_t>(direct->text_base_offset_utf16) +
+                    event.TextOffset;
+                const auto absolute_end = absolute_position + event.WordLength;
+                if (absolute_position >
+                        std::numeric_limits<std::uint32_t>::max() ||
+                    absolute_end > std::numeric_limits<std::uint32_t>::max()) {
+                    direct->invalid_boundary = true;
+                } else {
+                    try {
+                        constexpr std::uint64_t ticks_per_second = 10'000'000;
+                        constexpr std::uint64_t sample_rate = 24'000;
+                        const auto seconds = event.AudioOffset / ticks_per_second;
+                        const auto remainder = event.AudioOffset % ticks_per_second;
+                        const auto frame_offset = seconds * sample_rate +
+                            (remainder * sample_rate) / ticks_per_second;
+                        direct->boundaries.push_back(
+                            {frame_offset,
+                             static_cast<std::uint32_t>(absolute_position),
+                             event.WordLength});
+                    } catch (...) {
+                        direct->invalid_boundary = true;
+                    }
+                }
+            } else if (callback) {
                 try {
                     callback(event.AudioOffset, event.TextOffset,
                              event.WordLength, context);
                 } catch (...) {
                     set_error("The Natural Voice word callback failed");
                 }
+            }
+            if (callback || direct) {
                 {
                     std::lock_guard lock(state_mutex);
                     --callbacks_in_flight;
@@ -386,6 +480,9 @@ int VoiceSpeak(const wchar_t* text)
             {
                 std::lock_guard lock(state_mutex);
                 if (stop_requested) {
+                    if (direct_synthesis) {
+                        direct_synthesis->cancelled = true;
+                    }
                     return;
                 }
             }
@@ -433,8 +530,139 @@ int VoiceStop()
 
 int ss_voice_speak(const wchar_t* text)
 {
-    return selectspeak::abi::GuardInt(
-        set_error, [&] { return VoiceSpeak(text); });
+    std::lock_guard speak_lock(speak_mutex);
+    return selectspeak::abi::GuardInt(set_error,
+                                      [&] { return VoiceSpeak(text); });
+}
+
+std::uint32_t ss_voice_set_volume(const std::uint32_t volume_percent)
+{
+    if (volume_percent > 100) {
+        return SS_STATUS_INVALID_ARGUMENT;
+    }
+    std::lock_guard lock(state_mutex);
+    voice_volume_percent = volume_percent;
+    return SS_STATUS_OK;
+}
+
+std::uint32_t VoiceSynthesizeToAudio(
+    const ss_audio_request_handle_t audio_request,
+    const std::uint64_t request_id, const wchar_t* const text,
+    const std::uint32_t text_base_offset_utf16,
+    ss_natural_synthesis_result_t* const result)
+{
+    if (!result || result->size != sizeof(ss_natural_synthesis_result_t) ||
+        audio_request == SS_INVALID_AUDIO_REQUEST_HANDLE || request_id == 0 ||
+        !text) {
+        return SS_STATUS_INVALID_ARGUMENT;
+    }
+    result->status = SS_STATUS_OK;
+    result->generated_frames = 0;
+    result->synthesis_duration_us = 0;
+    result->buffered_frames_after_submit = 0;
+
+    std::lock_guard speak_lock(speak_mutex);
+    DirectSynthesis operation;
+    operation.text_base_offset_utf16 = text_base_offset_utf16;
+    DirectRegistration registration;
+    {
+        std::lock_guard lock(state_mutex);
+        operation.volume_percent = voice_volume_percent;
+    }
+    if (!registration.Activate(operation)) {
+        result->status = SS_STATUS_WRONG_STATE;
+        return result->status;
+    }
+
+    const auto started_at = std::chrono::steady_clock::now();
+    const auto speak_status = VoiceSpeak(text);
+    const auto finished_at = std::chrono::steady_clock::now();
+    result->synthesis_duration_us =
+        static_cast<std::uint64_t>(std::chrono::duration_cast<
+            std::chrono::microseconds>(finished_at - started_at).count());
+    if (operation.cancelled) {
+        result->status = SS_STATUS_CLOSED;
+        return result->status;
+    }
+    if (speak_status != 0) {
+        result->status = SS_STATUS_INTERNAL_ERROR;
+        return result->status;
+    }
+
+    std::lock_guard operation_lock(operation.mutex);
+    if (operation.invalid_audio || (operation.pcm.size() % 2) != 0) {
+        set_error("Natural Voice produced invalid 16-bit mono PCM");
+        result->status = SS_STATUS_INTERNAL_ERROR;
+        return result->status;
+    }
+    const auto generated_frames = operation.pcm.size() / 2;
+    if (operation.invalid_boundary ||
+        std::any_of(operation.boundaries.begin(), operation.boundaries.end(),
+                    [generated_frames](const ss_audio_boundary_t& boundary) {
+                        return boundary.frame_offset > generated_frames;
+                    })) {
+        set_error("Natural Voice produced an invalid word boundary");
+        result->status = SS_STATUS_INVALID_BOUNDARY;
+        return result->status;
+    }
+
+    if (operation.volume_percent != 100) {
+        selectspeak::audio::ScalePcm16(operation.pcm,
+                                       operation.volume_percent);
+    }
+
+    constexpr std::uint64_t frames_per_slice = 24'000 * 3;
+    std::size_t boundary_index = 0;
+    std::uint64_t slice_start = 0;
+    std::uint32_t submit_status = SS_STATUS_OK;
+    while (slice_start < generated_frames) {
+        const auto slice_frames =
+            std::min(frames_per_slice, generated_frames - slice_start);
+        const auto slice_end = slice_start + slice_frames;
+        std::vector<ss_audio_boundary_t> slice_boundaries;
+        while (boundary_index < operation.boundaries.size() &&
+               operation.boundaries[boundary_index].frame_offset <=
+                   slice_end) {
+            auto boundary = operation.boundaries[boundary_index++];
+            boundary.frame_offset -= slice_start;
+            slice_boundaries.push_back(boundary);
+        }
+
+        ss_audio_submit_result_t submit_result{
+            sizeof(ss_audio_submit_result_t), 0, 0, 0};
+        submit_status =
+            selectspeak::audio::ProductionAudioEngine().SubmitForRequest(
+                audio_request, request_id,
+                operation.pcm.data() + slice_start * sizeof(std::int16_t),
+                slice_frames * sizeof(std::int16_t),
+                slice_boundaries.empty() ? nullptr : slice_boundaries.data(),
+                static_cast<std::uint32_t>(slice_boundaries.size()),
+                &submit_result);
+        if (submit_status != SS_STATUS_OK) {
+            break;
+        }
+        result->buffered_frames_after_submit =
+            submit_result.buffered_frames_after_submit;
+        slice_start = slice_end;
+    }
+    result->status = submit_status;
+    if (submit_status == SS_STATUS_OK) {
+        result->generated_frames = generated_frames;
+    }
+    return submit_status;
+}
+
+std::uint32_t ss_voice_synthesize_to_audio(
+    const ss_audio_request_handle_t audio_request,
+    const std::uint64_t request_id, const wchar_t* const text,
+    const std::uint32_t text_base_offset_utf16,
+    ss_natural_synthesis_result_t* const result)
+{
+    return selectspeak::abi::GuardResult<std::uint32_t>(
+        SS_STATUS_INTERNAL_ERROR, set_error, [&] {
+            return VoiceSynthesizeToAudio(audio_request, request_id, text,
+                                          text_base_offset_utf16, result);
+        });
 }
 
 int ss_voice_stop()

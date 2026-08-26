@@ -21,7 +21,9 @@ configure_file(version.rc.in selectspeak_version.rc @ONLY)
 
 set(SELECTSPEAK_NATIVE_SOURCES
     api.cpp
-    audio/audio_api_stub.cpp
+    audio/audio_api.cpp
+    audio/audio_engine.cpp
+    audio/xaudio2_sink.cpp
     input/input_bridge.cpp
     input/hotkeys/hotkey_runtime.cpp
     input/ocr/ocr_capture.cpp
@@ -63,7 +65,7 @@ if(MSVC)
     endif()
 endif()
 target_link_libraries(selectspeak_native PRIVATE
-    gdi32 msimg32 ole32 shcore uiautomationcore user32 windowsapp)
+    gdi32 msimg32 ole32 shcore uiautomationcore user32 windowsapp xaudio2)
 set_target_properties(selectspeak_native PROPERTIES OUTPUT_NAME "selectspeak_native")
 
 if(SELECTSPEAK_ENABLE_NATURAL_VOICE)
@@ -76,7 +78,7 @@ endif()
 
 if(BUILD_TESTING)
     add_executable(selectspeak_audio_api_tests
-        audio/audio_api_stub.cpp
+        audio/audio_engine.cpp
         audio/audio_api_tests.cpp)
     target_compile_features(selectspeak_audio_api_tests PRIVATE cxx_std_17)
     target_compile_definitions(selectspeak_audio_api_tests PRIVATE
@@ -86,6 +88,34 @@ if(BUILD_TESTING)
             /utf-8 /W4 /permissive- /sdl /Zc:__cplusplus)
     endif()
     add_test(NAME audio_api COMMAND selectspeak_audio_api_tests)
+
+    # Kept out of CTest: this executable requires a real Windows output device.
+    # Package J and later acceptance runs invoke it explicitly, while the
+    # fake-sink audio_api test remains deterministic on headless builders.
+    add_executable(selectspeak_audio_xaudio2_smoke
+        audio/audio_xaudio2_smoke.cpp)
+    target_compile_features(selectspeak_audio_xaudio2_smoke PRIVATE cxx_std_17)
+    target_link_libraries(selectspeak_audio_xaudio2_smoke PRIVATE selectspeak_native)
+    if(MSVC)
+        target_compile_options(selectspeak_audio_xaudio2_smoke PRIVATE
+            /utf-8 /W4 /permissive- /sdl /Zc:__cplusplus)
+    endif()
+
+    if(SELECTSPEAK_ENABLE_NATURAL_VOICE)
+        # Explicit only: depends on an installed Natural Voice and produces
+        # audible output through the real XAudio2 device.
+        add_executable(selectspeak_natural_voice_audio_smoke
+            natural_voice/natural_voice_audio_smoke.cpp)
+        target_compile_features(selectspeak_natural_voice_audio_smoke PRIVATE
+            cxx_std_17)
+        target_link_libraries(selectspeak_natural_voice_audio_smoke PRIVATE
+            selectspeak_native)
+        if(MSVC)
+            target_compile_options(selectspeak_natural_voice_audio_smoke PRIVATE
+                /utf-8 /W4 /permissive- /sdl /Zc:__cplusplus)
+        endif()
+
+    endif()
 
     add_executable(selectspeak_ocr_layout_tests
         input/ocr/ocr_layout.cpp
