@@ -11,7 +11,7 @@ is absent. A new agent resumes `Active`; otherwise it selects the earliest eligi
 
 | Package | Focus | Gate or sequencing note | Status | Evidence, blocker, or next action |
 | --- | --- | --- | --- | --- |
-| A | Baseline and telemetry | First package; preserve results for O | Complete | Repeatable Natural/Supertonic workload, temporary telemetry, clean diagnostics, and durable comparison evidence delivered. [Report](reports/package-a-baseline.md) |
+| A | Baseline and telemetry | First package; preserve results for M | Complete | Repeatable Natural/Supertonic workload, temporary telemetry, clean diagnostics, and durable comparison evidence delivered. [Report](reports/package-a-baseline.md) |
 | B | Lifecycle and ownership | Use A behaviour baseline | Complete | Sole speaker ownership, partial-safe ordered shutdown, deterministic backend close/join, and session relocation delivered. [Report](reports/package-b-lifecycle.md) |
 | C | Interface checkpoint | Explicit review/freeze before D–J interface work | Complete | Request-scoped XAudio2 feasibility passed 29/29 in three final runs; the maintainer explicitly approved and froze the simplified contract on 2026-08-21. [Report](reports/package-c-interface-checkpoint.md) [Contract](reports/package-c-interface-contract.md) [Evidence](reports/package-c-xaudio2-feasibility.md) |
 | D | Request and completion | C Complete with contract Frozen | Complete | Application-issued `uint64` identity, ordered request events, stable terminal statuses, exactly-once settlement, and wait-thread removal delivered. [Report](reports/package-d-request-completion.md) |
@@ -22,14 +22,12 @@ is absent. A new agent resumes `Active`; otherwise it selects the earliest eligi
 | I | Async UI delivery | Before native played-word callbacks | Complete | Active-request validation now precedes queued player-thread highlight delivery, so backend/native callbacks never perform named-pipe I/O. [Report](reports/package-i-async-ui-delivery.md) |
 | J | Native XAudio2 requests | F–I seams ready | Complete | Persistent COM/XAudio2 runtime, fresh source voice per handle, bounded 100 ms buffering, event-driven boundaries, deterministic settlement, fake-sink coverage, and 3/3 real-device smokes delivered. [Report](reports/package-j-native-xaudio2.md) |
 | K | Natural integration | J ready | Complete | Direct native synthesis/playback, telemetry, cancellation, callback quiescence, producer text-range validation, signed-volume fix, and 100%-volume real-device acceptance are delivered. Native discovery finds six installed voices; focused/full Python checks, Ruff, ty, deterministic native checks, staged smoke, and the product-path request pass. [Report](reports/package-k-natural-integration.md) |
-| K1 | Exact Natural identity | Separately reviewable; coordinate with K | Ready | Package K is complete. Implement package + exact SDK voice identity and persistence migration. |
-| L | Supertonic integration | J ready | Unassessed | Change transport only; keep inference unchanged. |
-| M | Dual-path rollout | K/L integrated | Unassessed | Run opt-in, native-default soak, and comparison. |
-| N | Delete Python WaveOut | M acceptance passed | Unassessed | Remove the old engine, adapter, and rollout switch. |
-| O | Audio acceptance | Compare with A | Unassessed | Capture final metrics before N removes instrumentation needed for comparison. |
+| K1 | Exact Natural identity | K complete | Complete | Versioned package + exact SDK voice keys now drive UI selection, native initialization, exact persistence, and deterministic legacy package-only migration. [Report](reports/package-k1-exact-natural-identity.md) |
+| L | Supertonic integration | K1 complete | Complete | Supertonic inference remains Python-owned; PCM, structural silence, estimated boundaries, controls, and terminal settlement now flow through request-scoped bounded native sessions. [Report](reports/package-l-supertonic-integration.md) |
+| M | Native cutover, cleanup, and acceptance | L complete | Active | SAPI retirement is now in progress alongside the native-only cutover. WaveOut deletion, 207 Python tests, Ruff, ty, 5/5 native CTest, and silent real-device XAudio2 smoke already pass. [Report](reports/package-m-native-cutover.md) |
 
 ## Cross-package decisions
 
-- During M, schedule O's final measurement capture before N removes any required
-  temporary instrumentation. N may then delete the old engine and instrumentation,
-  followed by O's remaining clean-tree acceptance checks and final report.
+- M is the single final audio-migration package: native cutover, Phase A comparison,
+  WaveOut deletion, and clean-tree acceptance. No dual-path rollout, playback
+  switch, adapter, or fallback is permitted.

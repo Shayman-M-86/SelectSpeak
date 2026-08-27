@@ -40,7 +40,7 @@ The UI sends intent:
 {"type":"stop"}
 {"type":"settings"}
 {"type":"set_hotkey","hotkey":"ctrl+shift+r"}
-{"type":"select_voice","voice":"sapi"}
+{"type":"select_voice","voice":"supertonic"}
 ```
 
 ## Building and running

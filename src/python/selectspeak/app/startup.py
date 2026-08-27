@@ -1,17 +1,16 @@
 from __future__ import annotations
 
 import ctypes
-import json
 import logging
-import os
-from pathlib import Path
 from types import TracebackType
 
 from ..config import DEFAULT_CONFIG
 from ..config.paths import log_dir
 from ..config.settings import SettingsStore
-from ..infrastructure.logging import configure_logging
+from ..diagnostics import configure_logging
 from ..native import NATIVE_API_VERSION, get_native_bridge, shutdown_native_bridge
+from . import packaging_probe
+from .application import main as run
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +56,7 @@ def run_application() -> None:
     settings = SettingsStore()
     log_path = None
     try:
-        if _run_supertonic_packaging_probe():
+        if packaging_probe.run_if_requested():
             return
         config = settings.load(DEFAULT_CONFIG)
         log_path = configure_logging(config.logging)
@@ -66,15 +65,14 @@ def run_application() -> None:
             if instance.already_running:
                 logger.info("app.second_instance.exiting")
                 return
-            settings.save(config)
+            if not settings.path.is_file():
+                settings.save(config)
             bridge = get_native_bridge(config.native_dll)
             logger.info(
                 "native.preflight.completed api_version=%s path=%s",
                 NATIVE_API_VERSION,
                 bridge.path,
             )
-            from .application import main as run
-
             run(config, settings)
     except Exception as error:
         logger.exception("app.startup.failed")
@@ -84,44 +82,6 @@ def run_application() -> None:
         )
     finally:
         shutdown_native_bridge()
-
-
-def _run_supertonic_packaging_probe() -> bool:
-    """Exercise the external neural layer when requested by release verification."""
-    output_value = os.environ.get("SELECTSPEAK_SUPERTONIC_PROBE_OUTPUT")
-    if not output_value:
-        return False
-    output = Path(output_value).resolve()
-    result: dict[str, object]
-    try:
-        from ..speech.optional_dependencies import activate_supertonic_dependencies
-
-        activate_supertonic_dependencies()
-        import numpy
-        import onnxruntime
-        import supertonic
-        from supertonic import TTS
-
-        model_root = os.environ.get("SELECTSPEAK_SUPERTONIC_PROBE_MODEL")
-        if not model_root:
-            raise RuntimeError("SELECTSPEAK_SUPERTONIC_PROBE_MODEL is required.")
-        engine = TTS(model_dir=Path(model_root).resolve(), auto_download=False)
-        result = {
-            "status": "ok",
-            "numpy": numpy.__version__,
-            "onnxruntime": onnxruntime.__version__,
-            "supertonic": supertonic.__version__,
-            "sample_rate": engine.sample_rate,
-        }
-    except Exception as error:
-        result = {
-            "status": "error",
-            "error_type": type(error).__name__,
-            "message": str(error),
-        }
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
-    return True
 
 
 def show_startup_error(message: str) -> None:

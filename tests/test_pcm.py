@@ -180,6 +180,7 @@ def test_session_creates_one_native_request_with_utf16_identity(
     assert dll.text_length_utf16 == 4
     assert dll.format == (24_000, 1, 1)
     assert events == [PcmStarted(7)]
+    assert session.wait_until_started(0)
     session.close()
 
 

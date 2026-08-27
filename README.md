@@ -1,8 +1,8 @@
 # SelectSpeak
 
 Select text anywhere in Windows, press `Alt+S`, and hear it read aloud
-using a locally installed Narrator Natural Voice when native voice support
-is available, with the built-in SAPI voice as an automatic fallback. The tray app includes pause, resume, stop,
+using a locally installed Narrator Natural Voice, or the optional local
+Supertonic neural voice. The tray app includes pause, resume, stop,
 replay, clipboard mode, word highlighting, and hotkey rebinding. Global
 shortcut registration, selection capture, and shortcut recording are handled
 by a small native Windows bridge.
@@ -102,7 +102,10 @@ To install SelectSpeak, launch it, and add it to Windows startup in one command:
 
 .\scripts\install-dev-dependencies.ps1 -Launch -AddToStartup
 
-Use -SkipNaturalVoice if you only want the SAPI backend and do not want to build the optional direct Natural Voice integration. Use -SkipSupertonicModel to defer downloading the model until Supertonic is first selected. Use -SkipChecks to omit developer checks during installation.
+Use -SkipNaturalVoice when developing only the Supertonic path and do not want
+to build the direct Natural Voice integration. Use -SkipSupertonicModel to defer
+downloading the model until Supertonic is first selected. Use -SkipChecks to
+omit developer checks during installation.
 
 The input bridge attempts UI Automation first, then falls back to SendInput, clipboard sequence polling, and an eager multi-format clipboard snapshot. Normal text capture and OCR shortcuts share a single native message thread. OCR is responsible only for the frozen-screen selector and Windows' local text-recognition functionality. The bridge uses RegisterHotKey during normal operation and temporarily installs a low-level keyboard hook only while recording a new shortcut.
 
@@ -110,15 +113,24 @@ Set SELECTSPEAK_NATIVE_DLL to use the unified native DLL from another location.
 
 Direct Natural Voice backend
 
-SelectSpeak includes an optional native backend for compatible Microsoft Narrator Natural Voices. It communicates directly with Microsoft's locally installed speech components, allowing SelectSpeak to stream PCM audio and receive accurate word-boundary events without routing synthesis through SAPI.
+SelectSpeak includes a native backend for compatible Microsoft Narrator Natural
+Voices. It communicates directly with Microsoft's locally installed speech
+components, allowing SelectSpeak to stream PCM audio and receive accurate
+word-boundary events.
 
-The development setup builds this backend by default. Compatible Natural Voices installed through Windows Settings are discovered dynamically. If the backend or a compatible voice is unavailable, SelectSpeak automatically falls back to SAPI.
+The development setup builds this backend by default. Compatible Natural Voices
+installed through Windows Settings are discovered dynamically. If a selected
+Natural Voice is unavailable, SelectSpeak reports that condition rather than
+switching to a different speech engine.
 
 To remain compatible with different installed Windows speech-runtime and voice-package versions, the bridge obtains the runtime information required by Microsoft's locally installed speech components from the installed speech extension at runtime. The bridge keeps this information in memory only; it does not persist, log, upload, or transmit it. The backend does not require the user to supply external speech-service credentials.
 
 This integration uses internal, version-sensitive Windows speech interfaces rather than a stable public Microsoft API. It may require maintenance when Microsoft changes the speech runtime or voice-package implementation.
 
-AppConfig.speech_backend defaults to "auto": SelectSpeak uses the Natural Voice backend when it is available and compatible, otherwise it uses SAPI. Set it to "natural" to require the Natural Voice backend, "sapi" to disable it, or "supertonic" to start with the neural engine selected. AppConfig.native_dll can also point to an alternate unified DLL path.
+AppConfig.speech_backend defaults to "auto", which selects Natural Voice. Set
+it to "natural" to require that backend or "supertonic" to start with the neural
+engine selected. AppConfig.native_dll can also point to an alternate unified DLL
+path.
 
 Supertonic defaults to its F4 voice at 8 inference steps. Voice, language, quality steps, and speed can be configured through the supertonic_voice, supertonic_language, supertonic_steps, and supertonic_speed fields in AppConfig.
 
@@ -188,8 +200,8 @@ run:
   - **Read the clipboard instead of the selection.** Off by default: the
     shortcut reads selected text when available and falls back to the existing
     clipboard when nothing is selected. On, it always reads the clipboard.
-  - **Voice.** Any discovered Windows Natural Voice, the configured local
-    Supertonic model, or the Windows SAPI fallback. The first switch to
+  - **Voice.** Any discovered Windows Natural Voice or the configured local
+    Supertonic model. The first switch to
     Supertonic can take a moment while its ONNX model loads into memory.
   - **Shortcuts.** Both the read and screen-capture shortcuts are recorded in
     place; a combination another application already holds is refused and the

@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from ..config import LoggingConfig
+from .config import LoggingConfig
+from .config.paths import log_dir
 
 _SESSION_ID = uuid4().hex
 
@@ -41,7 +42,7 @@ def configure_logging(config: LoggingConfig) -> Path | None:
         return None
 
     logging.disable(logging.NOTSET)
-    log_path = Path(config.log_file).expanduser()
+    log_path = Path(config.log_file).expanduser() if config.log_file else log_dir() / "selectspeak.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
     root_logger.setLevel(logging.DEBUG)

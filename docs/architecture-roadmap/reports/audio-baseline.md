@@ -1,6 +1,6 @@
 # SelectSpeak Audio Baseline
 
-This artifact is the pre-migration comparison point for Package O. Measurements
+This artifact is the pre-migration comparison point for Package M. Measurements
 are separated by evidence quality so an uncontrolled historical log is not
 mistaken for a repeatable benchmark.
 
@@ -32,8 +32,8 @@ behavior includes:
 Native Release CTest passed 3/3 tests: OCR layout, selection policy, and Natural
 Voice speech-runtime configuration. Ruff passed for `src/python` and `tests`.
 
-Automated gaps to retain as explicit manual/controlled checks are actual SAPI
-audio/end-of-stream behavior, real audio-device pause/resume/stop timing,
+Automated gaps to retain as explicit manual/controlled checks are real
+audio-device pause/resume/stop timing,
 backend switching during live playback, application shutdown with active audio,
 and end-to-end WinUI highlighting timing.
 
@@ -124,6 +124,4 @@ during that one-second sample. Logs also show post-terminal chunk/inference work
 on both stopped requests. Packages B and D own deterministic worker settlement
 and terminal-event rules; Package A records this behavior without changing it.
 
-Capacity-wait duration is not applicable before Package H. SAPI remains a
-separate manual behavior check because it owns its audio path and is outside the
-native PCM comparison.
+Capacity-wait duration is not applicable before Package H.

@@ -181,6 +181,7 @@ class PcmPlaybackSession:
         self._handle = 0
         self._accepting = True
         self._started = False
+        self._started_event = threading.Event()
         self._terminal = False
         self._closing = False
         self._closed = False
@@ -218,6 +219,14 @@ class PcmPlaybackSession:
     def closed(self) -> bool:
         with self._state_lock:
             return self._closed
+
+    def wait_until_started(self, timeout: float | None = None) -> bool:
+        """Wait for the native request's XAudio2 start event.
+
+        This is diagnostic telemetry for controlled workloads; normal playback
+        never waits on it or polls device state.
+        """
+        return self._started_event.wait(timeout)
 
     def native_handle_for_request(self, request_id: int) -> AudioRequestHandle:
         """Return this session's handle for a same-request native producer."""
@@ -507,6 +516,7 @@ class PcmPlaybackSession:
             if self._started:
                 return None
             self._started = True
+            self._started_event.set()
             return PcmStarted(self.request_id)
         if not self._started:
             logger.error("pcm.native_event.invalid request_id=%s reason=before_started", self.request_id)

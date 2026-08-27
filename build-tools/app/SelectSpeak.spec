@@ -10,9 +10,7 @@ analysis = Analysis(
     binaries=[],
     datas=[],
     hiddenimports=[
-        "pythoncom",
         "pywintypes",
-        "win32com.client",
     ],
     excludes=[
         # The player is the WinUI process; nothing here draws with Tk, and the
@@ -34,8 +32,7 @@ analysis = Analysis(
         "hf_xet",
         # The tray icon is drawn in memory; it never decodes AVIF images.
         "PIL.AvifImagePlugin",
-        # win32com's type-library tooling optionally imports the Pythonwin GUI.
-        # SelectSpeak uses dynamic SAPI dispatch and never uses that GUI stack.
+        # Pythonwin's optional GUI stack is not used by SelectSpeak.
         "pywin",
         "win32ui",
         "fastapi",

@@ -16,7 +16,7 @@ def test_resolve_capture_prefers_selected_text() -> None:
     )
 
     assert result.source == "selection"
-    assert result.text == "selected text"
+    assert result.raw_text == " selected text "
     assert clipboard_reads == 0
 
 
@@ -24,14 +24,14 @@ def test_resolve_capture_falls_back_when_selection_is_empty() -> None:
     result = resolve_capture("", lambda: "clipboard text", allow_clipboard_fallback=True)
 
     assert result.source == "clipboard_fallback"
-    assert result.text == "clipboard text"
+    assert result.raw_text == "clipboard text"
 
 
 def test_resolve_capture_falls_back_for_whitespace_selection() -> None:
     result = resolve_capture(" \n ", lambda: "clipboard text", allow_clipboard_fallback=True)
 
     assert result.source == "clipboard_fallback"
-    assert result.text == "clipboard text"
+    assert result.raw_text == "clipboard text"
 
 
 def test_resolve_capture_does_not_read_clipboard_when_fallback_is_disabled() -> None:
@@ -49,5 +49,5 @@ def test_resolve_capture_does_not_read_clipboard_when_fallback_is_disabled() -> 
     )
 
     assert result.source == "empty"
-    assert result.text == ""
+    assert result.raw_text == ""
     assert clipboard_reads == 0

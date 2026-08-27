@@ -15,9 +15,8 @@
   WaveOut loop/position-query counts, submitted-block counts, capacity waits,
   process CPU, or thread counts. Stop-to-silence and playback-position-to-word
   callback delay also cannot be measured precisely from current events.
-- The Python WaveOut implementation is transitional and is deleted by Package N;
-  any added baseline instrumentation must stay small and have the same deletion
-  path.
+- The Python WaveOut implementation and its temporary instrumentation are
+  transitional and are deleted by final Package M.
 - The first attempted Supertonic measurement followed the application optional
   dependency path and correctly exposed a development fallback to Natural. The
   controlled runner now selects its requested installed backend directly so
@@ -49,8 +48,8 @@
 
 ## Remaining
 
-- Package A is complete. Package O owns the comparison and removal of temporary
-  measurement instrumentation after its final evidence is preserved.
-- Actual SAPI end-of-stream, end-to-end WinUI rendering delay, live backend
-  switching, and application shutdown with active audio remain explicit manual
+- Package A is complete. Package M owns the final comparison and removes the
+  temporary old-path instrumentation only after preserving that evidence.
+- End-to-end WinUI rendering delay, live backend switching, and application
+  shutdown with active audio remain explicit manual
   acceptance checks; they are not part of the native PCM performance baseline.

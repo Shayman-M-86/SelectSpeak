@@ -21,10 +21,9 @@ from ..config import AppConfig
 from ..speech import Speaker, create_speaker
 from ..speech.backends.natural import NaturalVoiceSpeaker, discover_natural_voices
 from ..speech.debug import SpeechDebugCallback
-from ..speech.feature_installer import launch_supertonic_installer
-from ..speech.model_installation import supertonic_model_is_installed
-from ..speech.optional_dependencies import supertonic_dependencies_are_installed
-from ..speech.voices import VoiceOption, build_voice_options, natural_voice_key
+from ..speech.supertonic_setup import is_ready as supertonic_is_ready
+from ..speech.supertonic_setup import launch_installer as launch_supertonic_installer
+from ..speech.voices import VoiceOption, build_voice_options, natural_voice_key, supertonic_voice_key
 from ..ui.contracts import Player
 
 logger = logging.getLogger(__name__)
@@ -59,7 +58,9 @@ def speaker_backend(speaker: Speaker) -> str:
     if isinstance(speaker, NaturalVoiceSpeaker):
         return "natural"
     name = type(speaker).__name__.casefold()
-    return "supertonic" if "supertonic" in name else "sapi"
+    if "supertonic" in name:
+        return "supertonic"
+    raise TypeError(f"Unsupported SelectSpeak speaker: {type(speaker).__name__}")
 
 
 class VoiceController:
@@ -164,6 +165,16 @@ class VoiceController:
             self._speakers[backend] = speaker
             self._current_backend = backend
         self.publish_options(speaker, backend)
+        if isinstance(speaker, NaturalVoiceSpeaker):
+            selected_key = natural_voice_key(speaker.voice.package_path, speaker.voice.name)
+            selected_config = replace(
+                config,
+                speech_backend="natural",
+                preferred_voice_match=selected_key,
+            )
+            with self._lock:
+                self._config = selected_config
+            self._on_activated("natural", selected_key, selected_config)
 
     def publish_options(self, speaker: Speaker, backend: str) -> None:
         """Enumerate installed voices and send the list to the player."""
@@ -178,11 +189,11 @@ class VoiceController:
 
         options = build_voice_options(natural_voices, self._config.speech)
         if isinstance(speaker, NaturalVoiceSpeaker):
-            selected_key = natural_voice_key(speaker.voice.package_path)
+            selected_key = natural_voice_key(speaker.voice.package_path, speaker.voice.name)
         elif backend == "supertonic":
-            selected_key = "supertonic"
+            selected_key = supertonic_voice_key(self._config.supertonic_voice)
         else:
-            selected_key = "sapi"
+            raise TypeError(f"Unsupported SelectSpeak backend: {backend}")
 
         with self._lock:
             self._options = {option.key: option for option in options}
@@ -203,7 +214,7 @@ class VoiceController:
                 return
             current_key = self._selected_key
 
-        if option.backend == "supertonic" and self._install_required():
+        if option.backend == "supertonic" and self._install_required(option.supertonic_voice):
             self._request_install(option, current_key)
             return
 
@@ -243,17 +254,31 @@ class VoiceController:
                 config,
                 speech_backend=option.backend,
                 preferred_voice_match=(
-                    option.package_path if option.backend == "natural" else config.preferred_voice_match
+                    option.key if option.backend == "natural" else config.preferred_voice_match
+                ),
+                supertonic_voice=(
+                    option.supertonic_voice
+                    if option.backend == "supertonic"
+                    else config.supertonic_voice
                 ),
             )
             if option.backend == "natural" and isinstance(speaker, NaturalVoiceSpeaker):
-                speaker.select_voice(option.package_path)
-            elif speaker is None:
+                speaker.select_voice(option.package_path, option.sdk_voice_name)
+            elif speaker is None or option.backend == "supertonic":
                 speaker = create_speaker(selected_config, self._debug_callback)
                 created = True
 
+            actual_backend = speaker_backend(speaker)
+            if actual_backend != option.backend:
+                if created:
+                    speaker.close()
+                raise RuntimeError(
+                    f"{option.label} is unavailable; SelectSpeak kept the current voice instead."
+                )
+
             with self._lock:
                 closed = self._closed
+                replaced_speaker = self._speakers.get(option.backend)
                 if not closed:
                     self._speakers[option.backend] = speaker
                     self._current_backend = option.backend
@@ -263,6 +288,8 @@ class VoiceController:
                 if created:
                     speaker.close()
                 return
+            if replaced_speaker is not None and replaced_speaker is not speaker:
+                replaced_speaker.close()
 
             self._on_activated(option.backend, option.key, selected_config)
 
@@ -298,12 +325,9 @@ class VoiceController:
 
     # -- the optional Supertonic component ---------------------------------
 
-    def _install_required(self) -> bool:
+    def _install_required(self, voice: str) -> bool:
         try:
-            return not (
-                supertonic_dependencies_are_installed()
-                and supertonic_model_is_installed(self._config.supertonic_voice)
-            )
+            return not supertonic_is_ready(voice)
         except Exception:
             logger.exception("supertonic.installation_state_failed")
             return True

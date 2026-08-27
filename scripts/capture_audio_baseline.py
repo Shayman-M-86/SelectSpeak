@@ -1,8 +1,4 @@
-"""Run the temporary, repeatable Package A audio workload.
-
-This script and the WaveOut counters it consumes are old-path measurement tools.
-Package O may remove them after the final comparison is preserved.
-"""
+"""Run the repeatable native PCM workload used by Package M acceptance."""
 
 from __future__ import annotations
 
@@ -15,7 +11,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from selectspeak.config.settings import SettingsStore
-from selectspeak.infrastructure.logging import configure_logging
+from selectspeak.diagnostics import configure_logging
 from selectspeak.speech.contracts import Speaker, SpeechEvent, SpeechTerminal, TerminalStatus
 
 COMPLETION_TEXT = (
@@ -84,23 +80,14 @@ def _sample_resources(label: str, duration: float = 1.0) -> None:
     )
 
 
-def _playback_start(speaker: Speaker) -> float:
-    player = getattr(speaker, "_player", None)
-    if player is None:
-        raise RuntimeError("Backend does not expose the temporary WaveOut player")
-    return float(player._started_at)
-
-
-def _wait_for_new_audio(speaker: Speaker, previous_start: float) -> None:
-    player = getattr(speaker, "_player", None)
-    if player is None:
-        raise RuntimeError("Backend does not expose the temporary WaveOut player")
+def _wait_for_native_start(speaker: Speaker) -> None:
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
-        if float(player._started_at) != previous_start and player.wait_until_started(timeout=0.05):
+        session = getattr(speaker, "_audio_session", None)
+        if session is not None and session.wait_until_started(timeout=0.05):
             return
         time.sleep(0.01)
-    raise RuntimeError("New playback did not start within 30 seconds")
+    raise RuntimeError("Native playback did not start within 30 seconds")
 
 
 def _speak_to_completion(speaker: Speaker) -> None:
@@ -109,9 +96,8 @@ def _speak_to_completion(speaker: Speaker) -> None:
 
 
 def _pause_and_resume(speaker: Speaker) -> None:
-    previous_start = _playback_start(speaker)
     waiter = _submit(speaker, PAUSE_TEXT)
-    _wait_for_new_audio(speaker, previous_start)
+    _wait_for_native_start(speaker)
     time.sleep(0.35)
     pause_started_at = time.monotonic()
     speaker.pause()
@@ -130,9 +116,8 @@ def _pause_and_resume(speaker: Speaker) -> None:
 
 
 def _stop_during_playback(speaker: Speaker) -> None:
-    previous_start = _playback_start(speaker)
     waiter = _submit(speaker, STOP_TEXT)
-    _wait_for_new_audio(speaker, previous_start)
+    _wait_for_native_start(speaker)
     time.sleep(0.35)
     stop_started_at = time.monotonic()
     speaker.stop()

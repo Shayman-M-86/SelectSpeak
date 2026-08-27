@@ -86,7 +86,11 @@ def _apply_settings(defaults: AppConfig, payload: dict[str, Any]) -> AppConfig:
     supertonic = _mapping(payload.get("supertonic"))
     ui = _mapping(payload.get("ui"))
     logging = _mapping(payload.get("logging"))
-    backend = _choice(payload.get("speech_backend"), {"auto", "natural", "sapi", "supertonic"})
+    backend = _choice(payload.get("speech_backend"), {"auto", "natural", "supertonic"})
+    # SAPI was retired in favor of Windows Natural Voice. Preserve speech for
+    # existing settings instead of treating a former explicit choice as corrupt.
+    if isinstance(payload.get("speech_backend"), str) and payload["speech_backend"].casefold() == "sapi":
+        backend = "natural"
     return replace(
         defaults,
         speech_backend=backend or defaults.speech_backend,

@@ -1,16 +1,20 @@
 import threading
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
 import pytest
 
 from selectspeak.config import AppConfig
+from selectspeak.speech.backends import supertonic as supertonic_backend
 from selectspeak.speech.backends.supertonic import (
     SupertonicSpeaker,
     _PreparedSegment,
     estimate_word_boundaries,
     normalize_edge_silence,
 )
+from selectspeak.speech.contracts import TerminalStatus
+from selectspeak.speech.pcm import PcmTerminal
 from selectspeak.speech.pipeline import (
     MIN_CHUNK_CHARACTERS,
     GenerationStatistics,
@@ -106,7 +110,7 @@ class _FakePlayer:
         self.events.append(("finish", None))
 
 
-def test_supertonic_uses_one_stream_and_only_pauses_at_sentence_boundaries() -> None:
+def test_supertonic_uses_one_stream_and_only_pauses_at_sentence_boundaries(monkeypatch) -> None:
     text = (
         "The ultrasound does not prove sarcoidosis, because other inflammatory "
         "conditions can cause soft-tissue inflammation. But the next sentence "
@@ -119,8 +123,31 @@ def test_supertonic_uses_one_stream_and_only_pauses_at_sentence_boundaries() -> 
     assert speaker._playback.next_request() == request
     speaker._request_generation = 0
     speaker._generation_statistics = GenerationStatistics()
-    player = _FakePlayer()
-    speaker._player = player
+    class AudioSession:
+        events: list[tuple[str, object]] = []
+
+        def __init__(self, _request_id, _text, _format, callback, **_kwargs) -> None:
+            self.callback = callback
+
+        def submit_bounded(self, pcm, boundaries=()):
+            self.events.append(("feed", (pcm, tuple(boundaries))))
+            return SimpleNamespace(buffered_frames_after_submit=len(pcm) // 2)
+
+        def finish_input(self) -> None:
+            self.events.append(("finish", None))
+            self.callback(PcmTerminal(1, TerminalStatus.COMPLETED, 0))
+
+        def close(self) -> None:
+            self.events.append(("close", None))
+
+        def pause(self) -> None:
+            pass
+
+    monkeypatch.setattr(supertonic_backend, "PcmPlaybackSession", AudioSession)
+    speaker._sample_rate = 1000
+    speaker._session_lock = threading.Lock()
+    speaker._audio_session = None
+    speaker._terminal_event = None
     synthesis_events: list[str] = []
 
     def synthesize(segment: SpeechSegment) -> _PreparedSegment:
@@ -142,11 +169,8 @@ def test_supertonic_uses_one_stream_and_only_pauses_at_sentence_boundaries() -> 
     speaker._speak_request(request)
 
     assert len(synthesis_events) == 2
-    assert [event for event, _ in player.events].count("start") == 1
-    assert [event for event, _ in player.events].count("finish") == 1
-    assert [value for event, value in player.events if event == "silence"] == [pytest.approx(0.1)]
-    first_feed = next(index for index, (event, _) in enumerate(player.events) if event == "feed")
-    assert first_feed < len(player.events) - 1
+    assert [event for event, _ in AudioSession.events].count("finish") == 1
+    assert len([event for event, _ in AudioSession.events if event == "feed"]) >= 2
 
 
 def test_synthesis_statistics_grow_chunks_with_more_playback_runway() -> None:
@@ -177,7 +201,7 @@ def test_supertonic_close_stops_playback_and_joins_inference_worker() -> None:
     events: list[str] = []
 
     class Player:
-        def stop(self) -> None:
+        def stop(self, *_args: object) -> None:
             events.append("player.stop")
 
     class Worker:
@@ -190,7 +214,8 @@ def test_supertonic_close_stops_playback_and_joins_inference_worker() -> None:
     speaker._playback = PlaybackController()
     request, _active = speaker._playback.submit(1, "Read this", lambda _event: None)
     assert speaker._playback.next_request() == request
-    speaker._player = Player()
+    speaker._session_lock = threading.Lock()
+    speaker._audio_session = Player()
     speaker._thread = Worker()
 
     speaker.close()

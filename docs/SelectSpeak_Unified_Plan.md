@@ -138,7 +138,8 @@ boundary, capacity, error, and shutdown semantics. XAudio2 callbacks signal
 SelectSpeak-owned non-audio work and return immediately; they never invoke
 Python or perform UI I/O.
 
-The current Python `WaveOutPlayer` is transitional and will eventually be deleted.
+Python WaveOut was a transitional migration path and is removed by the final
+native-cutover package.
 
 ---
 
@@ -263,14 +264,6 @@ Completed only when:
 ### Supertonic
 
 Completed only when all submitted PCM has played.
-
-### SAPI
-
-Completion means actual end-of-stream.
-
-Initially the existing SAPI worker may continue determining this using its current mechanism.
-
-Direct SAPI `EndStream` events are introduced later in the separate SAPI project.
 
 ### Cancellation
 
@@ -802,7 +795,6 @@ Preserve:
 
 * Natural speech
 * Supertonic speech
-* SAPI speech
 * playback-time highlighting
 * pause/resume
 * stop
@@ -1145,70 +1137,25 @@ Use native silence-frame queueing where practical.
 
 ---
 
-# Phase M — Dual-path rollout
+# Phase M — Native cutover, cleanup, and acceptance
 
-The Python/native playback switch is strictly:
+After K1 and L, native PCM playback is the only application playback path. Do
+not add a playback-engine feature flag, persisted setting, environment-variable
+switch, compatibility adapter, or WaveOut fallback.
 
-* development/test-only
-* not persisted in user settings
-* preferably environment-variable or dependency-injection controlled
+### M1 — Native cutover
 
-Rollout stages:
+Verify that:
 
-### M1 — Native opt-in
+* Natural Voice uses native synthesis followed by native XAudio2 playback
+* Supertonic keeps Python inference and submits bounded PCM to the native session
+* request identity, terminal settlement, asynchronous highlighting, controls,
+  cancellation/supersession, and deterministic shutdown preserve their contracts
 
-Old Python playback remains default.
+### M2 — Measurement and acceptance
 
-Native path is explicitly enabled for testing.
-
-### M2 — Native default soak
-
-Native becomes default.
-
-Old Python playback remains emergency-selectable for development/testing.
-
-Compare both implementations using the same workloads.
-
-### M3 — Acceptance
-
-Native must pass behavioural/performance acceptance.
-
-### Package N
-
-Deletes:
-
-* old playback
-* switch
-* fallback support
-
-The application must not permanently support two PCM playback engines.
-
----
-
-# Phase N — Delete Python WaveOut
-
-Delete:
-
-* Python WaveOut thread
-* WinMM ctypes structures
-* WinMM ctypes calls
-* Python WaveOut buffers
-* polling
-* boundary polling
-* block preparation
-* temporary adapter
-* dual-path switch
-* temporary old-path instrumentation
-
-Do not leave dormant compatibility code.
-
----
-
-# Phase O — Audio acceptance
-
-Compare against Phase A baseline.
-
-Verify:
+Run the final native workloads and compare them with the preserved Phase A
+baseline:
 
 * first-audio latency
 * buffered runway
@@ -1217,15 +1164,9 @@ Verify:
 * CPU usage
 * thread count
 * underruns
-* pause/resume
-* cancellation
-* repeat-hotkey stop
-* superseding requests
-* voice/backend switching
-* shutdown
-* no stale callbacks
-* no callbacks after close
-* OCR/input unaffected
+Also verify pause/resume, cancellation, repeat-hotkey stop, superseding
+requests, voice/backend switching, shutdown, no stale callbacks, no callbacks
+after close, and unaffected OCR/input.
 
 Require:
 
@@ -1233,82 +1174,53 @@ Require:
 * Ruff passing
 * full `ty` passing
 * native deterministic tests passing
-* Windows WaveOut smoke passing
+* real-device XAudio2 smoke passing
 * Natural smoke
 * Supertonic smoke
-* SAPI smoke
 * WinUI highlighting smoke
 * shutdown/restart smoke
 
-Update the engineering comparison report with final metrics before deleting temporary instrumentation.
+Record the final comparison against Phase A before removing temporary
+instrumentation.
+
+### M3 — Remove legacy playback
+
+Once native acceptance passes, delete:
+
+* Python WaveOut thread
+* WinMM ctypes structures
+* WinMM ctypes calls
+* Python WaveOut buffers
+* polling
+* boundary polling
+* block preparation
+* temporary old-path instrumentation
+
+Do not leave dormant compatibility code.
+
+---
+
+### M4 — Clean-tree verification
+
+Verify the clean-tree product passes final acceptance checks.
+
+Require:
+
+* full unit/integration suite passing
+* Ruff passing
+* full `ty` passing
+* native deterministic tests passing
+* real-device XAudio2 smoke passing
+* Natural smoke
+* Supertonic smoke
+* WinUI highlighting smoke
+* shutdown/restart smoke
 
 This marks completion of the main audio migration.
 
 ---
 
-# Speech-debug decision before native rollout
-
-The native audio API deliberately does not include old debug-marker scheduling.
-
-Before Phase J/K, explicitly choose:
-
-## Option A — Remove speech debug
-
-Preferred if the feature is not currently user-visible.
-
-Remove remaining:
-
-* setting/config plumbing
-* application callbacks
-* UI no-op methods
-* tests for the obsolete feature
-
-Handle existing persisted `speech_debug_enabled` safely.
-
-Mention the user-visible removal in the changelog if appropriate.
-
-## Option B — Temporarily exclude it from native playback
-
-If the feature is intentionally being retained for future work, document that the native rollout does not reproduce the currently non-rendered debug markers.
-
-Do not accidentally discover this discrepancy during dual-path comparison.
-
-Note:
-
-Any WaveOut-specific debug-marker machinery removed with Python WaveOut in Phase N must **not** be requested for deletion a second time in the later debug cleanup.
-
----
-
-# Separate Project 1 — SAPI event conversion
-
-Do this after Phase O unless measurements justify doing it sooner.
-
-SAPI owns its own audio and does not depend on the native PCM migration.
-
-Eventually replace:
-
-* idle worker polling
-* 10 ms playback polling
-* repeated status/word queries
-* polling completion
-* structure-pause polling
-
-with:
-
-* blocking idle wait
-* SAPI Word events
-* SAPI EndStream events
-* explicit pause/resume/stop
-* close/cancel wakeup
-* condition/timer-based pause-aware delays
-
-Try Python COM events first.
-
-Only consider native SAPI if Python event handling proves unreliable.
-
----
-
-# Separate Project 2 — Broader WinUI cleanup
+# Separate Project 1 — Broader WinUI cleanup
 
 Only asynchronous played-word delivery belongs on the critical audio path.
 
@@ -1327,7 +1239,7 @@ Keep separate from native PCM implementation.
 
 # Separate Project 3 — Post-audio Python architecture cleanup
 
-After Phase O:
+After Phase M:
 
 ## Configuration
 
@@ -1374,7 +1286,6 @@ Possible future work:
 * persistent audio device
 * WASAPI
 * adaptive chunk retuning
-* native SAPI if genuinely needed
 
 Do not include these in the native PCM migration.
 
@@ -1451,22 +1362,12 @@ The phase and package letters intentionally align.
 
 * PCM/boundary native enqueue
 
-## Package M — Dual-path rollout
+## Package M — Native cutover, cleanup, and acceptance
 
-* opt-in
-* native-default soak
-* comparison
-
-## Package N — Delete Python WaveOut
-
-* delete old engine
-* delete adapter
-* delete rollout switch
-
-## Package O — Audio acceptance
-
-* final validation
-* final engineering comparison
+* native-only cutover
+* Phase A comparison and acceptance
+* WaveOut deletion
+* clean-tree verification
 
 ---
 
@@ -1553,11 +1454,10 @@ Every accepted request ends exactly once.
 
 ---
 
-## Rule 9 — Transitional code has a deletion package
+## Rule 9 — Transitional code is removed at cutover
 
-* rollout switch M is deleted by N
-* Python WaveOut is deleted by N
-* temporary old-path telemetry disappears after O
+* Python WaveOut and its temporary telemetry are deleted by M
+* no rollout switch, adapter, fallback, or compatibility path is introduced
 
 Do not leave compatibility paths behind.
 
@@ -1577,7 +1477,7 @@ During native WaveOut migration do not also:
 
 ## Rule 11 — Validate every package
 
-Do not wait until Phase O to discover regressions.
+Do not wait until Phase M to discover regressions.
 
 ---
 
@@ -1611,9 +1511,9 @@ Do not compensate for one regression by modifying several neighboring systems.
            ┌───────────────────┼───────────────────┐
            │                   │                   │
            ▼                   ▼                   ▼
-     Natural Voice         Supertonic            SAPI
-        Python               Python              Python
-      coordinator           inference          COM/events
+     Natural Voice         Supertonic
+        Python               Python
+      coordinator           inference
            │                   │
        text/request       PCM/boundaries
            │                   │

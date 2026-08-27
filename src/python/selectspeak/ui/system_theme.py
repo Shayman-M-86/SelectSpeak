@@ -11,6 +11,11 @@ from __future__ import annotations
 import logging
 import os
 
+if os.name == "nt":
+    import winreg
+else:
+    winreg = None  # type: ignore[assignment]
+
 logger = logging.getLogger(__name__)
 
 _PERSONALIZE_KEY = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
@@ -18,11 +23,9 @@ _PERSONALIZE_KEY = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personaliz
 
 def apps_use_dark_theme() -> bool:
     """Report the user's app theme, defaulting to dark when it is unreadable."""
-    if os.name != "nt":
+    if winreg is None:
         return True
     try:
-        import winreg
-
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _PERSONALIZE_KEY) as key:
             value, _kind = winreg.QueryValueEx(key, "AppsUseLightTheme")
     except OSError:

@@ -7,7 +7,7 @@ from dataclasses import replace
 
 from ..config import DEFAULT_CONFIG, AppConfig
 from ..config.settings import SettingsStore
-from ..infrastructure.logging import text_preview
+from ..diagnostics import text_preview
 from ..input.capture import resolve_capture
 from ..input.clipboard import ClipboardService
 from ..input.hotkeys import HotkeyManager
@@ -358,15 +358,16 @@ class SelectSpeakApp:
                 len(selected_text),
                 len(capture.raw_text),
             )
+        cleaned_text = prepare_for_speech(capture.raw_text)
         logger.info(
             "capture.completed source=%s raw_length=%d cleaned_length=%d raw=%s cleaned=%s",
             capture.source,
             len(capture.raw_text),
-            len(capture.text),
+            len(cleaned_text),
             text_preview(capture.raw_text),
-            text_preview(capture.text),
+            text_preview(cleaned_text),
         )
-        if not capture.text:
+        if not cleaned_text:
             logger.warning(
                 "capture.empty source=%s action=%s",
                 capture.source,
@@ -380,12 +381,12 @@ class SelectSpeakApp:
         stop_repeated_text = is_repeat_of_active_speech(
             speaking=speaking_at_activation,
             active_text=self._session.snapshot().text,
-            captured_text=capture.text,
+            captured_text=cleaned_text,
         )
         if stop_repeated_text:
             logger.info(
                 "hotkey.repeated_active_text action=stop text_length=%d",
-                len(capture.text),
+                len(cleaned_text),
             )
             self.stop()
             # The following press should replay immediately, even if it occurs
@@ -393,7 +394,7 @@ class SelectSpeakApp:
             with self._state_lock:
                 self._last_hotkey_time = 0.0
             return
-        self._begin_speech(capture.text, source=capture.source)
+        self._begin_speech(cleaned_text, source=capture.source)
 
     def _on_hotkey_activation(self) -> bool:
         with self._state_lock:

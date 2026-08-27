@@ -15,6 +15,7 @@ from selectspeak.speech.backends.natural import (
     NaturalVoiceSpeaker,
 )
 from selectspeak.speech.contracts import SpeechStarted, SpeechTerminal, SpeechWord, TerminalStatus
+from selectspeak.speech.natural_identity import natural_voice_key
 from selectspeak.speech.pcm import PcmPlayedWord, PcmSubmitResult, PcmTerminal
 from selectspeak.speech.pipeline import GenerationStatistics
 from selectspeak.speech.playback import PlaybackController
@@ -43,6 +44,26 @@ def test_ordered_voices_keeps_fallbacks_after_preferred_matches() -> None:
         voices[0],
         voices[2],
     ]
+
+
+def test_ordered_voices_uses_exact_package_and_sdk_name() -> None:
+    voices = [
+        NaturalVoice("C:/shared", "SDK Beta", "en-US", "Beta"),
+        NaturalVoice("C:/shared", "SDK Alpha", "en-US", "Alpha"),
+    ]
+
+    assert NaturalVoiceEngine._ordered_voices(
+        voices, natural_voice_key("C:/shared", "SDK Alpha")
+    ) == [voices[1], voices[0]]
+
+
+def test_package_only_preference_migrates_with_a_deterministic_sdk_name() -> None:
+    voices = [
+        NaturalVoice("C:/shared", "SDK Zulu", "en-US", "Zulu"),
+        NaturalVoice("C:/shared", "SDK Alpha", "en-US", "Alpha"),
+    ]
+
+    assert NaturalVoiceEngine._choose_voice(voices, "C:/shared") == voices[1]
 
 
 def test_engine_initializes_the_preferred_installed_voice(
@@ -190,7 +211,7 @@ def test_select_voice_refreshes_packages_installed_after_engine_start(
     )
     installed.append(new_voice)
 
-    assert engine.select_voice(new_voice.package_path) == new_voice
+    assert engine.select_voice(new_voice.package_path, new_voice.name) == new_voice
     assert engine.voice == new_voice
     assert new_voice in engine.available_voices
     assert initialized_paths == ["C:/WindowsApps/AvaHD", new_voice.package_path]

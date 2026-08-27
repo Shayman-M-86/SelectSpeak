@@ -12,6 +12,8 @@ from selectspeak.app.application import (
 from selectspeak.app.voices import VoiceController, confirm_supertonic_install
 from selectspeak.config import AppConfig
 from selectspeak.speech import SpeechStarted, SpeechTerminal, SpeechWord, TerminalStatus
+from selectspeak.speech.backends.natural import NaturalVoice
+from selectspeak.speech.natural_identity import parse_natural_voice_key
 
 
 def test_supertonic_install_confirmation_uses_windows_yes_result(monkeypatch) -> None:
@@ -31,13 +33,12 @@ def test_supertonic_install_confirmation_uses_windows_yes_result(monkeypatch) ->
 def test_supertonic_install_is_required_if_either_payload_is_missing(monkeypatch) -> None:
     controller = object.__new__(VoiceController)
     controller._config = AppConfig()
-    monkeypatch.setattr(voices_module, "supertonic_dependencies_are_installed", lambda: True)
-    monkeypatch.setattr(voices_module, "supertonic_model_is_installed", lambda _voice: False)
+    monkeypatch.setattr(voices_module, "supertonic_is_ready", lambda _voice: False)
 
-    assert controller._install_required()
+    assert controller._install_required("F4")
 
-    monkeypatch.setattr(voices_module, "supertonic_model_is_installed", lambda _voice: True)
-    assert not controller._install_required()
+    monkeypatch.setattr(voices_module, "supertonic_is_ready", lambda _voice: True)
+    assert not controller._install_required("F4")
 
 
 def test_same_text_while_speaking_requests_stop() -> None:
@@ -572,6 +573,36 @@ def test_voice_controller_creates_owns_and_closes_initial_speaker(monkeypatch) -
     controller.close()
     controller.close()
     assert speaker.close_count == 1
+
+
+def test_voice_controller_persists_an_exact_natural_identity_at_startup(monkeypatch) -> None:
+    class Speaker:
+        voice = NaturalVoice("C:/WindowsApps/Shared", "SDK Alpha", "en-US", "Alpha")
+
+        def close(self) -> None:
+            pass
+
+    activated: list[tuple[str, str, AppConfig]] = []
+    monkeypatch.setattr(voices_module, "NaturalVoiceSpeaker", Speaker)
+    monkeypatch.setattr(voices_module, "create_speaker", lambda *_args: Speaker())
+    monkeypatch.setattr(voices_module, "speaker_backend", lambda _speaker: "natural")
+    monkeypatch.setattr(VoiceController, "publish_options", lambda *_args: None)
+    controller = VoiceController(
+        AppConfig(speech_backend="natural", preferred_voice_match="C:/WindowsApps/Shared"),
+        cast(Any, object()),
+        debug_callback=lambda _event: None,
+        on_activated=lambda backend, key, config: activated.append((backend, key, config)),
+        on_stop_playback=lambda: None,
+        on_shutdown_requested=lambda: None,
+    )
+
+    controller.start()
+
+    assert len(activated) == 1
+    backend, key, config = activated[0]
+    assert backend == "natural"
+    assert parse_natural_voice_key(key) == ("C:/WindowsApps/Shared", "SDK Alpha")
+    assert config.preferred_voice_match == key
 
 
 def test_shutdown_is_ordered_idempotent_and_continues_after_cleanup_failure(monkeypatch) -> None:

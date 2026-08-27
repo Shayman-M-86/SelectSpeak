@@ -141,6 +141,14 @@ foreach ($required in @($nativeDll, $playerExe)) {
 $env:SELECTSPEAK_WINUI_EXE = $playerExe
 $env:PYTHONPATH = Join-Path $projectRoot "src\python"
 
+# Development builds keep the optional Supertonic payload in staging rather
+# than publishing it through SelectSpeak Setup. Prefer that validated local
+# layer when present; installed/release launches never use this script.
+$stagedSupertonicDependencies = Join-Path $projectRoot "\.build\staging\supertonic\dependencies"
+if (Test-Path -LiteralPath (Join-Path $stagedSupertonicDependencies "supertonic-layer.json") -PathType Leaf) {
+    $env:SELECTSPEAK_SUPERTONIC_DEPENDENCIES = $stagedSupertonicDependencies
+}
+
 Write-Host "Starting SelectSpeak ($configuration player)..." -ForegroundColor Green
 if ($Detached) {
     Start-Process -FilePath $pythonw -ArgumentList @("-m", "selectspeak") `

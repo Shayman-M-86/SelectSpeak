@@ -337,7 +337,7 @@ def test_first_chunk_stays_near_target_when_first_sentence_is_long() -> None:
 def test_first_chunk_prefers_nearby_colon_over_tiny_opening_sentence() -> None:
     text = prepare_for_speech(
         "Yes. I think this is a very good candidate for the same treatment as "
-        "AutoHotkey and the SAPI adapter: bring the small capability you need "
+        "AutoHotkey and the legacy adapter: bring the small capability you need "
         "directly into SelectSpeak."
     )
     chunker = AdaptiveSpeechChunker(text)
@@ -347,7 +347,7 @@ def test_first_chunk_prefers_nearby_colon_over_tiny_opening_sentence() -> None:
     assert first is not None
     assert first.text == (
         "Yes. I think this is a very good candidate for the same treatment as "
-        "AutoHotkey and the SAPI adapter:"
+        "AutoHotkey and the legacy adapter:"
     )
 
 

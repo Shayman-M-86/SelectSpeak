@@ -6,7 +6,7 @@ import threading
 from collections.abc import Callable
 from typing import Any
 
-from ..infrastructure.logging import text_preview
+from ..diagnostics import text_preview
 from ..native import OcrCallback, get_native_bridge
 from .keymap import to_windows_hotkey
 

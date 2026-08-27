@@ -1,7 +1,7 @@
 import logging
 import re
 
-from ..infrastructure.logging import text_preview
+from ..diagnostics import text_preview
 
 logger = logging.getLogger(__name__)
 

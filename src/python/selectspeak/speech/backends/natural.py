@@ -18,6 +18,7 @@ from ...native import (
 )
 from ..contracts import SpeechEventCallback, TerminalStatus
 from ..debug import SpeechDebugCallback, emit_speech_debug
+from ..natural_identity import parse_natural_voice_key
 from ..pcm import (
     PcmEvent,
     PcmFormat,
@@ -47,6 +48,13 @@ class NaturalVoice:
     name: str
     locale: str
     display_name: str
+
+
+def _same_voice(left: NaturalVoice, right: NaturalVoice) -> bool:
+    return (
+        left.package_path.casefold() == right.package_path.casefold()
+        and left.name.casefold() == right.name.casefold()
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,25 +139,26 @@ class NaturalVoiceEngine:
         """Refresh voices installed through Windows without recreating the engine."""
         voices = self._enumerate_installed_voices()
         active_voice = getattr(self, "voice", None)
-        if active_voice is not None and not any(
-            voice.package_path.casefold() == active_voice.package_path.casefold() for voice in voices
-        ):
+        if active_voice is not None and not any(_same_voice(voice, active_voice) for voice in voices):
             voices.append(active_voice)
         self._available_voices = tuple(voices)
         return self._available_voices
 
-    def select_voice(self, package_path: str) -> NaturalVoice:
+    def select_voice(self, package_path: str, sdk_voice_name: str) -> NaturalVoice:
         self.refresh_voices()
         selected = next(
             (
                 voice
                 for voice in self._available_voices
                 if voice.package_path.casefold() == package_path.casefold()
+                and voice.name.casefold() == sdk_voice_name.casefold()
             ),
             None,
         )
         if selected is None:
-            raise NaturalVoiceError(f"Natural Voice is no longer available: {package_path}")
+            raise NaturalVoiceError(
+                f"Natural Voice is no longer available: {package_path} / {sdk_voice_name}"
+            )
         previous = self.voice
         failures: list[str] = []
         if self._initialize_first([selected], failures):
@@ -265,6 +274,31 @@ class NaturalVoiceEngine:
 
     @staticmethod
     def _ordered_voices(voices: list[NaturalVoice], preferred: str) -> list[NaturalVoice]:
+        exact_identity = parse_natural_voice_key(preferred)
+        if exact_identity is not None:
+            package_path, sdk_voice_name = exact_identity
+            exact_matches = [
+                voice
+                for voice in voices
+                if voice.package_path.casefold() == package_path.casefold()
+                and voice.name.casefold() == sdk_voice_name.casefold()
+            ]
+            if exact_matches:
+                selected = exact_matches[0]
+                return [selected, *(voice for voice in voices if voice is not selected)]
+
+        legacy_package_matches = [
+            voice for voice in voices if voice.package_path.casefold() == preferred.casefold()
+        ]
+        if legacy_package_matches:
+            # Package-only settings cannot distinguish SDK voices. The first
+            # case-insensitive SDK name is a stable, documented fallback.
+            selected = min(
+                legacy_package_matches,
+                key=lambda voice: (voice.name.casefold(), voice.display_name.casefold()),
+            )
+            return [selected, *(voice for voice in voices if voice is not selected)]
+
         needle = preferred.casefold().strip()
         if not needle:
             return list(voices)
@@ -298,7 +332,7 @@ class _Engine(Protocol):
     def stop(self) -> None: ...
     def close(self) -> None: ...
     def refresh_voices(self) -> tuple[NaturalVoice, ...]: ...
-    def select_voice(self, package_path: str) -> NaturalVoice: ...
+    def select_voice(self, package_path: str, sdk_voice_name: str) -> NaturalVoice: ...
 
 
 class NaturalVoiceSpeaker:
@@ -342,9 +376,9 @@ class NaturalVoiceSpeaker:
     def refresh_voices(self) -> tuple[NaturalVoice, ...]:
         return self._engine.refresh_voices()
 
-    def select_voice(self, package_path: str) -> NaturalVoice:
+    def select_voice(self, package_path: str, sdk_voice_name: str) -> NaturalVoice:
         self.stop()
-        selected = self._engine.select_voice(package_path)
+        selected = self._engine.select_voice(package_path, sdk_voice_name)
         logger.info(
             "natural_voice.changed voice=%s package_path=%s",
             selected.name,

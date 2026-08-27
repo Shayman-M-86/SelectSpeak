@@ -5,7 +5,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Self
 
-from ..infrastructure.logging import text_preview
+from ..diagnostics import text_preview
 from .debug import SpeechDebugEvent
 from .segments import (
     MAX_ADAPTIVE_CHUNK_CHARACTERS,
