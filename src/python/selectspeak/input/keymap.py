@@ -58,24 +58,6 @@ def normalize_key(name: str) -> str:
     return normalized
 
 
-def build_hotkey(keys: set[str]) -> str:
-    """Build the stable, user-facing hotkey representation."""
-    normalized = {normalize_key(key) for key in keys}
-    modifiers = [key for key in _MODIFIER_ORDER if key in normalized]
-    ordinary_keys = sorted(key for key in normalized if key not in _MODIFIER_NAMES)
-    if not ordinary_keys:
-        logger.debug(
-            "hotkey.built keys=%s result=%s reason=%s",
-            sorted(keys),
-            "",
-            "modifier_only",
-        )
-        return ""
-    result = "+".join([*modifiers, *ordinary_keys])
-    logger.debug("hotkey.built keys=%s result=%s", sorted(keys), result)
-    return result
-
-
 def to_windows_hotkey(hotkey: str) -> tuple[int, int]:
     """Translate a user-facing shortcut into RegisterHotKey values."""
     parts = [normalize_key(part.strip()) for part in hotkey.split("+")]
@@ -102,13 +84,3 @@ def to_windows_hotkey(hotkey: str) -> tuple[int, int]:
         virtual_key,
     )
     return modifiers, virtual_key
-
-
-def from_windows_hotkey(modifiers: int, virtual_key: int) -> str:
-    """Build the stable display name for a shortcut recorded by Windows."""
-    parts = [name for name in _MODIFIER_ORDER if modifiers & _WINDOWS_MODIFIERS[name]]
-    if ord("0") <= virtual_key <= ord("9") or ord("A") <= virtual_key <= ord("Z"):
-        trigger = chr(virtual_key).lower()
-    else:
-        trigger = _WINDOWS_KEY_NAMES.get(virtual_key, "")
-    return "+".join([*parts, trigger]) if trigger else ""

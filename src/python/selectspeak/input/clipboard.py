@@ -4,7 +4,7 @@ import time
 import win32clipboard
 import win32con
 
-from ..infrastructure.logging import text_preview
+from ..diagnostics import text_preview
 
 logger = logging.getLogger(__name__)
 

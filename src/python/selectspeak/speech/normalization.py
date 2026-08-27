@@ -1,7 +1,7 @@
 import logging
 import re
 
-from ..infrastructure.logging import text_preview
+from ..diagnostics import text_preview
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +18,9 @@ _UNDERSCORES = re.compile(r"_+")
 _EMBEDDED_OBJECTS = re.compile("[\ufffc\ufffd]")
 _EMBEDDED_OBJECT_LINE = re.compile(r"(?m)^[ \t]*(?:[\uFFFC\uFFFD][ \t]*)+\n?")
 _TERMINAL_PUNCTUATION = frozenset(".?!:")
+# Shorter lines than this read as deliberate standalone lines (list items,
+# labels, short headings) rather than the product of a hard wrap.
+_WRAPPED_LINE_MIN_LENGTH = 40
 DISPLAY_BULLET_PREFIX = "• "
 
 
@@ -128,7 +131,16 @@ def _structure_lines(text: str) -> tuple[str, int, int, int, int, int]:
         spoken_line = _collapse_whitespace(spoken_line)
         if spoken_line:
             is_explicit_structure = bool(heading_match or bullet_match or numbered_match)
-            if structured_multiline or is_explicit_structure:
+            next_line = next(
+                (candidate.strip() for candidate in lines[index + 1 :] if candidate.strip()),
+                None,
+            )
+            # Explicit structure ends a thought by construction; wrapped prose
+            # does not, so never break a sentence that continues on the next
+            # line.
+            if is_explicit_structure or (
+                structured_multiline and not _continues_on_next_line(spoken_line, next_line)
+            ):
                 spoken_line = _ensure_pause(spoken_line)
             if pending_paragraph_break and segments and segments[-1] != "":
                 segments.append("")
@@ -207,6 +219,27 @@ def _ensure_pause(text: str) -> str:
     if text and text[-1] not in _TERMINAL_PUNCTUATION:
         return f"{text}."
     return text
+
+
+def _continues_on_next_line(line: str, next_line: str | None) -> bool:
+    """Return whether a hard wrap split one sentence across two lines.
+
+    Prose pasted from a wrapped document (source comments, docstrings, commit
+    bodies) breaks mid-sentence, so a line ending is not a thought ending.
+    Adding a pause there makes speech stop in the middle of a clause. Short
+    standalone lines - list items, labels, headings - are the opposite case and
+    still want their pause, so only treat a break as a wrap when the line is
+    long enough to have been wrapped and the next one resumes in lower case.
+    """
+    if next_line is None:
+        return False
+    if not line or line[-1] in _TERMINAL_PUNCTUATION or line[-1] in ",;":
+        # A clause-final comma still reads as a continuation, but the existing
+        # punctuation already supplies the pause, so nothing needs adding.
+        return line[-1:] in ",;"
+    if len(line) < _WRAPPED_LINE_MIN_LENGTH:
+        return False
+    return next_line[:1].islower()
 
 
 def _collapse_whitespace(text: str) -> str:

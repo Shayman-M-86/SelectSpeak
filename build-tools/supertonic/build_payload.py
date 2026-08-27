@@ -26,6 +26,7 @@ REQUIRED_LAYER_PATHS = (
     Path("numpy/__init__.py"),
     Path("onnxruntime/__init__.py"),
 )
+VOICE_STYLES = tuple(f"{family}{index}" for family in ("F", "M") for index in range(1, 6))
 REQUIRED_MODEL_PATHS = (
     Path("onnx/tts.json"),
     Path("onnx/unicode_indexer.json"),
@@ -33,7 +34,7 @@ REQUIRED_MODEL_PATHS = (
     Path("onnx/text_encoder.onnx"),
     Path("onnx/vector_estimator.onnx"),
     Path("onnx/vocoder.onnx"),
-    Path("voice_styles/F4.json"),
+    *(Path("voice_styles") / f"{voice}.json" for voice in VOICE_STYLES),
 )
 
 

@@ -1,0 +1,15 @@
+<Project>
+  <!--
+    Generated output joins every other build artefact under the repository's
+    .build/ directory, so this folder is source and nothing else, and one
+    ignore rule covers the lot.
+
+    BaseIntermediateOutputPath has to be set before the SDK targets are
+    imported, which is why this lives here rather than in the .csproj.
+  -->
+  <PropertyGroup>
+    <SelectSpeakBuildRoot>$(MSBuildThisFileDirectory)..\..\..\.build\winui\</SelectSpeakBuildRoot>
+    <BaseOutputPath>$(SelectSpeakBuildRoot)bin\</BaseOutputPath>
+    <BaseIntermediateOutputPath>$(SelectSpeakBuildRoot)obj\</BaseIntermediateOutputPath>
+  </PropertyGroup>
+</Project>

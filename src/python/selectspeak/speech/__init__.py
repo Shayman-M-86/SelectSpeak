@@ -1,6 +1,67 @@
 """Speech contracts, processing, playback, and backend implementations."""
 
-from .contracts import Speaker, WordCallback
+from .admission import (
+    HARD_CAPACITY_SECONDS,
+    HIGH_WATER_SECONDS,
+    LOW_WATER_SECONDS,
+    AdmissionPolicy,
+    AdmissionSlice,
+    slice_for_admission,
+)
+from .contracts import (
+    Speaker,
+    SpeechEvent,
+    SpeechEventCallback,
+    SpeechStarted,
+    SpeechTerminal,
+    SpeechWord,
+    TerminalStatus,
+)
 from .factory import create_speaker
+from .pcm import (
+    PcmAdmissionInterrupted,
+    PcmBoundary,
+    PcmEvent,
+    PcmEventCallback,
+    PcmFormat,
+    PcmPlaybackSession,
+    PcmPlayedWord,
+    PcmSampleFormat,
+    PcmStarted,
+    PcmSubmitResult,
+    PcmTerminal,
+    PcmUnderrun,
+    pcm_boundary_from_codepoints,
+    utf16_code_unit_offset,
+)
 
-__all__ = ["Speaker", "WordCallback", "create_speaker"]
+__all__ = [
+    "HARD_CAPACITY_SECONDS",
+    "HIGH_WATER_SECONDS",
+    "LOW_WATER_SECONDS",
+    "AdmissionPolicy",
+    "AdmissionSlice",
+    "PcmAdmissionInterrupted",
+    "Speaker",
+    "PcmBoundary",
+    "PcmEvent",
+    "PcmEventCallback",
+    "PcmFormat",
+    "PcmPlaybackSession",
+    "PcmPlayedWord",
+    "PcmSampleFormat",
+    "PcmStarted",
+    "PcmSubmitResult",
+    "PcmTerminal",
+    "PcmUnderrun",
+    "SpeechEvent",
+    "SpeechEventCallback",
+    "SpeechStarted",
+    "SpeechTerminal",
+    "SpeechWord",
+    "TerminalStatus",
+    "create_speaker",
+    "pcm_boundary_from_codepoints",
+    "slice_for_admission",
+    "utf16_code_unit_offset",
+]

@@ -2,30 +2,36 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
-from ..speech.normalization import prepare_for_speech
-
-CaptureSource = Literal["selection", "clipboard", "clipboard_fallback"]
+CaptureSource = Literal["selection", "clipboard_fallback", "empty", "unresolved"]
 
 
 @dataclass(frozen=True, slots=True)
 class CaptureResult:
     source: CaptureSource
     raw_text: str
-    text: str
 
 
 def resolve_capture(
     selected_text: str,
     read_clipboard: Callable[[], str | None],
     *,
-    force_clipboard: bool,
+    allow_clipboard_fallback: bool,
+    capture_unresolved: bool = False,
 ) -> CaptureResult:
-    """Prefer meaningful selected text, otherwise fall back to the clipboard."""
-    if not force_clipboard:
-        cleaned_selection = prepare_for_speech(selected_text)
-        if cleaned_selection:
-            return CaptureResult("selection", selected_text, cleaned_selection)
+    """Prefer selected text and use the clipboard only as an enabled fallback.
 
-    clipboard_text = read_clipboard() or ""
-    source: CaptureSource = "clipboard" if force_clipboard else "clipboard_fallback"
-    return CaptureResult(source, clipboard_text, prepare_for_speech(clipboard_text))
+    capture_unresolved means the native layer sent a copy action but never
+    saw the clipboard change before its timeout. The target may still finish
+    the copy later, so this must not be treated as "nothing selected" -
+    reading the clipboard now could pick up stale or racing content.
+    """
+    if selected_text.strip():
+        return CaptureResult("selection", selected_text)
+
+    if capture_unresolved:
+        return CaptureResult("unresolved", "")
+
+    if not allow_clipboard_fallback:
+        return CaptureResult("empty", selected_text)
+
+    return CaptureResult("clipboard_fallback", read_clipboard() or "")

@@ -8,6 +8,13 @@ Setup downloads pinned Microsoft Speech SDK runtime components from NuGet.org
 and installs three DLLs inside the SelectSpeak application folder. It does not
 install a system-wide Speech SDK.
 
+SelectSpeak's player needs two Microsoft runtimes: the .NET 8 Desktop Runtime
+and the Windows App Runtime 1.8. Setup checks whether compatible versions are
+already installed and leaves them alone if they are. If either is missing, Setup
+downloads it from Microsoft and installs it silently. These are standard
+Microsoft redistributables installed system-wide, and they remain installed if
+SelectSpeak is later uninstalled.
+
 If you select the optional Supertonic Neural Voice component, Setup installs
 approximately 475 MB of local dependencies and model data. Hash-verified files
 are used from beside Setup when available; otherwise they are downloaded from

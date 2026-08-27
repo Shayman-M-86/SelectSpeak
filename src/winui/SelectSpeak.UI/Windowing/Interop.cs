@@ -1,0 +1,89 @@
+using System;
+using System.Runtime.InteropServices;
+
+namespace SelectSpeak.UI.Windowing;
+
+/// <summary>
+/// The Win32 the player window needs. A WinUI Window is a real top-level HWND,
+/// so these apply exactly as they do to the current Tk window.
+/// </summary>
+internal static class Interop
+{
+    public const int GWL_EXSTYLE = -20;
+
+    public const int WS_EX_NOACTIVATE = 0x08000000;
+
+    // Keeps a window off the taskbar and out of Alt+Tab. The player floats over
+    // whatever is being read, so it is chrome rather than something to switch
+    // to. This has to be explicit: without it the shell decides for itself, and
+    // an explicit AppUserModelID is enough to make it give the window a button.
+    public const int WS_EX_TOOLWINDOW = 0x00000080;
+
+    public const uint SWP_NOSIZE = 0x0001;
+    public const uint SWP_NOMOVE = 0x0002;
+    public const uint SWP_NOZORDER = 0x0004;
+    public const uint SWP_FRAMECHANGED = 0x0020;
+    public const uint SWP_NOACTIVATE = 0x0010;
+
+    // DWM attributes for rounded corners and dark chrome.
+    public const uint DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
+    public const uint DWMWA_WINDOW_CORNER_PREFERENCE = 33;
+    public const uint DWMWCP_ROUND = 2;
+
+    // Sent to repaint the caption; wParam 0 draws it inactive.
+    public const int WM_NCACTIVATE = 0x0086;
+
+    // Subclassing, so the window can swallow SC_MAXIMIZE without a message loop.
+    public const int GWLP_WNDPROC = -4;
+
+    public delegate IntPtr WindowProcedure(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr GetWindowLongPtrW(IntPtr hWnd, int nIndex);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr SetWindowLongPtrW(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr CallWindowProcW(
+        IntPtr previous, IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool SetWindowPos(
+        IntPtr hWnd, IntPtr hWndInsertAfter,
+        int X, int Y, int cx, int cy, uint uFlags);
+
+    public const int WM_SYSCOMMAND = 0x0112;
+
+    public const int SC_MAXIMIZE = 0xF030;
+    public const uint DWMWA_NCRENDERING_ENABLED = 1;
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern IntPtr SendMessageW(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("kernel32.dll")]
+    public static extern void SetLastError(uint dwErrCode);
+
+    [DllImport("dwmapi.dll")]
+    public static extern int DwmSetWindowAttribute(
+        IntPtr hwnd, uint attribute, ref int value, int size);
+
+    /// <summary>
+    /// Load the icon the build embedded in this executable.
+    ///
+    /// Passing null asks for the running module, and index 0 is the first icon
+    /// resource, which is the one ApplicationIcon writes. Taking it from the
+    /// executable rather than a file means the player needs no icon staged
+    /// beside it.
+    /// </summary>
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    public static extern IntPtr ExtractIconW(IntPtr instance, string? exeFileName, uint iconIndex);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    public static extern IntPtr GetModuleHandleW(string? moduleName);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    public static extern uint GetModuleFileNameW(
+        IntPtr module, [Out] char[] fileName, uint size);
+}

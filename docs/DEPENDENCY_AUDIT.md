@@ -2,7 +2,7 @@
 
 The standard release keeps the direct imports used by the core application:
 
-- `pywin32` for the independent Windows SAPI backend and COM initialization.
+- `pywin32` for the Windows tray integration.
 - `Pillow` and `pystray` for the tray icon.
 - The Supertonic backend adapter remains in the core, but its third-party
   imports stay lazy until the optional dependency layer is activated.
@@ -69,9 +69,9 @@ Supertonic 1.3.1, and all four model sessions in process.
   retain the normal HTTP path without its 9 MiB extension.
 - Pillow's AVIF plugin is unused because SelectSpeak only draws an in-memory
   tray image.
-- Pythonwin's MFC GUI is reached through `win32com` type-library tooling, but
-  SelectSpeak uses dynamic SAPI dispatch and does not use that tooling or GUI.
+- Pythonwin's MFC GUI is reached through `win32com` type-library tooling, which
+  SelectSpeak does not use.
 
-These exclusions preserve the SAPI, Natural Voice, Supertonic synthesis, tray,
-clipboard, hotkey, and OCR features. Supertonic is now an installer-managed
+These exclusions preserve Natural Voice, Supertonic synthesis, tray, clipboard,
+hotkey, and OCR features. Supertonic is now an installer-managed
 component rather than a separate edition or executable.

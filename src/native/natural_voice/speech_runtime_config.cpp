@@ -8,12 +8,14 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <mutex>
 #include <system_error>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
 namespace {
+constexpr std::uintmax_t maximum_runtime_binary_size = 64ull * 1024 * 1024;
 constexpr std::array<std::uint8_t, 7> runtime_config_marker = {
     '2', '7', '7', '4', '3', '1', '6'};
 
@@ -84,6 +86,11 @@ std::optional<std::vector<std::uint8_t>> read_binary(
 {
     std::ifstream stream(path, std::ios::binary);
     if (!stream) {
+        return std::nullopt;
+    }
+    std::error_code error;
+    const auto size = std::filesystem::file_size(path, error);
+    if (error || size > maximum_runtime_binary_size) {
         return std::nullopt;
     }
     return std::vector<std::uint8_t>(std::istreambuf_iterator<char>(stream), {});
@@ -161,6 +168,38 @@ std::optional<std::string> read_speech_runtime_config(
         return utf16le_to_utf8(*runtime_data);
     }
     return std::nullopt;
+}
+
+std::string legacy_speech_runtime_config()
+{
+    // Adapted from NaturalVoiceSAPIAdapter (MIT, copyright 2024 gexgd0419).
+    // Extracted from Windows system components; not suitable for production or
+    // redistribution. New voice packages reject it, which is why it is tried
+    // only after the installed licence.
+    return "Key:ZCjZ7nHDSLvf4gpELteM4AnzaWUjTpn7UkV7D@vvksl0w1SNgon6d1905WANbktDc9S39oaA4r29HJNayXvTq8fJsq";
+}
+
+std::vector<std::pair<std::string, std::string>>
+speech_runtime_config_candidates()
+{
+    // The installed licence comes first: it is read from this machine, so it
+    // matches whatever Windows currently ships and covers every package new
+    // enough to use that format. The legacy key is the fallback for older
+    // packages, which Windows leaves in place across updates without
+    // re-encrypting them.
+    std::vector<std::pair<std::string, std::string>> candidates;
+    static std::once_flag discovery_once;
+    static std::optional<std::string> installed_runtime;
+    std::call_once(discovery_once, [] {
+        installed_runtime = discover_speech_runtime_config();
+    });
+    if (installed_runtime) {
+        candidates.emplace_back("installed Windows runtime",
+                                *installed_runtime);
+    }
+    candidates.emplace_back("legacy compatibility",
+                            legacy_speech_runtime_config());
+    return candidates;
 }
 
 std::optional<std::string> discover_speech_runtime_config()

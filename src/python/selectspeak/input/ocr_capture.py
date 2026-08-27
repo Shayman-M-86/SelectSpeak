@@ -6,8 +6,8 @@ import threading
 from collections.abc import Callable
 from typing import Any
 
-from ..infrastructure.logging import text_preview
-from ..native import get_native_bridge
+from ..diagnostics import text_preview
+from ..native import OcrCallback, get_native_bridge
 from .keymap import to_windows_hotkey
 
 logger = logging.getLogger(__name__)
@@ -15,13 +15,6 @@ logger = logging.getLogger(__name__)
 OCR_COMPLETED = 1
 OCR_CANCELLED = 2
 OCR_FAILED = 3
-
-_OCR_CALLBACK = ctypes.CFUNCTYPE(
-    None,
-    ctypes.c_wchar_p,
-    ctypes.c_uint,
-    ctypes.c_void_p,
-)
 
 
 class OcrCaptureError(RuntimeError):
@@ -44,8 +37,7 @@ class OcrCaptureHotkey:
         self._on_text = on_text
         self._bridge = get_native_bridge(dll_path)
         self._dll = self._bridge.library
-        self._configure_api()
-        self._callback = _OCR_CALLBACK(self._on_result)
+        self._callback = OcrCallback(self._on_result)
         self._started = False
 
     @property
@@ -72,6 +64,36 @@ class OcrCaptureHotkey:
             "native_windows_ocr",
         )
 
+    def rebind(self, hotkey: str) -> None:
+        """Move the capture shortcut to a new combination.
+
+        The native side registers one shortcut at a time, so this stops before
+        it starts again. A rejected registration leaves nothing bound, so the
+        previous shortcut is restored rather than left dead; if that fails too
+        the error is raised, because there is no working binding left to keep.
+        """
+        previous = self.hotkey
+        if hotkey == previous:
+            return
+
+        logger.info(
+            "ocr_hotkey.rebind.started previous_hotkey=%s new_hotkey=%s",
+            previous,
+            hotkey,
+        )
+        was_started = self._started
+        self.stop()
+        self.hotkey = hotkey
+        try:
+            if was_started:
+                self.start()
+        except OcrCaptureError:
+            logger.exception("ocr_hotkey.rebind.failed hotkey=%s", hotkey)
+            self.hotkey = previous
+            self.start()
+            raise
+        logger.info("ocr_hotkey.rebind.completed hotkey=%s", hotkey)
+
     def cancel(self) -> None:
         if self._started:
             self._dll.ss_ocr_cancel()
@@ -81,24 +103,6 @@ class OcrCaptureHotkey:
             self._dll.ss_ocr_stop()
             self._started = False
             logger.info("ocr_hotkey.unregistered")
-
-    def _configure_api(self) -> None:
-        self._dll.ss_ocr_start.argtypes = [
-            ctypes.c_uint,
-            ctypes.c_uint,
-            ctypes.c_wchar_p,
-            _OCR_CALLBACK,
-            ctypes.c_void_p,
-        ]
-        self._dll.ss_ocr_start.restype = ctypes.c_int
-        self._dll.ss_ocr_cancel.argtypes = []
-        self._dll.ss_ocr_cancel.restype = None
-        self._dll.ss_ocr_is_active.argtypes = []
-        self._dll.ss_ocr_is_active.restype = ctypes.c_int
-        self._dll.ss_ocr_stop.argtypes = []
-        self._dll.ss_ocr_stop.restype = None
-        self._dll.ss_ocr_last_error.argtypes = [ctypes.c_char_p, ctypes.c_uint]
-        self._dll.ss_ocr_last_error.restype = ctypes.c_uint
 
     def _on_result(
         self,

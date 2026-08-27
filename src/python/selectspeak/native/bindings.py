@@ -8,8 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config.paths import is_frozen, native_dir
-
-NATIVE_API_VERSION = 2
+from .abi import NATIVE_API_VERSION, configure_native_bootstrap, configure_native_library
 
 
 class NativeBridgeError(RuntimeError):
@@ -47,16 +46,14 @@ class NativeBridge:
             self._dll_directory = os.add_dll_directory(str(path.parent))
         try:
             self.library = ctypes.CDLL(str(path))
-            self.library.ss_api_version.argtypes = []
-            self.library.ss_api_version.restype = ctypes.c_uint32
-            self.library.ss_shutdown.argtypes = []
-            self.library.ss_shutdown.restype = None
+            configure_native_bootstrap(self.library)
             actual_version = self.library.ss_api_version()
             if actual_version != NATIVE_API_VERSION:
                 raise NativeBridgeError(
                     "Incompatible SelectSpeak native bridge: expected API "
                     f"{NATIVE_API_VERSION}, found {actual_version} at {path}"
                 )
+            configure_native_library(self.library)
         except Exception:
             if self._dll_directory is not None:
                 self._dll_directory.close()

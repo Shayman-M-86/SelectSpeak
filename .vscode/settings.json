@@ -104,5 +104,13 @@
         "**/.coverage.*": true,
         "**/*.pyc": true,
         "**/*.pyo": true
-    }
+    },
+    
+        "claudeCode.environmentVariables": [
+          {
+            "name": "CLAUDE_CODE_USE_POWERSHELL_TOOL",
+            "value": "1"
+          }
+        ]
+      
 }

@@ -1,0 +1,37 @@
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+
+namespace SelectSpeak.UI.Bridge;
+
+/// <summary>
+/// The boundary between this WinUI frontend and the Python backend.
+///
+/// Python owns application state and decides what happens; this side renders
+/// what it is told and reports what the user pressed. Nothing in
+/// <c>Windowing/</c> or <c>Views/</c> should know how that conversation is
+/// transported.
+///
+/// The production transport is newline-delimited JSON over a named pipe; the
+/// interface keeps transport details out of the views.
+/// </summary>
+public interface IPlayerBridge : IDisposable
+{
+    /// <summary>Raised when the backend sends state for the UI to render.</summary>
+    event Action<PlayerMessage>? MessageReceived;
+
+    /// <summary>Raised when the connection to the backend comes and goes.</summary>
+    event Action<bool>? ConnectionChanged;
+
+    /// <summary>Begin connecting, retrying until disposed.</summary>
+    Task RunAsync();
+
+    /// <summary>Report a user intent - play, pause, stop, read.</summary>
+    Task SendAsync(string intent);
+
+    /// <summary>
+    /// Report an intent that carries a value, such as the shortcut chosen in
+    /// the hotkey dialog. The backend still decides whether to accept it.
+    /// </summary>
+    Task SendAsync(string intent, IReadOnlyDictionary<string, string> fields);
+}

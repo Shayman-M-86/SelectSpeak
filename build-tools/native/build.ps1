@@ -2,7 +2,10 @@
 param(
     [switch]$InstallPrerequisites,
     [switch]$SkipNaturalVoice,
-    [switch]$DevRuntime
+    [switch]$DevRuntime,
+    # Skip the native unit tests. CI and release builds run them; a developer
+    # relaunching the application does not need them every time.
+    [switch]$SkipTests
 )
 
 $ErrorActionPreference = "Stop"
@@ -50,6 +53,7 @@ $configureArguments = @(
     "-S", $nativeSourceRoot,
     "-B", $buildRoot,
     "-A", "x64",
+    "-DBUILD_TESTING=$(-not $SkipTests)",
     "-DSELECTSPEAK_VERSION=$version",
     "-DSELECTSPEAK_ENABLE_NATURAL_VOICE=$(-not $SkipNaturalVoice)"
 )
@@ -83,14 +87,20 @@ if (-not $SkipNaturalVoice) {
 if ($LASTEXITCODE) {
     throw "CMake configuration failed with exit code $LASTEXITCODE"
 }
-& $cmake --build $buildRoot --config Release
-if ($LASTEXITCODE) { throw "Native build failed with exit code $LASTEXITCODE" }
-$ctest = Join-Path (Split-Path -Parent $cmake) "ctest.exe"
-if (-not (Test-Path -LiteralPath $ctest -PathType Leaf)) {
-    throw "CMake was found without its CTest executable: $ctest"
+$buildArguments = @("--build", $buildRoot, "--config", "Release")
+if ($SkipTests) {
+    $buildArguments += @("--target", "selectspeak_native")
 }
-& $ctest --test-dir $buildRoot -C Release --output-on-failure
-if ($LASTEXITCODE) { throw "Native tests failed with exit code $LASTEXITCODE" }
+& $cmake @buildArguments
+if ($LASTEXITCODE) { throw "Native build failed with exit code $LASTEXITCODE" }
+if (-not $SkipTests) {
+    $ctest = Join-Path (Split-Path -Parent $cmake) "ctest.exe"
+    if (-not (Test-Path -LiteralPath $ctest -PathType Leaf)) {
+        throw "CMake was found without its CTest executable: $ctest"
+    }
+    & $ctest --test-dir $buildRoot -C Release --output-on-failure
+    if ($LASTEXITCODE) { throw "Native tests failed with exit code $LASTEXITCODE" }
+}
 
 $bridge = Get-ChildItem -Recurse -LiteralPath $buildRoot `
     -Filter "selectspeak_native.dll" | Select-Object -First 1

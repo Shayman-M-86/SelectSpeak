@@ -85,6 +85,15 @@ if ($ModelArchive) {
             "onnx\text_encoder.onnx",
             "onnx\vector_estimator.onnx",
             "onnx\vocoder.onnx",
-            "voice_styles\F4.json"
+            "voice_styles\F1.json",
+            "voice_styles\F2.json",
+            "voice_styles\F3.json",
+            "voice_styles\F4.json",
+            "voice_styles\F5.json",
+            "voice_styles\M1.json",
+            "voice_styles\M2.json",
+            "voice_styles\M3.json",
+            "voice_styles\M4.json",
+            "voice_styles\M5.json"
         )
 }

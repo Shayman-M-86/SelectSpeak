@@ -1,0 +1,24 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "SelectSpeak.UI (WinUI)",
+            "type": "coreclr",
+            "request": "launch",
+            "preLaunchTask": "build",
+            // Launch the .exe, not the .dll. A WinUI app needs its apphost to
+            // bootstrap the Windows App SDK; running the dll via `dotnet` skips
+            // that and fails before any XAML is parsed.
+            "program": "${workspaceFolder}/src/winui/SelectSpeak.UI/.build/bin/Debug/net8.0-windows10.0.19041.0/win-x64/SelectSpeak.UI.exe",
+            "args": [],
+            "cwd": "${workspaceFolder}/src/winui/SelectSpeak.UI/.build/bin/Debug/net8.0-windows10.0.19041.0/win-x64",
+            "console": "internalConsole",
+            "stopAtEntry": false
+        },
+        {
+            "name": "SelectSpeak.UI (attach)",
+            "type": "coreclr",
+            "request": "attach"
+        }
+    ]
+}

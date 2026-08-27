@@ -3,7 +3,9 @@ import threading
 from collections.abc import Callable
 
 import pystray
-from PIL import Image, ImageDraw
+from PIL import Image
+
+from ..config.paths import logo_path
 
 logger = logging.getLogger(__name__)
 
@@ -69,13 +71,12 @@ class TrayController:
 
     @staticmethod
     def _create_icon() -> Image.Image:
+        """Return the application logo, matching every other SelectSpeak icon."""
         logger.debug("tray.icon.creating")
-        image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-        drawing = ImageDraw.Draw(image)
-        drawing.ellipse([4, 4, 60, 60], fill="#89b4fa")
-        drawing.polygon(
-            [(20, 22), (20, 42), (30, 42), (44, 52), (44, 12), (30, 22)],
-            fill="#1e1e2e",
-        )
-        logger.debug("tray.icon.created")
+        path = logo_path()
+        with Image.open(path) as source:
+            # Load before the file closes, and normalize so a palette or
+            # greyscale source keeps its transparency in the tray.
+            image = source.convert("RGBA")
+        logger.debug("tray.icon.created source=%s", path)
         return image

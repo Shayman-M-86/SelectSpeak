@@ -69,7 +69,11 @@ jobs:
           uv run python -c "import os; from supertonic.config import get_model_revision; from supertonic.loader import download_model; expected='724fb5abbf5502583fb520898d45929e62f02c0b'; actual=get_model_revision('supertonic-3'); assert actual == expected, f'Unexpected model revision: {actual}'; download_model(os.environ['MODEL_PATH'], 'supertonic-3')"
 
       - name: Build portable app, optional payloads, and installer
-        run: .\build-tools\build.ps1 -SupertonicModelSource .\.build\supertonic-model-source
+        run: >-
+          .\build-tools\build.ps1
+          -RebuildSupertonicPayload
+          -ReleaseReady
+          -SupertonicModelSource .\.build\supertonic-model-source
 
       - name: Smoke-test installer lifecycle
         run: .\build-tools\installer\smoke_test.ps1
@@ -107,6 +111,11 @@ jobs:
       contents: write
 
     steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
       - name: Download verified distribution
         env:
           GH_TOKEN: ${{ github.token }}
@@ -149,7 +158,26 @@ jobs:
             throw "A GitHub Release already exists for $env:RELEASE_TAG."
           }
 
+          $changelogPath = Join-Path $env:GITHUB_WORKSPACE "CHANGELOG.md"
+          if (-not (Test-Path -LiteralPath $changelogPath -PathType Leaf)) {
+            throw "CHANGELOG.md was not found in release tag $env:RELEASE_TAG."
+          }
+          $changelog = Get-Content -LiteralPath $changelogPath -Raw
+          $escapedVersion = [regex]::Escape($env:RELEASE_VERSION)
+          $sectionPattern =
+            "(?ms)^##[ \t]+$escapedVersion(?:[ \t]+-[ \t]+[^\r\n]+)?[ \t]*\r?\n" +
+            "(?<content>.*?)(?=^##[ \t]+|\z)"
+          $section = [regex]::Match($changelog, $sectionPattern)
+          if (-not $section.Success -or -not $section.Groups["content"].Value.Trim()) {
+            throw "CHANGELOG.md has no non-empty section for release version $env:RELEASE_VERSION. Add '## $env:RELEASE_VERSION - YYYY-MM-DD' before tagging."
+          }
+          $changelogSection = $section.Value.Trim()
+
           $notes = @"
+          $changelogSection
+
+          ---
+
           This is an **unsigned** SelectSpeak release. Windows may display an
           Unknown publisher or Microsoft Defender SmartScreen warning.
 

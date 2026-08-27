@@ -1,0 +1,252 @@
+import json
+import types
+from typing import Any, cast
+
+from selectspeak.app.application import SelectSpeakApp
+from selectspeak.ui.hints import shortcut_label
+from selectspeak.ui.winui_bridge import WinUiPlayer
+
+
+class _Session:
+    """Stand in for PlaybackSession, which owns the real playback state."""
+
+    def __init__(self, *, speaking: bool, paused: bool) -> None:
+        self._snapshot = types.SimpleNamespace(speaking=speaking, paused=paused)
+
+    def snapshot(self) -> types.SimpleNamespace:
+        return self._snapshot
+
+
+def _app_with(*, speaking: bool, paused: bool) -> tuple[SelectSpeakApp, list[str]]:
+    app = SelectSpeakApp()
+    test_app = cast(Any, app)
+    test_app._session = _Session(speaking=speaking, paused=paused)
+    calls: list[str] = []
+    test_app.pause = lambda: calls.append("pause")
+    test_app.resume = lambda: calls.append("resume")
+    test_app.replay = lambda: calls.append("replay")
+    return app, calls
+
+
+def test_toggle_pauses_while_speaking() -> None:
+    app, calls = _app_with(speaking=True, paused=False)
+    app.toggle_playback()
+    assert calls == ["pause"]
+
+
+def test_toggle_resumes_while_paused() -> None:
+    app, calls = _app_with(speaking=True, paused=True)
+    app.toggle_playback()
+    assert calls == ["resume"]
+
+
+def test_toggle_replays_when_idle() -> None:
+    app, calls = _app_with(speaking=False, paused=False)
+    app.toggle_playback()
+    assert calls == ["replay"]
+
+
+def _player_recording_sends() -> tuple[WinUiPlayer, list[dict[str, object]]]:
+    """A player whose messages are captured instead of written to a pipe."""
+    player = WinUiPlayer(hotkey="alt+s", ocr_hotkey="alt+d")
+    sent: list[dict[str, object]] = []
+    cast(Any, player)._send = lambda message_type, **fields: sent.append({"type": message_type, **fields})
+    return player, sent
+
+
+def test_winui_player_routes_the_intents_the_ui_actually_sends() -> None:
+    seen: list[str] = []
+    player = WinUiPlayer(
+        on_toggle_playback=lambda: seen.append("toggle_playback"),
+        on_stop=lambda: seen.append("stop"),
+        on_settings=lambda: seen.append("settings"),
+    )
+
+    for intent in ("toggle_playback", "stop", "settings"):
+        player._dispatch({"type": intent})
+    player.drain_callbacks()
+
+    assert seen == ["toggle_playback", "stop", "settings"]
+
+
+def test_unknown_intent_is_ignored() -> None:
+    player = WinUiPlayer()
+    player._dispatch({"type": "not_a_real_intent"})
+    assert player.drain_callbacks() == 0
+
+
+def _last_of_type(sent: list[dict[str, object]], message_type: str) -> dict[str, object]:
+    return [message for message in sent if message["type"] == message_type][-1]
+
+
+def test_clipboard_mode_is_recorded_and_pushed_to_the_settings_window() -> None:
+    player, sent = _player_recording_sends()
+
+    player.set_clipboard_mode(True)
+
+    assert player.clipboard_mode is True
+    assert _last_of_type(sent, "set_settings")["clipboard_mode"] is True
+
+
+def test_capture_complete_reports_the_new_shortcut() -> None:
+    player, sent = _player_recording_sends()
+
+    player.show_capture_complete("ctrl+shift+r")
+
+    assert player._hotkey == "ctrl+shift+r"
+    # The player names the shortcut beside the gear, and the settings window
+    # shows it in its own row, so a new binding pushes both.
+    assert _last_of_type(sent, "set_shortcut")["hotkey"] == shortcut_label("ctrl+shift+r")
+    assert _last_of_type(sent, "set_settings")["hotkey"] == shortcut_label("ctrl+shift+r")
+
+
+def test_changing_a_setting_pushes_the_whole_set_back() -> None:
+    """The window renders what it is sent, so every change re-sends the set."""
+    player, sent = _player_recording_sends()
+
+    player.set_auto_hide(False)
+
+    settings = _last_of_type(sent, "set_settings")
+    assert settings["auto_hide"] is False
+    assert settings["clipboard_mode"] is False
+    assert settings["hotkey"] == "Alt+S"
+    assert settings["ocr_hotkey"] == "Alt+D"
+
+
+def test_opening_settings_carries_the_current_values() -> None:
+    player, sent = _player_recording_sends()
+    player.set_clipboard_mode(True)
+    sent.clear()
+
+    player.open_settings()
+
+    assert sent[0]["type"] == "show_settings"
+    assert sent[0]["clipboard_mode"] is True
+
+
+def test_settings_window_intents_are_routed() -> None:
+    seen: list[str] = []
+    player = WinUiPlayer(
+        on_toggle_auto_hide=lambda: seen.append("auto_hide"),
+        on_toggle_clipboard=lambda: seen.append("clipboard"),
+        on_toggle_debug=lambda: seen.append("debug"),
+    )
+
+    for intent in ("toggle_auto_hide", "toggle_clipboard", "toggle_debug"):
+        player._dispatch({"type": intent})
+    player.drain_callbacks()
+
+    assert seen == ["auto_hide", "clipboard", "debug"]
+
+
+def test_a_message_serialises_to_exactly_one_line() -> None:
+    """The UI splits the stream on newlines, so an embedded newline in the
+    payload must survive as an escape rather than ending the message early."""
+    payload = {"type": "set_text", "text": "first line\nsecond line"}
+    line = json.dumps(payload, ensure_ascii=False) + "\n"
+
+    assert line.count("\n") == 1
+    assert line.endswith("\n")
+    assert json.loads(line)["text"] == "first line\nsecond line"
+
+
+def test_send_is_a_no_op_while_disconnected() -> None:
+    """Messages are dropped rather than queued, and must not raise."""
+    player = WinUiPlayer()
+    assert player._pipe is None
+    player.set_reader_text("no pipe yet")
+
+
+def test_launching_the_player_puts_it_in_the_kill_on_close_job(monkeypatch, tmp_path):
+    """The player must not outlive a backend that never reaches _stop_ui.
+
+    Terminating it during shutdown only covers an ordinary exit; a crash or a
+    kill from Task Manager skips that path entirely, so the job object is what
+    actually guarantees the player goes too.
+
+    The executable is pointed at through the environment rather than by
+    patching the lookup, so this does not depend on whether the player happens
+    to be built in the tree the tests are running from.
+    """
+    from selectspeak.ui import winui_bridge
+
+    executable = tmp_path / "SelectSpeak.UI.exe"
+    executable.touch()
+    monkeypatch.setenv("SELECTSPEAK_WINUI_EXE", str(executable))
+    assert winui_bridge.winui_executable() == executable
+
+    launched = types.SimpleNamespace(pid=4321, poll=lambda: None)
+    monkeypatch.setattr(winui_bridge.subprocess, "Popen", lambda *a, **k: launched)
+
+    assigned: list[int] = []
+    player = WinUiPlayer()
+    monkeypatch.setattr(player._job, "assign", lambda pid: assigned.append(pid) or True)
+
+    player._launch_ui()
+
+    assert assigned == [4321]
+
+
+def test_rebinding_the_read_shortcut_refreshes_the_player() -> None:
+    """The player and settings row must show the shortcut that now works.
+
+    The OCR path already pushes its new value; without the same here, both
+    keep naming the old shortcut until the application restarts even though
+    only the new one is bound.
+    """
+    app = SelectSpeakApp()
+    test_app = cast(Any, app)
+    pushed: list[str] = []
+    test_app._hotkeys = types.SimpleNamespace(hotkey="alt+s", rebind=lambda _hotkey: None)
+    test_app._tray = types.SimpleNamespace(update_hotkey=lambda _hotkey: None)
+    test_app._player = types.SimpleNamespace(
+        set_hotkey=pushed.append,
+        show_hotkey_error=lambda _message: None,
+    )
+    test_app._save_settings = lambda _config: None
+
+    app._apply_hotkey("ctrl+shift+r")
+
+    assert pushed == ["ctrl+shift+r"]
+
+
+def test_mainloop_gives_up_when_no_player_could_be_started(monkeypatch, tmp_path):
+    """A launch that never produced a process must not run forever.
+
+    mainloop only exits for a process that started and then died, so a
+    rejected CreateProcess - a corrupt binary, a blocked image - would
+    otherwise keep the backend alive with no player and no way to reach it.
+    """
+    from selectspeak.ui import winui_bridge
+
+    executable = tmp_path / "SelectSpeak.UI.exe"
+    executable.touch()
+    monkeypatch.setenv("SELECTSPEAK_WINUI_EXE", str(executable))
+
+    def rejected(*_args, **_kwargs):
+        raise OSError("corrupt image")
+
+    monkeypatch.setattr(winui_bridge.subprocess, "Popen", rejected)
+
+    player = WinUiPlayer()
+    player._running = True
+    player._launch_ui()
+
+    assert player._process is None
+    # Returns rather than blocking, which is what the loop would do if it
+    # waited for a process that never existed.
+    player.mainloop()
+
+
+def test_missing_player_executable_also_gives_up(monkeypatch, tmp_path):
+    """The same applies when the player was never built or was removed."""
+    from selectspeak.ui import winui_bridge
+
+    monkeypatch.setenv("SELECTSPEAK_WINUI_EXE", str(tmp_path / "absent.exe"))
+    assert winui_bridge.winui_executable() is None
+
+    player = WinUiPlayer()
+    player._running = True
+    player._launch_ui()
+
+    player.mainloop()

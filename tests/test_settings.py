@@ -24,6 +24,8 @@ def test_settings_round_trip_every_persistent_category(tmp_path: Path) -> None:
         auto_hide=False,
         speech_debug_enabled=False,
         clipboard_mode=True,
+        logging_enabled=True,
+        log_file="C:/Temp/selectspeak-debug.log",
     )
     store = SettingsStore(path)
 
@@ -62,6 +64,16 @@ def test_settings_ignore_invalid_values_individually(tmp_path: Path) -> None:
     assert config.supertonic_speed == 1.3
     assert config.auto_hide
     assert config.clipboard_mode
+
+
+def test_settings_migrate_retired_sapi_backend_to_natural(tmp_path: Path) -> None:
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps({"schema_version": SETTINGS_SCHEMA_VERSION, "speech_backend": "sapi"}),
+        encoding="utf-8",
+    )
+
+    assert SettingsStore(path).load().speech_backend == "natural"
 
 
 def test_settings_reject_an_unknown_schema(tmp_path: Path) -> None:

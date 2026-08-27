@@ -8,13 +8,17 @@ analysis = Analysis(
     [str(Path(SPECPATH) / "pyinstaller_entrypoint.py")],
     pathex=[str(project_root / "src" / "python")],
     binaries=[],
-    datas=[],
+    # The tray draws its icon from the logo at runtime, so ship the image
+    # itself rather than only the .ico the executable is stamped with.
+    datas=[(str(project_root / "logo" / "SelectSpeak-logo.png"), ".")],
     hiddenimports=[
-        "pythoncom",
         "pywintypes",
-        "win32com.client",
     ],
     excludes=[
+        # The player is the WinUI process; nothing here draws with Tk, and the
+        # Tcl/Tk runtime is large enough to be worth refusing explicitly.
+        "tkinter",
+        "_tkinter",
         # The neural engine is installed later as a versioned dependency layer.
         "huggingface_hub",
         "numpy",
@@ -30,8 +34,7 @@ analysis = Analysis(
         "hf_xet",
         # The tray icon is drawn in memory; it never decodes AVIF images.
         "PIL.AvifImagePlugin",
-        # win32com's type-library tooling optionally imports the Pythonwin GUI.
-        # SelectSpeak uses dynamic SAPI dispatch and never uses that GUI stack.
+        # Pythonwin's optional GUI stack is not used by SelectSpeak.
         "pywin",
         "win32ui",
         "fastapi",

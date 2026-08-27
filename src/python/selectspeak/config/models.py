@@ -1,17 +1,5 @@
 from dataclasses import dataclass
 
-from .paths import log_dir
-
-
-@dataclass(frozen=True, slots=True)
-class InputConfig:
-    default_hotkey: str
-    ocr_hotkey: str
-    ocr_language: str
-    native_dll: str
-    hotkey_debounce_seconds: float
-    capture_timeout_seconds: float
-
 
 @dataclass(frozen=True, slots=True)
 class SpeechConfig:
@@ -26,14 +14,6 @@ class SpeechConfig:
     speech_volume: int
     structure_pause_seconds: float
     minimum_text_length: int
-
-
-@dataclass(frozen=True, slots=True)
-class UiConfig:
-    app_name: str
-    auto_hide: bool
-    speech_debug_enabled: bool
-    clipboard_mode: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,18 +45,6 @@ class AppConfig:
     log_file: str = ""
     minimum_text_length: int = 3
     hotkey_debounce_seconds: float = 0.3
-    capture_timeout_seconds: float = 15.0
-
-    @property
-    def input(self) -> InputConfig:
-        return InputConfig(
-            self.default_hotkey,
-            self.ocr_hotkey,
-            self.ocr_language,
-            self.native_dll,
-            self.hotkey_debounce_seconds,
-            self.capture_timeout_seconds,
-        )
 
     @property
     def speech(self) -> SpeechConfig:
@@ -95,18 +63,8 @@ class AppConfig:
         )
 
     @property
-    def ui(self) -> UiConfig:
-        return UiConfig(
-            self.app_name,
-            self.auto_hide,
-            self.speech_debug_enabled,
-            self.clipboard_mode,
-        )
-
-    @property
     def logging(self) -> LoggingConfig:
-        log_file = self.log_file or str(log_dir() / "selectspeak.log")
-        return LoggingConfig(self.logging_enabled, log_file)
+        return LoggingConfig(self.logging_enabled, self.log_file)
 
 
 DEFAULT_CONFIG = AppConfig()

@@ -11,12 +11,19 @@ from supertonic import TTS
 
 from ...config import SpeechConfig
 from ...config.paths import model_dir
-from ..contracts import WordCallback
+from ..contracts import SpeechEventCallback, TerminalStatus
 from ..debug import SpeechDebugCallback, emit_speech_debug
+from ..pcm import (
+    PcmEvent,
+    PcmFormat,
+    PcmPlaybackSession,
+    PcmPlayedWord,
+    PcmTerminal,
+    pcm_boundary_from_codepoints,
+)
 from ..pipeline import AdaptiveSpeechSession, GenerationStatistics
 from ..playback import PlaybackController, SpeechRequest
 from ..segments import SpeechSegment
-from ..waveout import TICKS_PER_SECOND, WaveOutPlayer
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +32,6 @@ _WORD_PATTERN = re.compile(r"[\w]+(?:[’'-][\w]+)*", re.UNICODE)
 EDGE_PADDING_SECONDS = 0.015
 LEADING_SCAN_SECONDS = 0.5
 TRAILING_SCAN_SECONDS = 0.75
-MAX_BUFFERED_AUDIO_SECONDS = 12.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,31 +152,27 @@ class SupertonicSpeaker:
     def __init__(
         self,
         config: SpeechConfig,
-        word_callback: WordCallback | None = None,
         debug_callback: SpeechDebugCallback | None = None,
     ) -> None:
         self._config = config
-        self._word_callback = word_callback
         self._debug_callback = debug_callback
         self._playback = PlaybackController()
         # A cancelled inference cannot be interrupted by the Supertonic API.
         # Serialize it with the next request so two ONNX runs cannot contend
         # for the CPU and turn a cancellation into a large startup outlier.
         self._synthesis_lock = threading.Lock()
-        self._request_text = ""
+        self._request_generation = 0
         self._generation_statistics = GenerationStatistics()
+        self._close_lock = threading.Lock()
+        self._closed = False
         logger.info("supertonic.model.loading")
         self._tts = TTS(model_dir=model_dir("supertonic3"), auto_download=True)
         self._style = self._tts.get_voice_style(config.supertonic_voice)
         self._sample_rate = int(getattr(self._tts, "sample_rate", SAMPLE_RATE))
-        self._player = WaveOutPlayer(
-            self._on_played_word,
-            config.speech_volume,
-            sample_rate=self._sample_rate,
-            backend_name="supertonic",
-            debug_callback=debug_callback,
-        )
-        self._thread = threading.Thread(target=self._run, daemon=True, name="SupertonicSpeaker")
+        self._session_lock = threading.Lock()
+        self._audio_session: PcmPlaybackSession | None = None
+        self._terminal_event: threading.Event | None = None
+        self._thread = threading.Thread(target=self._run, name="SupertonicSpeaker")
         self._thread.start()
         logger.info(
             "supertonic.model.loaded voice=%s language=%s sample_rate=%s",
@@ -179,49 +181,66 @@ class SupertonicSpeaker:
             self._sample_rate,
         )
 
-    def speak(self, text: str) -> int | None:
+    def speak(self, request_id: int, text: str, callback: SpeechEventCallback) -> bool:
         if len(text) < self._config.minimum_text_length:
-            return None
-        request, active = self._playback.submit(text)
+            return False
+        request, active = self._playback.submit(request_id, text, callback)
         if active:
-            self._player.stop()
-        return request.generation
+            self._stop_active(TerminalStatus.SUPERSEDED)
+        return True
 
     def stop(self) -> None:
         _generation, active = self._playback.cancel()
         if active:
-            self._player.stop()
+            self._stop_active(TerminalStatus.CANCELLED)
 
     def pause(self) -> None:
         if self._playback.pause_now():
-            self._player.pause()
+            if session := self._current_audio_session():
+                session.pause()
 
     def resume(self) -> None:
         if self._playback.resume_now():
-            self._player.resume()
+            if session := self._current_audio_session():
+                session.resume()
 
-    def wait_until_done(self, generation: int) -> bool:
-        return self._playback.wait_until_done(generation)
+    def close(self) -> None:
+        with self._close_lock:
+            if self._closed:
+                return
+            self._closed = True
+        active = self._playback.close()
+        if active:
+            try:
+                self._stop_active(TerminalStatus.CLOSED)
+            except Exception:
+                logger.exception("supertonic.close_stop_failed")
+        # Supertonic cannot cancel an ONNX inference. Joining here guarantees
+        # that it has settled before application/native teardown continues.
+        self._thread.join()
+        logger.info("supertonic.closed")
 
     def _run(self) -> None:
         while True:
             request = self._playback.next_request()
+            if request is None:
+                logger.debug("supertonic.worker.closed")
+                return
             if not self._playback.is_current(request.generation):
                 continue
             try:
                 self._speak_request(request)
             except Exception:
+                if self._is_superseded(request.generation):
+                    continue
                 logger.exception("supertonic.request.failed generation=%s", request.generation)
                 self._playback.fail(request.generation)
                 return
 
     def _speak_request(self, request: _SpeechRequest) -> None:
-        if not self._playback.begin(request.generation):
+        if not self._playback.is_current(request.generation):
             return
-        try:
-            self._synthesize_request(request)
-        finally:
-            self._playback.complete(request.generation)
+        self._synthesize_request(request)
 
     def _synthesize_request(self, request: _SpeechRequest) -> None:
         session = AdaptiveSpeechSession.start(request.text, "supertonic", self._generation_statistics)
@@ -230,60 +249,86 @@ class SupertonicSpeaker:
         prepared = self._prepare_chunk(session)
         if self._is_superseded(request.generation):
             return
-        self._request_text = request.text
-        self._player.start()
+        self._request_generation = request.generation
+        terminal_event = threading.Event()
+        audio_session = PcmPlaybackSession(
+            request.request_id,
+            request.text,
+            PcmFormat(self._sample_rate),
+            lambda event: self._on_audio_event(request.generation, event),
+            dll_path=self._config.native_dll,
+        )
+        with self._session_lock:
+            self._audio_session = audio_session
+            self._terminal_event = terminal_event
         try:
-            self._queue_chunks(request.generation, session, prepared)
+            if self._playback.paused:
+                audio_session.pause()
+            self._queue_chunks(request, session, prepared, audio_session)
+            if self._playback.is_current(request.generation):
+                audio_session.finish_input()
+            terminal_event.wait()
         finally:
-            self._player.finish()
+            audio_session.close()
+            with self._session_lock:
+                if self._audio_session is audio_session:
+                    self._audio_session = None
+                    self._terminal_event = None
 
     def _queue_chunks(
         self,
-        generation: int,
+        request: _SpeechRequest,
         session: AdaptiveSpeechSession,
         prepared: _PreparedSegment,
-    ) -> None:
-        while not self._is_superseded(generation):
-            audio_base = self._queue_segment_audio(prepared)
-            self._report_queued_chunk(generation, session, prepared, audio_base)
+        audio_session: PcmPlaybackSession,
+    ) -> int:
+        buffered_frames = 0
+        while not self._is_superseded(request.generation):
+            buffered_frames = self._queue_segment_audio(request, audio_session, prepared)
+            self._report_queued_chunk(request.generation, session, prepared, buffered_frames)
             if not session.remaining_characters:
-                return
-            session.queue_structure_pause(self._player.feed_silence, self._config.structure_pause_seconds)
-            if not self._wait_for_buffer_capacity(generation):
-                return
-            if not session.advance(self._player.buffered_seconds):
-                return
+                return buffered_frames
+            if prepared.pause_after:
+                frames = round(self._config.structure_pause_seconds * self._sample_rate)
+                if frames:
+                    result = audio_session.submit_bounded(b"\0\0" * frames)
+                    buffered_frames = result.buffered_frames_after_submit
+            if not session.advance(buffered_frames / self._sample_rate):
+                return buffered_frames
             prepared = self._prepare_chunk(session)
+        return buffered_frames
 
     def _prepare_chunk(self, session: AdaptiveSpeechSession) -> _PreparedSegment:
         prepared = self._synthesize_segment(session.decision.segment)
         session.record_generation(prepared.synthesis_ms / 1000)
         return prepared
 
-    def _queue_segment_audio(self, prepared: _PreparedSegment) -> int:
-        audio_base = self._player.fed_bytes
-        for boundary in estimate_word_boundaries(prepared.spoken, prepared.spoken_seconds):
-            self._player.add_boundary(
-                round((boundary.seconds + prepared.leading_silence_seconds) * TICKS_PER_SECOND),
+    def _queue_segment_audio(
+        self, request: _SpeechRequest, audio_session: PcmPlaybackSession, prepared: _PreparedSegment
+    ) -> int:
+        boundaries = tuple(
+            pcm_boundary_from_codepoints(
+                request.text,
+                round((boundary.seconds + prepared.leading_silence_seconds) * self._sample_rate),
                 prepared.offset + boundary.position,
                 boundary.length,
-                base_byte_offset=audio_base,
             )
-        self._player.feed(prepared.pcm)
-        return audio_base
+            for boundary in estimate_word_boundaries(prepared.spoken, prepared.spoken_seconds)
+        )
+        return audio_session.submit_bounded(prepared.pcm, boundaries).buffered_frames_after_submit
 
     def _report_queued_chunk(
         self,
         generation: int,
         session: AdaptiveSpeechSession,
         prepared: _PreparedSegment,
-        audio_base: int,
+        buffered_frames: int,
     ) -> None:
         emit_speech_debug(
             session.debug_event(prepared.synthesis_ms / 1000, prepared.audio_seconds),
             getattr(self, "_debug_callback", None),
-            getattr(self._player, "add_debug_marker", None),
-            byte_offset=audio_base,
+            None,
+            byte_offset=0,
         )
         logger.info(
             "supertonic.segment.queued generation=%s segment_index=%s remaining_characters=%s "
@@ -293,7 +338,7 @@ class SupertonicSpeaker:
             session.remaining_characters,
             round(prepared.audio_seconds, 3),
             prepared.synthesis_ms,
-            round(self._player.buffered_seconds, 3),
+            round(buffered_frames / self._sample_rate, 3),
         )
 
     def _synthesize_segment(self, segment: SpeechSegment) -> _PreparedSegment:
@@ -330,16 +375,31 @@ class SupertonicSpeaker:
             pause_after=segment.pause_after,
         )
 
-    def _on_played_word(self, position: int, length: int) -> None:
-        if self._word_callback:
-            self._word_callback(self._request_text, position, length)
+    def _on_audio_event(self, generation: int, event: PcmEvent) -> None:
+        if isinstance(event, PcmPlayedWord):
+            self._playback.played_word(generation, event.text_position, event.text_length)
+            return
+        if not isinstance(event, PcmTerminal):
+            return
+        if event.status is TerminalStatus.COMPLETED:
+            self._playback.complete(generation)
+        elif event.status is TerminalStatus.FAILED:
+            self._playback.fail(generation)
+        with self._session_lock:
+            terminal_event = self._terminal_event
+        if terminal_event is not None:
+            terminal_event.set()
 
-    def _wait_for_buffer_capacity(self, generation: int) -> bool:
-        while self._player.buffered_seconds > MAX_BUFFERED_AUDIO_SECONDS:
-            if self._is_superseded(generation):
-                return False
-            time.sleep(0.02)
-        return True
+    def _current_audio_session(self) -> PcmPlaybackSession | None:
+        with self._session_lock:
+            return self._audio_session
+
+    def _stop_active(self, reason: TerminalStatus) -> None:
+        if session := self._current_audio_session():
+            try:
+                session.stop(reason)
+            except RuntimeError:
+                pass
 
     def _is_superseded(self, generation: int) -> bool:
         return not self._playback.is_current(generation)

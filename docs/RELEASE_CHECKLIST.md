@@ -1,41 +1,40 @@
 # Release checklist
 
-This checklist covers local release preparation and the trusted GitHub-hosted
-unsigned distribution build. Code signing and publication of the generated
-draft release remain separate approval steps.
+Replace the example version once, then run the steps in order from the repository root.
+For a guided run through the same process, use `.\scripts\release.ps1`.
 
-## Repository
+## 1. Prepare and merge the version bump
 
-- [ ] Confirm the repository is public.
-- [ ] Confirm GitHub detects the root MIT `LICENSE`.
-- [ ] Review `PRIVACY.md`, `SECURITY.md`, and the code signing policy.
-- [ ] Update the version in `pyproject.toml` and all generated metadata.
-- [ ] Review third-party dependency and model licences.
+- [ ] Update every source-controlled version field with the version-bump script:
 
-## Verification
+  ```powershell
+  $Version = "0.1.3"
+  .\scripts\bump_version.ps1 -Version $Version
+  git diff --check
+  ```
 
-- [ ] Run Ruff lint and format checks, pytest, ty, and `uv build`.
-- [ ] Run `build-tools\security\audit_dependencies.ps1` and review its reports.
-- [ ] Confirm both jobs in the GitHub `CI` workflow pass.
-- [ ] Build and run the native tests.
-- [ ] Build the portable directory and installer from a clean checkout.
-- [ ] Confirm SelectSpeak-owned EXE and DLL product names and versions agree.
-- [ ] Run the isolated installer install/upgrade/uninstall smoke test.
-- [ ] Confirm the installer displays its download and privacy notice.
-- [ ] Scan the release files with current security tools.
+- [ ] Commit the generated version changes and merge them to `main` through the normal review process. Confirm the `CI` workflow passes on the merged commit.
+- [ ] Add and review the release's user-visible changes and relevant known limitations in the matching version section of `CHANGELOG.md` before tagging. Leave `Unreleased` ready for future changes.
 
-## Unsigned release
+## 2. Tag the release
 
-- [ ] Publish the version tag.
-- [ ] Manually start `Distribution` from the matching `v<version>` tag.
-- [ ] Confirm it completed on a GitHub-hosted Windows runner and passed its
-      installer smoke test.
-- [ ] Download and inspect the unsigned distribution workflow artifact.
-- [ ] Confirm the draft release contains Setup, its `.sha256` file, and both
-      matching Supertonic archives.
-- [ ] Confirm the draft release and installer are marked as unsigned until
-      signing is operational.
-- [ ] Complete the draft release notes with functionality, requirements,
-      downloads, known limitations, and the code signing policy.
-- [ ] Publish the reviewed draft release.
-- [ ] Test installation from the published assets on a clean supported system.
+- [ ] Update local `main`, create the matching annotated tag, and push it:
+
+  ```powershell
+  git switch main
+  git pull --ff-only origin main
+  git tag -a "v$Version" -m "SelectSpeak $Version"
+  git push origin "v$Version"
+  ```
+
+## 3. Build the release candidate
+
+- [ ] On GitHub, open **Actions > Distribution > Run workflow**, select the `v$Version` tag, and start the workflow.
+
+- [ ] Confirm both Distribution jobs pass and the workflow creates the unsigned draft GitHub Release. The workflow builds and verifies the portable app, installer, checksum, and matching Supertonic archives, including the installer lifecycle smoke test.
+
+## 4. Review and publish
+
+- [ ] Review the draft GitHub Release notes and make any necessary corrections. The workflow includes the matching `CHANGELOG.md` section automatically alongside the unsigned-release and installation boilerplate.
+- [ ] Download the draft installer and manually verify on a clean supported Windows system that installation succeeds and the release's important user flows work, including text selection, speech playback, the configured hotkeys, OCR, and any changed functionality. Keep the release marked unsigned.
+- [ ] Review the draft title and notes, then publish the draft from GitHub.

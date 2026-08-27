@@ -1,8 +1,8 @@
 # SelectSpeak
 
 Select text anywhere in Windows, press `Alt+S`, and hear it read aloud
-using a locally installed Narrator Natural Voice when native voice support
-is available, with the built-in SAPI voice as an automatic fallback. The tray app includes pause, resume, stop,
+using a locally installed Narrator Natural Voice, or the optional local
+Supertonic neural voice. The tray app includes pause, resume, stop,
 replay, clipboard mode, word highlighting, and hotkey rebinding. Global
 shortcut registration, selection capture, and shortcut recording are handled
 by a small native Windows bridge.
@@ -21,7 +21,7 @@ Project policies: [privacy](PRIVACY.md), [security](SECURITY.md),
 Download and run:
 
 ```text
-SelectSpeak-Setup-0.1.2.exe
+SelectSpeak-Setup-0.1.3.exe
 ```
 
 The installer does not require administrator rights. It installs SelectSpeak
@@ -80,7 +80,7 @@ manually when a complete data reset is wanted.
 Open PowerShell in the project folder and run:
 
 ```powershell
-.\scripts\install.ps1
+.\scripts\install-dev-dependencies.ps1
 ```
 
 This developer setup script requires WinGet. It provisions `uv`, a managed
@@ -93,16 +93,19 @@ when updating an existing installation.
 To install, start SelectSpeak, and add it to Windows startup in one command:
 
 ```powershell
-.\scripts\install.ps1 -Launch -AddToStartup
+.\scripts\install-dev-dependencies.ps1 -Launch -AddToStartup
 ```
 
 This developer setup script requires WinGet. It provisions uv, a managed Python 3.13 installation, all required Python packages, Visual C++ Build Tools and CMake when needed, and builds the native bridge. It also downloads the local Supertonic ONNX voice model, then verifies the installation by running the test, lint, and type-check suites. The script is safe to run again when updating an existing installation.
 
 To install SelectSpeak, launch it, and add it to Windows startup in one command:
 
-.\scripts\install.ps1 -Launch -AddToStartup
+.\scripts\install-dev-dependencies.ps1 -Launch -AddToStartup
 
-Use -SkipNaturalVoice if you only want the SAPI backend and do not want to build the optional direct Natural Voice integration. Use -SkipSupertonicModel to defer downloading the model until Supertonic is first selected. Use -SkipChecks to omit developer checks during installation.
+Use -SkipNaturalVoice when developing only the Supertonic path and do not want
+to build the direct Natural Voice integration. Use -SkipSupertonicModel to defer
+downloading the model until Supertonic is first selected. Use -SkipChecks to
+omit developer checks during installation.
 
 The input bridge attempts UI Automation first, then falls back to SendInput, clipboard sequence polling, and an eager multi-format clipboard snapshot. Normal text capture and OCR shortcuts share a single native message thread. OCR is responsible only for the frozen-screen selector and Windows' local text-recognition functionality. The bridge uses RegisterHotKey during normal operation and temporarily installs a low-level keyboard hook only while recording a new shortcut.
 
@@ -110,15 +113,24 @@ Set SELECTSPEAK_NATIVE_DLL to use the unified native DLL from another location.
 
 Direct Natural Voice backend
 
-SelectSpeak includes an optional native backend for compatible Microsoft Narrator Natural Voices. It communicates directly with Microsoft's locally installed speech components, allowing SelectSpeak to stream PCM audio and receive accurate word-boundary events without routing synthesis through SAPI.
+SelectSpeak includes a native backend for compatible Microsoft Narrator Natural
+Voices. It communicates directly with Microsoft's locally installed speech
+components, allowing SelectSpeak to stream PCM audio and receive accurate
+word-boundary events.
 
-The development setup builds this backend by default. Compatible Natural Voices installed through Windows Settings are discovered dynamically. If the backend or a compatible voice is unavailable, SelectSpeak automatically falls back to SAPI.
+The development setup builds this backend by default. Compatible Natural Voices
+installed through Windows Settings are discovered dynamically. If a selected
+Natural Voice is unavailable, SelectSpeak reports that condition rather than
+switching to a different speech engine.
 
 To remain compatible with different installed Windows speech-runtime and voice-package versions, the bridge obtains the runtime information required by Microsoft's locally installed speech components from the installed speech extension at runtime. The bridge keeps this information in memory only; it does not persist, log, upload, or transmit it. The backend does not require the user to supply external speech-service credentials.
 
 This integration uses internal, version-sensitive Windows speech interfaces rather than a stable public Microsoft API. It may require maintenance when Microsoft changes the speech runtime or voice-package implementation.
 
-AppConfig.speech_backend defaults to "auto": SelectSpeak uses the Natural Voice backend when it is available and compatible, otherwise it uses SAPI. Set it to "natural" to require the Natural Voice backend, "sapi" to disable it, or "supertonic" to start with the neural engine selected. AppConfig.native_dll can also point to an alternate unified DLL path.
+AppConfig.speech_backend defaults to "auto", which selects Natural Voice. Set
+it to "natural" to require that backend or "supertonic" to start with the neural
+engine selected. AppConfig.native_dll can also point to an alternate unified DLL
+path.
 
 Supertonic defaults to its F4 voice at 8 inference steps. Voice, language, quality steps, and speed can be configured through the supertonic_voice, supertonic_language, supertonic_steps, and supertonic_speed fields in AppConfig.
 
@@ -126,11 +138,19 @@ The Natural Voice integration currently targets Speech SDK 1.41.1 for compatibil
 
 ## Development run
 
-Double-click `scripts/run.vbs` to launch without a console window. It uses the
-project-local Python environment created by `scripts/install.ps1`, so `uv` does not
-need to be on the launcher's `PATH`.
+```powershell
+.\scripts\run-dev.ps1
+```
 
-Developers can also run `uv run python -m selectspeak` or `uv run selectspeak`.
+This is the main way to run SelectSpeak from a checkout. It runs the native and
+player builds, which compile only what changed, and then starts the application.
+Use `-NoBuild` to start without building, `-Release` for a Release player, and
+`-Detached` to return once it is running.
+
+Double-click `scripts/run.vbs` for the same thing without a console window; it
+calls `run-dev.ps1 -Detached`.
+
+Developers can also run `uv run selectspeak`, which builds nothing.
 
 To update every source-controlled release-version field before building a new
 release, run:
@@ -160,12 +180,12 @@ speech normalization, giving the chunker meaningful structural boundaries.
 ## Start automatically
 
 Select **Start SelectSpeak when I sign in** while running the Windows installer.
-For a developer checkout, pass `-AddToStartup` to `scripts/install.ps1`. To remove that
+For a developer checkout, pass `-AddToStartup` to `scripts/install-dev-dependencies.ps1`. To remove that
 development shortcut later,
 run:
 
 ```powershell
-.\scripts\install.ps1 -RemoveFromStartup
+.\scripts\install-dev-dependencies.ps1 -RemoveFromStartup
 ```
 
 ## Controls
@@ -174,24 +194,23 @@ run:
 - Press the hotkey again on the same selection while it is speaking to stop;
   press it once more after stopping to read the selection again. Selecting
   different text replaces the current reading immediately.
-- In **Mode: Auto**, the hotkey reads selected text when available and
-  automatically falls back to the existing clipboard when nothing is selected.
-- Click **Mode: Auto** to switch to **Mode: Clipboard** when you want to force
-  clipboard reading.
-- Click **Voice: … ▾** to choose any discovered Windows Natural Voice, the
-  configured local Supertonic model, or the Windows SAPI fallback. Voice
-  packages are scanned again whenever the menu opens, so newly installed
-  Windows voices appear without restarting SelectSpeak. The first switch to
-  Supertonic can take a moment while its ONNX model loads into memory.
-- Click **Auto hide: On** to keep the player open after speech finishes, or
-  click it again to restore automatic hiding. Auto hide is enabled by default.
-- Click **Debug: Off** to show adaptive chunk boundaries and live speech
-  diagnostics. The active chunk is highlighted when its PCM reaches the
-  playhead; the panel reports target/actual size, estimated and actual synthesis
-  time, generated audio duration, playback runway, queue delay, and underruns.
-- Click **Read** to perform the same capture and reading action as the global
-  hotkey. The player remains visible without taking foreground focus from the
-  source application.
+- Use the transport buttons to pause, resume and stop the current reading. The
+  player never takes foreground focus from the application being read.
+- Open **Settings** with the gear button to change:
+  - **Read the clipboard instead of the selection.** Off by default: the
+    shortcut reads selected text when available and falls back to the existing
+    clipboard when nothing is selected. On, it always reads the clipboard.
+  - **Voice.** Any discovered Windows Natural Voice or the configured local
+    Supertonic model. The first switch to
+    Supertonic can take a moment while its ONNX model loads into memory.
+  - **Shortcuts.** Both the read and screen-capture shortcuts are recorded in
+    place; a combination another application already holds is refused and the
+    shortcut in force is kept.
+  - **Auto hide.** Enabled by default, so the player puts itself away when
+    reading finishes.
+  - **Speech diagnostics.** Collects adaptive chunk boundaries, synthesis
+    timing, playback runway, queue delay, and underruns.
+- Use the tray icon to show the player or quit.
 
 ## Text processing
 
@@ -215,14 +234,12 @@ chunk. The controller prefers sentence endings, permits semicolons and colons
 under pressure, and uses commas only when the buffer is at risk.
 Supertonic additionally trims model-generated edge silence. Lookahead is capped
 at 12 seconds of ready audio to keep cancellation responsive and memory bounded.
-The expanded reader preserves those interpreted lines
+The reader preserves those interpreted lines
 visually, restores detected bullet markers with hanging indentation, and
 highlights the active word within the structured preview. Visual bullet markers
 are removed before each segment is sent to the speech engine. When Windows
 preserves list rows but drops their markers, list-shaped multiline blocks are
 inferred from their heading and sentence structure.
-- Click the displayed hotkey to bind a different key combination.
-- Use the tray icon to show the player or quit.
 
 The rebound hotkey, clipboard mode, selected backend/voice, and UI preferences
 are persisted in `%LOCALAPPDATA%\SelectSpeak\settings.json`. Code-level
@@ -267,6 +284,18 @@ To create the Windows application and installer:
 .\build-tools\build.ps1
 ```
 
+That single command builds the native bridge, the WinUI player, the portable
+`dist\SelectSpeak` folder, and `dist\SelectSpeak-Setup-<version>.exe`. For the
+portable folder alone, add `-SkipInstaller`.
+
+The optional Supertonic archives are large and change far less often than the
+application version, so an ordinary build reuses whichever pair is already in
+`dist\`, reporting when their version differs. Pass `-RebuildSupertonicPayload`
+to regenerate them, which a real release needs because their download links are
+published under the release tag; `-ReleaseReady` turns a reused mismatch into an
+error rather than a warning. Add `-SkipNativeBuild` or `-SkipWinUiBuild` to
+reuse those build outputs.
+
 GitHub Actions mirrors these checks on GitHub-hosted Windows runners. `CI` runs
 the lint, test, package, and dependency-security jobs for pull requests and every
 push to `main`. `Distribution` runs only when started manually from the matching
@@ -284,9 +313,7 @@ Setup, its `.sha256` file, and both ZIP archives together under the matching
 `v<version>` tag. Setup contains
 the pinned NuGet client and package manifest, then obtains the pinned Microsoft
 Speech SDK DLLs during installation. It downloads the hash-pinned Supertonic
-ZIPs only when that component is selected. During an iteration where the native
-bridge and optional payloads already exist, use `-SkipNativeBuild` and
-`-SkipSupertonicPayload`.
+ZIPs only when that component is selected.
 
 Inno Setup is a release-build dependency. Install it with:
 
@@ -311,7 +338,7 @@ that its isolated user settings remain intact.
 ```text
 src/                        Product source, grouped by implementation language
 ├── python/selectspeak/     Installable Python application package and entry point
-│   ├── app/                Application lifecycle and startup coordination
+│   ├── app/                Application lifecycle, startup, and voice selection
 │   ├── audio/              Playback-session coordination
 │   ├── config/             Configuration models, settings, and runtime paths
 │   ├── infrastructure/     Cross-cutting logging infrastructure
@@ -331,8 +358,10 @@ build-tools/                Source-controlled build and release tooling
 └── tools/                  Staging, notices, icons, and verification utilities
 
 scripts/                    Developer and user convenience launchers
-├── install.ps1             Complete development setup and upgrade script
-└── run.vbs                 Console-free development launcher
+├── install-dev-dependencies.ps1  Complete development setup and upgrade
+├── run-dev.ps1             Rebuild what changed, then run from the checkout
+├── run.vbs                 Console-free wrapper over run-dev.ps1
+└── bump_version.ps1        Update every source-controlled version field
 
 docs/                       Engineering, release, signing, and installer notices
 .build/                     Ignored generated intermediate files

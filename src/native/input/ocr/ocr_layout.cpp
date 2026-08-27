@@ -5,6 +5,7 @@
 #include <cwchar>
 #include <cwctype>
 #include <numeric>
+#include <set>
 
 namespace selectspeak::ocr {
 namespace {
@@ -143,9 +144,43 @@ bool LooksLikeHeading(const Line& line, const Line& next,
             (short_text && gap > metrics.line_gap * 1.35));
 }
 
+std::vector<double> LocalRightEdges(const std::vector<Line>& lines,
+                                    double tolerance) {
+    std::vector<std::size_t> order(lines.size());
+    std::iota(order.begin(), order.end(), 0);
+    std::sort(order.begin(), order.end(), [&](std::size_t first,
+                                               std::size_t second) {
+        return lines[first].bounds.left < lines[second].bounds.left;
+    });
+
+    std::vector<double> local_right(lines.size());
+    std::multiset<double> rights;
+    std::size_t first = 0;
+    std::size_t last = 0;
+    for (const std::size_t index : order) {
+        const double center = lines[index].bounds.left;
+        while (last < order.size() &&
+               lines[order[last]].bounds.left <= center + tolerance) {
+            rights.insert(lines[order[last]].bounds.right());
+            ++last;
+        }
+        while (first < last &&
+               lines[order[first]].bounds.left < center - tolerance) {
+            const auto found = rights.find(lines[order[first]].bounds.right());
+            if (found != rights.end()) {
+                rights.erase(found);
+            }
+            ++first;
+        }
+        local_right[index] = rights.empty() ? lines[index].bounds.right()
+                                            : *rights.rbegin();
+    }
+    return local_right;
+}
+
 BreakKind ClassifyBreak(const Line& current, const Line& next,
                         const Metrics& metrics,
-                        const std::vector<Line>& lines) {
+                        double local_right) {
     const double gap = next.bounds.top - current.bounds.bottom();
     const double left_delta = next.bounds.left - current.bounds.left;
     const double alignment_tolerance = metrics.line_height * 0.65;
@@ -182,13 +217,6 @@ BreakKind ClassifyBreak(const Line& current, const Line& next,
         return BreakKind::Paragraph;
     }
 
-    double local_right = current.bounds.right();
-    for (const auto& line : lines) {
-        if (std::abs(line.bounds.left - current.bounds.left) <=
-            alignment_tolerance) {
-            local_right = std::max(local_right, line.bounds.right());
-        }
-    }
     const double local_width =
         std::max(1.0, local_right - current.bounds.left);
     const double filled_width = current.bounds.width / local_width;
@@ -224,9 +252,12 @@ std::wstring ReconstructLayout(std::vector<Line> lines) {
     }
 
     const Metrics metrics = Measure(lines);
+    const std::vector<double> local_right =
+        LocalRightEdges(lines, metrics.line_height * 0.65);
     std::wstring result = lines.front().text;
     for (std::size_t index = 1; index < lines.size(); ++index) {
-        switch (ClassifyBreak(lines[index - 1], lines[index], metrics, lines)) {
+        switch (ClassifyBreak(lines[index - 1], lines[index], metrics,
+                              local_right[index - 1])) {
         case BreakKind::Space:
             result += L' ';
             break;
