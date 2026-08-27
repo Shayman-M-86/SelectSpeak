@@ -163,12 +163,17 @@ def test_launching_the_player_puts_it_in_the_kill_on_close_job(monkeypatch, tmp_
     Terminating it during shutdown only covers an ordinary exit; a crash or a
     kill from Task Manager skips that path entirely, so the job object is what
     actually guarantees the player goes too.
+
+    The executable is pointed at through the environment rather than by
+    patching the lookup, so this does not depend on whether the player happens
+    to be built in the tree the tests are running from.
     """
     from selectspeak.ui import winui_bridge
 
     executable = tmp_path / "SelectSpeak.UI.exe"
     executable.touch()
-    monkeypatch.setattr(winui_bridge, "winui_executable", lambda: executable)
+    monkeypatch.setenv("SELECTSPEAK_WINUI_EXE", str(executable))
+    assert winui_bridge.winui_executable() == executable
 
     launched = types.SimpleNamespace(pid=4321, poll=lambda: None)
     monkeypatch.setattr(winui_bridge.subprocess, "Popen", lambda *a, **k: launched)
