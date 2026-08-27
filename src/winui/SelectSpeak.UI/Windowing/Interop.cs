@@ -62,4 +62,22 @@ internal static class Interop
     [DllImport("dwmapi.dll")]
     public static extern int DwmSetWindowAttribute(
         IntPtr hwnd, uint attribute, ref int value, int size);
+
+    /// <summary>
+    /// Load the icon the build embedded in this executable.
+    ///
+    /// Passing null asks for the running module, and index 0 is the first icon
+    /// resource, which is the one ApplicationIcon writes. Taking it from the
+    /// executable rather than a file means the player needs no icon staged
+    /// beside it.
+    /// </summary>
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    public static extern IntPtr ExtractIconW(IntPtr instance, string? exeFileName, uint iconIndex);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    public static extern IntPtr GetModuleHandleW(string? moduleName);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    public static extern uint GetModuleFileNameW(
+        IntPtr module, [Out] char[] fileName, uint size);
 }

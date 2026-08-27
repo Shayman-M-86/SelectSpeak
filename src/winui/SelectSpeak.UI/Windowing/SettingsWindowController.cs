@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.InteropServices;
+using Microsoft.UI;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Windows.Graphics;
@@ -40,6 +41,8 @@ public sealed class SettingsWindowController
         _presenter.IsMinimizable = false;
 
         _appWindow.Resize(new SizeInt32(520, 620));
+
+        ApplyApplicationIcon();
 
         _appWindow.Closing += (_, args) =>
         {
@@ -86,6 +89,43 @@ public sealed class SettingsWindowController
         _appWindow.Show();
         _presenter.Restore();
         BringToFront();
+    }
+
+    /// <summary>
+    /// Show the application icon on this window and its taskbar button.
+    ///
+    /// Unlike the player, settings is an ordinary window, so it appears on the
+    /// taskbar. ApplicationIcon only stamps the icon into the executable's
+    /// resources; a WinUI AppWindow does not adopt that on its own and would
+    /// otherwise show the generic default. Failing to set it costs nothing but
+    /// the icon, so a failure here must never stop the window opening.
+    /// </summary>
+    private void ApplyApplicationIcon()
+    {
+        try
+        {
+            var module = Interop.GetModuleHandleW(null);
+            var buffer = new char[260];
+            var length = Interop.GetModuleFileNameW(module, buffer, (uint)buffer.Length);
+            if (length == 0)
+            {
+                return;
+            }
+
+            var executable = new string(buffer, 0, (int)length);
+            var icon = Interop.ExtractIconW(module, executable, 0);
+            // ExtractIcon returns 1 when the file holds no icons at all.
+            if (icon == IntPtr.Zero || icon == new IntPtr(1))
+            {
+                return;
+            }
+
+            _appWindow.SetIcon(Win32Interop.GetIconIdFromIcon(icon));
+        }
+        catch (Exception)
+        {
+            // An unavailable icon is cosmetic; the window still works.
+        }
     }
 
     /// <summary>Put the window in the middle of the screen it will appear on.</summary>
