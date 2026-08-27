@@ -13,6 +13,12 @@ internal static class Interop
 
     public const int WS_EX_NOACTIVATE = 0x08000000;
 
+    // Keeps a window off the taskbar and out of Alt+Tab. The player floats over
+    // whatever is being read, so it is chrome rather than something to switch
+    // to. This has to be explicit: without it the shell decides for itself, and
+    // an explicit AppUserModelID is enough to make it give the window a button.
+    public const int WS_EX_TOOLWINDOW = 0x00000080;
+
     public const uint SWP_NOSIZE = 0x0001;
     public const uint SWP_NOMOVE = 0x0002;
     public const uint SWP_NOZORDER = 0x0004;

@@ -25,7 +25,9 @@ public sealed class OverlayWindow : IDisposable
     public IntPtr Handle => _hwnd;
 
     /// <summary>
-    /// Clicking the window must not steal foreground from the app being read.
+    /// Clicking the window must not steal foreground from the app being read,
+    /// and the player must not appear on the taskbar: it floats over the app
+    /// being read, so it is chrome rather than a window to switch to.
     /// </summary>
     public void EnableNoActivate()
     {
@@ -38,7 +40,7 @@ public sealed class OverlayWindow : IDisposable
         // failure, so the last error is cleared first to tell them apart.
         SetWindowLongChecked(
             Interop.GWL_EXSTYLE,
-            new IntPtr(style | Interop.WS_EX_NOACTIVATE),
+            new IntPtr(style | Interop.WS_EX_NOACTIVATE | Interop.WS_EX_TOOLWINDOW),
             "SetWindowLongPtr(GWL_EXSTYLE) failed");
 
         if (!Interop.SetWindowPos(
