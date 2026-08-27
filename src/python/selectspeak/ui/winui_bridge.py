@@ -29,6 +29,7 @@ import win32pipe
 from ..config.paths import app_dir, is_frozen
 from ..speech.voices import VoiceOption
 from .hints import shortcut_label, voice_error_summary
+from .process_job import ChildProcessJob
 
 logger = logging.getLogger(__name__)
 
@@ -170,6 +171,10 @@ class WinUiPlayer:
         self._closed = threading.Event()
         self._thread: threading.Thread | None = None
         self._process: subprocess.Popen[bytes] | None = None
+        # Held for this object's lifetime: the job kills its members when the
+        # last handle to it closes, which is what makes the player exit if this
+        # process dies without running its shutdown path.
+        self._job = ChildProcessJob()
         self._reader_text = ""
         self._hotkey = hotkey
         self._ocr_hotkey = ocr_hotkey
@@ -204,6 +209,9 @@ class WinUiPlayer:
         except OSError:
             logger.exception("winui_bridge.launch_failed path=%s", executable)
             return
+        # So the player cannot outlive a backend that never reaches _stop_ui,
+        # such as a crash or a kill from Task Manager.
+        self._job.assign(self._process.pid)
         logger.info("winui_bridge.ui_launched pid=%s", self._process.pid)
 
     def stop(self) -> None:

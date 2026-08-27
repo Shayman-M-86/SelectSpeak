@@ -157,3 +157,28 @@ def test_send_is_a_no_op_while_disconnected() -> None:
     player = WinUiPlayer()
     assert player._pipe is None
     player.set_reader_text("no pipe yet")
+
+
+def test_launching_the_player_puts_it_in_the_kill_on_close_job(monkeypatch, tmp_path):
+    """The player must not outlive a backend that never reaches _stop_ui.
+
+    Terminating it during shutdown only covers an ordinary exit; a crash or a
+    kill from Task Manager skips that path entirely, so the job object is what
+    actually guarantees the player goes too.
+    """
+    from selectspeak.ui import winui_bridge
+
+    executable = tmp_path / "SelectSpeak.UI.exe"
+    executable.touch()
+    monkeypatch.setattr(winui_bridge, "winui_executable", lambda: executable)
+
+    launched = types.SimpleNamespace(pid=4321, poll=lambda: None)
+    monkeypatch.setattr(winui_bridge.subprocess, "Popen", lambda *a, **k: launched)
+
+    assigned: list[int] = []
+    player = WinUiPlayer()
+    monkeypatch.setattr(player._job, "assign", lambda pid: assigned.append(pid) or True)
+
+    player._launch_ui()
+
+    assert assigned == [4321]
