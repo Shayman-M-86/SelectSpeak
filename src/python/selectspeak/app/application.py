@@ -579,6 +579,9 @@ class SelectSpeakApp:
             self._reject_hotkey(f"{shortcut_label(hotkey)} is already in use by another application.")
             return
         self._tray.update_hotkey(hotkey)
+        # The player names the shortcut beside the gear and the settings row
+        # shows it, so both keep displaying the old one until they are told.
+        self._player.set_hotkey(hotkey)
         with self._state_lock:
             self._config = replace(self._config, default_hotkey=hotkey)
             config = self._config

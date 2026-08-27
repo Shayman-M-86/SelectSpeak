@@ -185,3 +185,68 @@ def test_launching_the_player_puts_it_in_the_kill_on_close_job(monkeypatch, tmp_
     player._launch_ui()
 
     assert assigned == [4321]
+
+
+def test_rebinding_the_read_shortcut_refreshes_the_player() -> None:
+    """The player and settings row must show the shortcut that now works.
+
+    The OCR path already pushes its new value; without the same here, both
+    keep naming the old shortcut until the application restarts even though
+    only the new one is bound.
+    """
+    app = SelectSpeakApp()
+    test_app = cast(Any, app)
+    pushed: list[str] = []
+    test_app._hotkeys = types.SimpleNamespace(hotkey="alt+s", rebind=lambda _hotkey: None)
+    test_app._tray = types.SimpleNamespace(update_hotkey=lambda _hotkey: None)
+    test_app._player = types.SimpleNamespace(
+        set_hotkey=pushed.append,
+        show_hotkey_error=lambda _message: None,
+    )
+    test_app._save_settings = lambda _config: None
+
+    app._apply_hotkey("ctrl+shift+r")
+
+    assert pushed == ["ctrl+shift+r"]
+
+
+def test_mainloop_gives_up_when_no_player_could_be_started(monkeypatch, tmp_path):
+    """A launch that never produced a process must not run forever.
+
+    mainloop only exits for a process that started and then died, so a
+    rejected CreateProcess - a corrupt binary, a blocked image - would
+    otherwise keep the backend alive with no player and no way to reach it.
+    """
+    from selectspeak.ui import winui_bridge
+
+    executable = tmp_path / "SelectSpeak.UI.exe"
+    executable.touch()
+    monkeypatch.setenv("SELECTSPEAK_WINUI_EXE", str(executable))
+
+    def rejected(*_args, **_kwargs):
+        raise OSError("corrupt image")
+
+    monkeypatch.setattr(winui_bridge.subprocess, "Popen", rejected)
+
+    player = WinUiPlayer()
+    player._running = True
+    player._launch_ui()
+
+    assert player._process is None
+    # Returns rather than blocking, which is what the loop would do if it
+    # waited for a process that never existed.
+    player.mainloop()
+
+
+def test_missing_player_executable_also_gives_up(monkeypatch, tmp_path):
+    """The same applies when the player was never built or was removed."""
+    from selectspeak.ui import winui_bridge
+
+    monkeypatch.setenv("SELECTSPEAK_WINUI_EXE", str(tmp_path / "absent.exe"))
+    assert winui_bridge.winui_executable() is None
+
+    player = WinUiPlayer()
+    player._running = True
+    player._launch_ui()
+
+    player.mainloop()

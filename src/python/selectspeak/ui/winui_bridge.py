@@ -171,6 +171,9 @@ class WinUiPlayer:
         self._closed = threading.Event()
         self._thread: threading.Thread | None = None
         self._process: subprocess.Popen[bytes] | None = None
+        # Set when no player could be started at all, which mainloop cannot
+        # detect from _process because there is no process to have exited.
+        self._launch_failed = False
         # Held for this object's lifetime: the job kills its members when the
         # last handle to it closes, which is what makes the player exit if this
         # process dies without running its shutdown path.
@@ -203,16 +206,30 @@ class WinUiPlayer:
         executable = winui_executable()
         if executable is None:
             logger.error("winui_bridge.executable_missing")
+            self._abandon()
             return
         try:
             self._process = subprocess.Popen([str(executable)])
         except OSError:
             logger.exception("winui_bridge.launch_failed path=%s", executable)
+            self._abandon()
             return
         # So the player cannot outlive a backend that never reaches _stop_ui,
         # such as a crash or a kill from Task Manager.
         self._job.assign(self._process.pid)
         logger.info("winui_bridge.ui_launched pid=%s", self._process.pid)
+
+    def _abandon(self) -> None:
+        """Give up when no player could be started.
+
+        mainloop only exits for a process that started and then died, so a
+        launch that never produced one would otherwise keep the backend alive
+        with nothing to render to and no way for the user to reach it. This is
+        a separate flag rather than _closed because mainloop clears that on
+        entry, and the failure happens during start.
+        """
+        self._launch_failed = True
+        self._closed.set()
 
     def stop(self) -> None:
         self._running = False
@@ -451,6 +468,10 @@ class WinUiPlayer:
         Tk owns its loop; here Python does, so this is what keeps the process
         alive and runs queued callbacks on the main thread.
         """
+        if self._launch_failed:
+            logger.error("winui_bridge.mainloop.no_player")
+            self.drain_callbacks()
+            return
         self._closed.clear()
         while self._running and not self._closed.is_set():
             self.drain_callbacks()
