@@ -3,9 +3,9 @@ import threading
 from collections.abc import Callable
 
 import pystray
-from PIL import Image, ImageDraw
+from PIL import Image
 
-from .system_theme import apps_use_dark_theme
+from ..config.paths import logo_path
 
 logger = logging.getLogger(__name__)
 
@@ -71,28 +71,12 @@ class TrayController:
 
     @staticmethod
     def _create_icon() -> Image.Image:
-        """Draw a monochrome speaker, as Windows notification icons are.
-
-        Shell icons take the tray's own contrast rather than an app colour, so
-        this follows the theme: light glyph on dark taskbars and vice versa.
-        """
+        """Return the application logo, matching every other SelectSpeak icon."""
         logger.debug("tray.icon.creating")
-        dark = apps_use_dark_theme()
-        # The taskbar is the opposite polarity to the app surface.
-        fill = (255, 255, 255, 255) if dark else (0, 0, 0, 255)
-        image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-        drawing = ImageDraw.Draw(image)
-        # Speaker body and cone.
-        drawing.rectangle([12, 26, 22, 38], fill=fill)
-        drawing.polygon([(22, 38), (34, 50), (34, 14), (22, 26)], fill=fill)
-        # Two sound arcs.
-        for offset, width in ((0, 4), (10, 4)):
-            drawing.arc(
-                [34 - offset, 18 - offset // 2, 46 + offset, 46 + offset // 2],
-                start=300,
-                end=60,
-                fill=fill,
-                width=width,
-            )
-        logger.debug("tray.icon.created theme=%s", "dark" if dark else "light")
+        path = logo_path()
+        with Image.open(path) as source:
+            # Load before the file closes, and normalize so a palette or
+            # greyscale source keeps its transparency in the tray.
+            image = source.convert("RGBA")
+        logger.debug("tray.icon.created source=%s", path)
         return image

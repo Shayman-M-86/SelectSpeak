@@ -55,3 +55,18 @@ def settings_path() -> Path:
 def licenses_dir() -> Path:
     """Return the licenses shipped beside the frozen application."""
     return app_dir() / "licenses"
+
+
+def logo_path() -> Path:
+    """Return the application logo used for the tray icon.
+
+    Bundled data lives under PyInstaller's own extraction root, which is the
+    _internal contents directory rather than the folder holding the
+    executable, so resolve it from sys._MEIPASS when frozen.
+    """
+    if is_frozen():
+        bundle_root = getattr(sys, "_MEIPASS", None)
+        if bundle_root:
+            return Path(bundle_root) / "SelectSpeak-logo.png"
+        return app_dir() / "SelectSpeak-logo.png"
+    return app_dir() / "logo" / "SelectSpeak-logo.png"

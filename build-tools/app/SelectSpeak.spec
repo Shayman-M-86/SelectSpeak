@@ -8,7 +8,9 @@ analysis = Analysis(
     [str(Path(SPECPATH) / "pyinstaller_entrypoint.py")],
     pathex=[str(project_root / "src" / "python")],
     binaries=[],
-    datas=[],
+    # The tray draws its icon from the logo at runtime, so ship the image
+    # itself rather than only the .ico the executable is stamped with.
+    datas=[(str(project_root / "logo" / "SelectSpeak-logo.png"), ".")],
     hiddenimports=[
         "pywintypes",
     ],

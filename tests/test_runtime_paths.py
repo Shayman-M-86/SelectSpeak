@@ -33,6 +33,27 @@ def test_frozen_native_runtime_is_beside_the_executable(
     assert runtime_paths.licenses_dir() == tmp_path / "licenses"
 
 
+def test_logo_resolves_to_the_source_tree_during_development() -> None:
+    logo = runtime_paths.logo_path()
+
+    assert logo == Path(__file__).resolve().parents[1] / "logo" / "SelectSpeak-logo.png"
+    assert logo.is_file()
+
+
+def test_frozen_logo_resolves_to_the_bundle_root(monkeypatch, tmp_path: Path) -> None:
+    """PyInstaller extracts bundled data under _MEIPASS, not beside the exe.
+
+    The contents directory holds collected data files, so resolving the logo
+    from the executable's own folder finds nothing once packaged.
+    """
+    bundle = tmp_path / "_internal"
+    monkeypatch.setattr(runtime_paths.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(runtime_paths.sys, "executable", str(tmp_path / "SelectSpeak.exe"))
+    monkeypatch.setattr(runtime_paths.sys, "_MEIPASS", str(bundle), raising=False)
+
+    assert runtime_paths.logo_path() == bundle / "SelectSpeak-logo.png"
+
+
 def test_user_data_override_is_supported(monkeypatch, tmp_path: Path) -> None:
     target = tmp_path / "portable-data"
     monkeypatch.setenv("SELECTSPEAK_USER_DATA_DIR", str(target))
