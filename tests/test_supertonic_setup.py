@@ -76,6 +76,43 @@ def test_missing_dependency_layer_raises_actionable_error(tmp_path: Path) -> Non
         raise AssertionError("An incomplete dependency layer was accepted")
 
 
+def test_application_imports_without_the_supertonic_dependency_layer() -> None:
+    """Startup must not need numpy or supertonic.
+
+    Those ship in the optional dependency layer that activate_dependencies()
+    puts on sys.path at runtime, so they are absent in a fresh install until
+    the user adds the Supertonic component. Importing either at module scope
+    crashes the packaged application before it starts, which is invisible in a
+    development environment that has both installed.
+    """
+    import builtins
+
+    optional = {"numpy", "onnxruntime", "supertonic"}
+    for name in list(sys.modules):
+        if name.split(".")[0] in optional:
+            del sys.modules[name]
+    for name in list(sys.modules):
+        if name.startswith("selectspeak"):
+            del sys.modules[name]
+
+    real_import = builtins.__import__
+
+    def without_optional_layer(name: str, *args: object, **kwargs: object) -> object:
+        if name.split(".")[0] in optional:
+            raise ModuleNotFoundError(f"No module named {name!r}")
+        return real_import(name, *args, **kwargs)  # type: ignore[arg-type]
+
+    builtins.__import__ = without_optional_layer
+    try:
+        import selectspeak.app  # noqa: F401
+        import selectspeak.speech.factory  # noqa: F401
+    finally:
+        builtins.__import__ = real_import
+        for name in list(sys.modules):
+            if name.startswith("selectspeak"):
+                del sys.modules[name]
+
+
 def test_supertonic_model_requires_engine_files_and_selected_voice(tmp_path: Path) -> None:
     required = (
         "onnx/tts.json",
