@@ -1,3 +1,5 @@
+using System;
+using System.Runtime.InteropServices;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using SelectSpeak.UI.Bridge;
@@ -22,7 +24,40 @@ public partial class App : Application
     // player showing does not make one appear.
     private bool _restorePlayer;
 
-    public App() => InitializeComponent();
+    /// <summary>
+    /// The identity the backend also claims, so the shell treats the two
+    /// SelectSpeak processes as one application: a single expandable group in
+    /// Task Manager rather than two unrelated entries. Keep in step with
+    /// APP_USER_MODEL_ID in the Python app_identity module.
+    /// </summary>
+    private const string AppUserModelId = "SelectSpeakProject.SelectSpeak";
+
+    public App()
+    {
+        // Before InitializeComponent, and so before any window exists: the
+        // shell reads the identity when a window first appears and will not
+        // move one that has already been placed.
+        ApplyAppUserModelId();
+        InitializeComponent();
+    }
+
+    private static void ApplyAppUserModelId()
+    {
+        try
+        {
+            // A failure only costs the grouping, so it must not stop startup.
+            _ = SetCurrentProcessExplicitAppUserModelID(AppUserModelId);
+        }
+        catch (DllNotFoundException)
+        {
+        }
+        catch (EntryPointNotFoundException)
+        {
+        }
+    }
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = true)]
+    private static extern int SetCurrentProcessExplicitAppUserModelID(string appId);
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {

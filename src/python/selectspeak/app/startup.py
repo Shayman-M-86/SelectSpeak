@@ -10,6 +10,7 @@ from ..config.settings import SettingsStore
 from ..diagnostics import configure_logging
 from ..native import NATIVE_API_VERSION, get_native_bridge, shutdown_native_bridge
 from . import packaging_probe
+from .app_identity import apply_app_user_model_id
 from .application import main as run
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,9 @@ def run_application() -> None:
         config = settings.load(DEFAULT_CONFIG)
         log_path = configure_logging(config.logging)
         logger.info("app.entrypoint log_file=%s", log_path)
+        # Before the tray or the player exist, so the shell groups both
+        # SelectSpeak processes under one application.
+        apply_app_user_model_id()
         with SingleInstance() as instance:
             if instance.already_running:
                 logger.info("app.second_instance.exiting")

@@ -84,6 +84,22 @@ def test_development_has_one_setup_and_one_run_entry_point() -> None:
     assert not (PROJECT_ROOT / "scripts" / "install.ps1").exists()
 
 
+def test_both_processes_claim_the_same_shell_identity() -> None:
+    """The backend and the player must agree on the AppUserModelID.
+
+    It is what makes the shell treat the two processes as one application, so
+    a drift between the Python constant and the C# one silently splits them
+    back into separate Task Manager and taskbar entries.
+    """
+    from selectspeak.app.app_identity import APP_USER_MODEL_ID
+
+    player = (
+        PROJECT_ROOT / "src" / "winui" / "SelectSpeak.UI" / "App.xaml.cs"
+    ).read_text(encoding="utf-8")
+
+    assert f'AppUserModelId = "{APP_USER_MODEL_ID}"' in player
+
+
 def test_github_workflows_cover_release_quality_gates() -> None:
     assert {path.name for path in WORKFLOWS_ROOT.glob("*.yml")} == {
         "ci.yml",
