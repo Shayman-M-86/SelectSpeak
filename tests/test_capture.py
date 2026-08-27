@@ -51,3 +51,40 @@ def test_resolve_capture_does_not_read_clipboard_when_fallback_is_disabled() -> 
     assert result.source == "empty"
     assert result.raw_text == ""
     assert clipboard_reads == 0
+
+
+def test_resolve_capture_unresolved_does_not_read_clipboard() -> None:
+    """A copy that was sent but never confirmed must not be spoken as if it
+
+    were the pre-capture clipboard contents - the target may still finish
+    the copy after we stop waiting for it.
+    """
+    clipboard_reads = 0
+
+    def read_clipboard() -> str:
+        nonlocal clipboard_reads
+        clipboard_reads += 1
+        return "stale clipboard text"
+
+    result = resolve_capture(
+        "",
+        read_clipboard,
+        allow_clipboard_fallback=True,
+        capture_unresolved=True,
+    )
+
+    assert result.source == "unresolved"
+    assert result.raw_text == ""
+    assert clipboard_reads == 0
+
+
+def test_resolve_capture_prefers_selection_even_when_unresolved_flag_set() -> None:
+    result = resolve_capture(
+        "selected text",
+        lambda: "clipboard text",
+        allow_clipboard_fallback=True,
+        capture_unresolved=True,
+    )
+
+    assert result.source == "selection"
+    assert result.raw_text == "selected text"

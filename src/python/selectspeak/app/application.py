@@ -320,7 +320,13 @@ class SelectSpeakApp:
         except Exception:
             logger.exception("app.shutdown.resource_failed resource=%s", name)
 
-    def _on_hotkey(self, selected_text: str, activated_at: float, clipboard_fallback: str = "") -> None:
+    def _on_hotkey(
+        self,
+        selected_text: str,
+        activated_at: float,
+        clipboard_fallback: str = "",
+        capture_unresolved: bool = False,
+    ) -> None:
         if self._shutting_down:
             return
         logger.info("hotkey.activated hotkey=%s", self._hotkeys.hotkey)
@@ -351,12 +357,18 @@ class SelectSpeakApp:
             selected_text,
             lambda: clipboard_fallback or self._clipboard.read_text(),
             allow_clipboard_fallback=clipboard_mode,
+            capture_unresolved=capture_unresolved,
         )
         if capture.source == "clipboard_fallback":
             logger.info(
                 "capture.fallback_to_clipboard selected_length=%d clipboard_length=%d",
                 len(selected_text),
                 len(capture.raw_text),
+            )
+        elif capture.source == "unresolved":
+            logger.warning(
+                "capture.unresolved hotkey=%s reason=copy_timed_out",
+                self._hotkeys.hotkey,
             )
         cleaned_text = prepare_for_speech(capture.raw_text)
         logger.info(

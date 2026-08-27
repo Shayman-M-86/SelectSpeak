@@ -20,4 +20,12 @@ ClipboardRestoreDecision DecideClipboardRestore(
                : ClipboardRestoreDecision::SkipNewerContent;
 }
 
+CopyOutcome DecideCopyOutcome(bool action_sent, bool clipboard_changed)
+{
+    if (!action_sent) {
+        return CopyOutcome::NotAttempted;
+    }
+    return clipboard_changed ? CopyOutcome::Completed : CopyOutcome::Unresolved;
+}
+
 }  // namespace selectspeak::input

@@ -24,7 +24,7 @@ class NativeInputAdapter:
     def __init__(
         self,
         hotkey: str,
-        handler: Callable[[str, float, str], None],
+        handler: Callable[[str, float, str, bool], None],
         activation_handler: Callable[[], bool],
         dll_path: str = "",
     ) -> None:
@@ -83,7 +83,14 @@ class NativeInputAdapter:
             1: "ui_automation",
             2: "wm_copy",
             3: "synthetic_copy",
+            4: "unresolved",
         }.get(source_id, "empty")
+        if source == "unresolved":
+            # A copy was sent but the target hadn't finished by the time we
+            # stopped waiting. The pre-capture clipboard snapshot must not be
+            # spoken as if it were the selection: a late copy could still land
+            # after this point, so treat the outcome as unknown, not empty.
+            clipboard_fallback = ""
         capture_trace = self._last_capture_trace()
         if capture_trace:
             logger.info("native_input.selection_capture %s", capture_trace)
@@ -99,7 +106,7 @@ class NativeInputAdapter:
         )
         threading.Thread(
             target=self._run_handler,
-            args=(captured, activated_at, clipboard_fallback),
+            args=(captured, activated_at, clipboard_fallback, source == "unresolved"),
             daemon=True,
             name="NativeInputCapture",
         ).start()
@@ -111,9 +118,11 @@ class NativeInputAdapter:
             logger.exception("native_input.activation_handler.failed")
             return 0
 
-    def _run_handler(self, text: str, activated_at: float, clipboard_fallback: str) -> None:
+    def _run_handler(
+        self, text: str, activated_at: float, clipboard_fallback: str, capture_unresolved: bool
+    ) -> None:
         try:
-            self._handler(text, activated_at, clipboard_fallback)
+            self._handler(text, activated_at, clipboard_fallback, capture_unresolved)
         except Exception:
             logger.exception("native_input.handler.failed")
 

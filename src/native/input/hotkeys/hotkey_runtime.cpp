@@ -46,6 +46,10 @@ struct RuntimeState {
 
     OcrHotkeyHandler ocr_handler = nullptr;
     std::atomic<bool> ocr_dispatching{false};
+    // Selection capture pumps messages while it waits for the clipboard, so a
+    // second hotkey press can be dispatched on this thread mid-capture. Guard
+    // against re-entering capture from inside that pump.
+    std::atomic<bool> capture_in_progress{false};
 
     std::mutex error_mutex;
     std::string last_error;
@@ -93,6 +97,16 @@ void CompleteCapture(ULONGLONG requested_at, SelectionCapture capture)
 
 void CaptureSelection(ULONGLONG requested_at, bool hotkey_activation)
 {
+    // Capture pumps messages while waiting on the clipboard, which can
+    // dispatch another hotkey press onto this same thread. Ignore that nested
+    // request rather than interleaving two captures over one clipboard.
+    if (g_runtime.capture_in_progress.exchange(true)) {
+        return;
+    }
+    struct CaptureGuard {
+        ~CaptureGuard() { g_runtime.capture_in_progress.store(false); }
+    } guard;
+
     CompleteCapture(
         requested_at,
         CaptureSelectedText(hotkey_activation ? g_runtime.modifiers.load() : 0,

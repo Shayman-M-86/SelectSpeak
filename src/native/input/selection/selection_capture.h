@@ -9,6 +9,12 @@ enum class CaptureSource : unsigned int {
     UiAutomation = 1,
     WindowMessage = 2,
     SyntheticShortcut = 3,
+    // A copy action was sent (WM_COPY or synthetic Ctrl+C) but the clipboard
+    // never changed before the timeout. Unlike None, this is not "nothing was
+    // selected" — the target may still complete the copy after we stopped
+    // waiting, so its content must never be treated as this capture's result
+    // or as a stand-in for the pre-capture clipboard fallback.
+    Unresolved = 4,
 };
 
 struct SelectionCapture {

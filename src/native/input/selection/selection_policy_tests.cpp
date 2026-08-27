@@ -4,7 +4,9 @@
 #include <iostream>
 
 using selectspeak::input::ClipboardRestoreDecision;
+using selectspeak::input::CopyOutcome;
 using selectspeak::input::DecideClipboardRestore;
+using selectspeak::input::DecideCopyOutcome;
 using selectspeak::input::IsKnownUnsupportedWindowCopyClass;
 
 namespace {
@@ -39,5 +41,18 @@ int main()
     Expect(DecideClipboardRestore(true, 10, 11) ==
                ClipboardRestoreDecision::SkipNewerContent,
            "Newer clipboard content must not be overwritten");
+
+    Expect(DecideCopyOutcome(false, false) == CopyOutcome::NotAttempted,
+           "No copy action sent means nothing was attempted");
+    Expect(DecideCopyOutcome(true, true) == CopyOutcome::Completed,
+           "A sent copy whose clipboard changed in time is completed");
+    // Regression: an Electron/Chromium target (e.g. VS Code) can take longer
+    // than a short timeout to respond to a synthetic Ctrl+C. A copy that was
+    // sent but arrives after the wait ends must be reported as unresolved,
+    // never silently treated as if nothing was selected - the caller uses
+    // this to avoid speaking stale pre-capture clipboard content.
+    Expect(DecideCopyOutcome(true, false) == CopyOutcome::Unresolved,
+           "A sent copy that times out before the clipboard changes is "
+           "unresolved, not empty");
     return 0;
 }

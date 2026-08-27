@@ -13,6 +13,35 @@ def test_prepare_for_speech_accepts_empty_text() -> None:
     assert prepare_for_speech("") == ""
 
 
+def test_prepare_for_speech_does_not_break_hard_wrapped_prose() -> None:
+    """Wrapped prose must not gain a full stop at every wrap point.
+
+    Text copied from a docstring or comment is wrapped mid-sentence, so a
+    line ending is not a thought ending. Adding a pause there makes speech
+    stop in the middle of a clause.
+    """
+    text = (
+        "Python is interpreted, so a change to it needs no build. The native bridge\n"
+        "and the WinUI player are compiled, so this runs their ordinary incremental\n"
+        "builds every time and then starts the application."
+    )
+
+    spoken = prepare_for_speech(text)
+
+    assert "The native bridge.\n" not in spoken
+    assert "ordinary incremental.\n" not in spoken
+    assert spoken.endswith("starts the application.")
+
+
+def test_prepare_for_speech_still_pauses_standalone_lines_before_capitals() -> None:
+    """A wrapped continuation resumes lower case; a new thought does not."""
+    text = ".DESCRIPTION\n    The one command for using or testing SelectSpeak."
+
+    spoken = prepare_for_speech(text)
+
+    assert spoken.startswith(".DESCRIPTION.")
+
+
 def test_prepare_for_speech_removes_repeated_markdown_file_paths() -> None:
     text = (
         "The main implementation areas are "

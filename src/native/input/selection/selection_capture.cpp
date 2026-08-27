@@ -17,7 +17,12 @@ namespace selectspeak::input {
 namespace {
 thread_local winrt::com_ptr<IUIAutomation> g_automation;
 constexpr DWORD kWindowMessageClipboardTimeoutMs = 50;
-constexpr DWORD kSyntheticClipboardTimeoutMs = 100;
+// A ceiling, not a routine cost: a successful copy returns as soon as the
+// clipboard changes, so this is only paid in full when a capture genuinely
+// fails. Measured successful copies run 15-51ms (Electron/Chromium apps such
+// as VS Code settle around 37ms), so this leaves roughly 3x headroom for
+// slower or cold applications while keeping a failed capture responsive.
+constexpr DWORD kSyntheticClipboardTimeoutMs = 150;
 constexpr DWORD kCopyMessageTimeoutMs = 100;
 constexpr DWORD kClipboardPollIntervalMs = 5;
 constexpr int kMaximumSelectionCharacters = 1'000'000;
@@ -601,6 +606,22 @@ bool SendCopyShortcut(unsigned int modifiers, unsigned int virtual_key,
     return true;
 }
 
+// EmptyClipboard() makes the window passed to OpenClipboard the clipboard
+// owner. Capture runs inline on the hotkey window-procedure thread, so that
+// thread is not pumping messages while it waits here. An unpumped owner
+// blocks the copying application: its OpenClipboard call waits on us to
+// service WM_DESTROYCLIPBOARD, so the copy it is trying to perform cannot
+// complete until we give up and destroy the owner window. Draining the queue
+// each poll keeps the owner responsive so the copy can land while we watch.
+void PumpPendingMessages()
+{
+    MSG message;
+    while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+        TranslateMessage(&message);
+        DispatchMessageW(&message);
+    }
+}
+
 bool WaitForClipboardText(DWORD original_sequence, DWORD timeout_ms)
 {
     const auto deadline = std::chrono::steady_clock::now() +
@@ -610,8 +631,10 @@ bool WaitForClipboardText(DWORD original_sequence, DWORD timeout_ms)
             IsClipboardFormatAvailable(CF_UNICODETEXT)) {
             return true;
         }
+        PumpPendingMessages();
         Sleep(kClipboardPollIntervalMs);
     }
+    PumpPendingMessages();
     return GetClipboardSequenceNumber() != original_sequence ||
            IsClipboardFormatAvailable(CF_UNICODETEXT);
 }
@@ -785,6 +808,16 @@ SelectionCapture CaptureSelectedText(unsigned int active_modifiers,
         if (!result.text.empty()) {
             result.source = CaptureSource::WindowMessage;
             captured_sequence = window_message.resulting_sequence;
+        } else if (DecideCopyOutcome(window_message.action_sent,
+                                     window_message.clipboard_changed) ==
+                   CopyOutcome::Unresolved) {
+            // WM_COPY was delivered and accepted, but the clipboard never
+            // changed before the timeout. The target may still complete the
+            // copy after we stop waiting, so this is not "nothing selected":
+            // treat it as unresolved rather than falling through to the
+            // pre-capture clipboard snapshot.
+            result.source = CaptureSource::Unresolved;
+            captured_sequence = window_message.resulting_sequence;
         } else {
             // Electron and other custom controls may only implement keyboard
             // copy.
@@ -802,8 +835,21 @@ SelectionCapture CaptureSelectedText(unsigned int active_modifiers,
             result.text = synthetic.text;
             if (!result.text.empty()) {
                 result.source = CaptureSource::SyntheticShortcut;
+            } else if (DecideCopyOutcome(synthetic.action_sent,
+                                         synthetic.clipboard_changed) ==
+                       CopyOutcome::Unresolved) {
+                // Same reasoning as the wm_copy case above: a sent-but-timed-
+                // out synthetic Ctrl+C means the outcome is unresolved, not
+                // an empty selection.
+                result.source = CaptureSource::Unresolved;
             }
             captured_sequence = synthetic.resulting_sequence;
+        }
+
+        if (result.source == CaptureSource::Unresolved) {
+            // A late copy from the target could otherwise be mistaken for
+            // "what was on the clipboard before capture started."
+            result.clipboard_fallback_text.clear();
         }
 
         if (captured_sequence == 0) {
@@ -839,6 +885,8 @@ SelectionCapture CaptureSelectedText(unsigned int active_modifiers,
                                      ? "wm_copy"
                                  : result.source == CaptureSource::SyntheticShortcut
                                      ? "synthetic_copy"
+                                 : result.source == CaptureSource::Unresolved
+                                     ? "unresolved"
                                      : "empty";
     result.trace = finish_trace(capture_result);
     return result;
