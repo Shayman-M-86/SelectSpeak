@@ -13,32 +13,42 @@
 namespace selectspeak::audio {
 namespace {
 
+// The engine reports a critical error on its own thread, which can run
+// concurrently with the voice being destroyed. An atomic alone is not enough:
+// it stops a later load seeing a stale pointer, but a load that already
+// succeeded keeps the raw pointer across the call, and the owning
+// AudioRequest can be destroyed in that window. Holding the mutex across both
+// the dispatch and the clear means Clear cannot return - and so destruction
+// cannot proceed - while a callback is still using the pointer.
 class XAudio2EngineEvents final : public IXAudio2EngineCallback {
 public:
     void STDMETHODCALLTYPE OnProcessingPassStart() noexcept override {}
     void STDMETHODCALLTYPE OnProcessingPassEnd() noexcept override {}
     void STDMETHODCALLTYPE OnCriticalError(HRESULT) noexcept override
     {
-        auto* const notifications = active_.load(std::memory_order_acquire);
-        if (notifications != nullptr) {
-            notifications->OnVoiceError(SS_STATUS_DEVICE_ERROR);
+        const std::lock_guard<std::mutex> guard(mutex_);
+        if (active_ != nullptr) {
+            active_->OnVoiceError(SS_STATUS_DEVICE_ERROR);
         }
     }
 
     void SetActive(VoiceNotifications* const notifications) noexcept
     {
-        active_.store(notifications, std::memory_order_release);
+        const std::lock_guard<std::mutex> guard(mutex_);
+        active_ = notifications;
     }
 
     void Clear(VoiceNotifications* const notifications) noexcept
     {
-        auto* expected = notifications;
-        active_.compare_exchange_strong(expected, nullptr,
-                                        std::memory_order_acq_rel);
+        const std::lock_guard<std::mutex> guard(mutex_);
+        if (active_ == notifications) {
+            active_ = nullptr;
+        }
     }
 
 private:
-    std::atomic<VoiceNotifications*> active_{nullptr};
+    std::mutex mutex_;
+    VoiceNotifications* active_{nullptr};
 };
 
 class XAudio2Voice final : public AudioVoice,
