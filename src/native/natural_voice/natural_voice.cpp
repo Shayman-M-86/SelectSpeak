@@ -71,7 +71,7 @@ public:
         return true;
     }
 
-    ~DirectRegistration()
+    void Quiesce() noexcept
     {
         if (!operation_) {
             return;
@@ -81,7 +81,10 @@ public:
         if (direct_synthesis == operation_) {
             direct_synthesis = nullptr;
         }
+        operation_ = nullptr;
     }
+
+    ~DirectRegistration() { Quiesce(); }
 
 private:
     DirectSynthesis* operation_ = nullptr;
@@ -561,6 +564,20 @@ std::uint32_t VoiceSynthesizeToAudio(
     result->synthesis_duration_us = 0;
     result->buffered_frames_after_submit = 0;
 
+    const auto chunk_length = std::char_traits<wchar_t>::length(text);
+    if (chunk_length > std::numeric_limits<std::uint32_t>::max()) {
+        result->status = SS_STATUS_INVALID_ARGUMENT;
+        return result->status;
+    }
+    const auto range_status =
+        selectspeak::audio::ProductionAudioEngine().ValidateProducerTextRange(
+            audio_request, request_id, text_base_offset_utf16,
+            static_cast<std::uint32_t>(chunk_length));
+    if (range_status != SS_STATUS_OK) {
+        result->status = range_status;
+        return result->status;
+    }
+
     std::lock_guard speak_lock(speak_mutex);
     DirectSynthesis operation;
     operation.text_base_offset_utf16 = text_base_offset_utf16;
@@ -577,6 +594,7 @@ std::uint32_t VoiceSynthesizeToAudio(
     const auto started_at = std::chrono::steady_clock::now();
     const auto speak_status = VoiceSpeak(text);
     const auto finished_at = std::chrono::steady_clock::now();
+    registration.Quiesce();
     result->synthesis_duration_us =
         static_cast<std::uint64_t>(std::chrono::duration_cast<
             std::chrono::microseconds>(finished_at - started_at).count());

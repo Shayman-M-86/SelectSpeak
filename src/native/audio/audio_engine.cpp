@@ -71,6 +71,10 @@ public:
     }
 
     std::uint64_t RequestId() const noexcept { return request_id_; }
+    std::uint32_t RequestTextLength() const noexcept
+    {
+        return request_text_length_utf16_;
+    }
 
     bool Initialize()
     {
@@ -869,6 +873,26 @@ std::uint32_t AudioEngine::SubmitForRequest(
     }
     return request->Submit(pcm, pcm_byte_length, boundaries, boundary_count,
                            result);
+}
+
+std::uint32_t AudioEngine::ValidateProducerTextRange(
+    const ss_audio_request_handle_t handle, const std::uint64_t request_id,
+    const std::uint32_t text_position_utf16,
+    const std::uint32_t text_length_utf16)
+{
+    const auto request = impl_->Find(handle);
+    if (!request) {
+        return SS_STATUS_INVALID_HANDLE;
+    }
+    if (request_id == 0 || request->RequestId() != request_id) {
+        return SS_STATUS_INVALID_REQUEST;
+    }
+    const auto request_length = request->RequestTextLength();
+    if (text_position_utf16 > request_length ||
+        text_length_utf16 > request_length - text_position_utf16) {
+        return SS_STATUS_INVALID_BOUNDARY;
+    }
+    return SS_STATUS_OK;
 }
 
 std::uint32_t AudioEngine::FinishInput(const ss_audio_request_handle_t handle)

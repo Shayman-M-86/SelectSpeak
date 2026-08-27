@@ -65,6 +65,10 @@ public:
         const void* pcm, std::uint64_t pcm_byte_length,
         const ss_audio_boundary_t* boundaries, std::uint32_t boundary_count,
         ss_audio_submit_result_t* result);
+    std::uint32_t ValidateProducerTextRange(
+        ss_audio_request_handle_t handle, std::uint64_t request_id,
+        std::uint32_t text_position_utf16,
+        std::uint32_t text_length_utf16);
     std::uint32_t FinishInput(ss_audio_request_handle_t handle);
     std::uint32_t Pause(ss_audio_request_handle_t handle);
     std::uint32_t Resume(ss_audio_request_handle_t handle);

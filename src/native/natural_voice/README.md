@@ -12,8 +12,10 @@ event. The bridge obtains the runtime information required by Microsoft's
 locally installed speech components from the installed speech extension at
 runtime. It keeps that information in memory only and does not persist, log,
 upload, or transmit it. No external speech-service credentials are required.
-Python owns audio playback through WinMM so pause and resume apply to
-already-buffered sound.
+Natural synthesis submits PCM and boundaries directly to the request-scoped
+native XAudio2 session; Python retains request policy, adaptive chunking, and
+cancellation coordination, while native playback owns pause, resume, timing,
+and terminal completion.
 
 ## Build
 

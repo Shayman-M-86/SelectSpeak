@@ -56,9 +56,16 @@ void __cdecl OnAudioEvent(const ss_audio_event_t* event, void* context)
 int main()
 {
     std::vector<Voice> voices;
-    ss_voice_list(CollectVoice, &voices);
+    const auto voice_count = ss_voice_list(CollectVoice, &voices);
     if (voices.empty()) {
-        std::cerr << "No installed Natural Voice is available\n";
+        const auto error_length = ss_voice_last_error(nullptr, 0);
+        std::string error(error_length, '\0');
+        if (error_length > 0) {
+            ss_voice_last_error(error.data(), error_length);
+        }
+        std::cerr << "Natural Voice discovery returned " << voice_count
+                  << " voice(s), callback collected " << voices.size()
+                  << "; error=" << error.c_str() << '\n';
         return 2;
     }
 
@@ -73,7 +80,7 @@ int main()
         std::cerr << "No installed Natural Voice could be initialized\n";
         return 3;
     }
-    ss_voice_set_volume(5);
+    ss_voice_set_volume(100);
 
     constexpr std::uint64_t request_id = 1;
     constexpr wchar_t text[] = L"SelectSpeak native integration test.";

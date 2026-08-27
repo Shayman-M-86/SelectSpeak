@@ -14,7 +14,7 @@ from selectspeak.speech.backends.natural import (
     NaturalVoiceError,
     NaturalVoiceSpeaker,
 )
-from selectspeak.speech.contracts import TerminalStatus
+from selectspeak.speech.contracts import SpeechStarted, SpeechTerminal, SpeechWord, TerminalStatus
 from selectspeak.speech.pcm import PcmPlayedWord, PcmSubmitResult, PcmTerminal
 from selectspeak.speech.pipeline import GenerationStatistics
 from selectspeak.speech.playback import PlaybackController
@@ -254,7 +254,8 @@ def test_natural_voice_synthesizes_directly_into_one_native_audio_request(
     speaker = object.__new__(NaturalVoiceSpeaker)
     speaker._config = AppConfig(structure_pause_seconds=0.1).speech
     speaker._playback = PlaybackController()
-    request, _active = speaker._playback.submit(1, text, lambda _event: None)
+    speech_events: list[Any] = []
+    request, _active = speaker._playback.submit(1, text, speech_events.append)
     assert speaker._playback.next_request() == request
     speaker._generation_statistics = GenerationStatistics()
     speaker._session_lock = threading.Lock()
@@ -299,6 +300,37 @@ def test_natural_voice_synthesizes_directly_into_one_native_audio_request(
     assert len(sessions) == 1
     assert sessions[0].silence_frames == 2_400
     assert sessions[0].finished and sessions[0].closed
+    assert [type(event) for event in speech_events] == [
+        SpeechStarted,
+        SpeechWord,
+        SpeechTerminal,
+    ]
+    assert speech_events[-1].status is TerminalStatus.COMPLETED
+
+
+def test_natural_voice_applies_pause_state_to_the_native_request() -> None:
+    controls: list[str] = []
+
+    class AudioSession:
+        def pause(self) -> None:
+            controls.append("pause")
+
+        def resume(self) -> None:
+            controls.append("resume")
+
+    speaker = object.__new__(NaturalVoiceSpeaker)
+    speaker._session_lock = threading.Lock()
+    speaker._audio_session = AudioSession()
+    speaker._playback = PlaybackController()
+    request, _active = speaker._playback.submit(1, "Read this", lambda _event: None)
+    assert speaker._playback.next_request() == request
+
+    speaker.pause()
+    speaker.pause()
+    speaker.resume()
+    speaker.resume()
+
+    assert controls == ["pause", "resume"]
 
 
 def test_natural_voice_close_cancels_joins_and_releases_engine() -> None:

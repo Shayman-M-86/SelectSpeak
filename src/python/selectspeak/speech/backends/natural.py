@@ -213,7 +213,8 @@ class NaturalVoiceEngine:
             text_base_offset_utf16,
             ctypes.byref(native_result),
         )
-        check_native_status(status, "synthesize Natural Voice audio", self._last_error())
+        if status:
+            check_native_status(status, "synthesize Natural Voice audio", self._last_error())
         if native_result.status != status:
             raise NaturalVoiceError("Natural Voice returned inconsistent synthesis status")
         return NaturalSynthesisResult(

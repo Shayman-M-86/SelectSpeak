@@ -406,6 +406,15 @@ void TestNativeProducerMustMatchRequestIdentity()
                                    nullptr, 0, &result) ==
                SS_STATUS_INVALID_REQUEST,
            "native producer cannot feed a different request identity");
+    Expect(engine.ValidateProducerTextRange(handle, 40, 0, 1) ==
+               SS_STATUS_INVALID_REQUEST,
+           "native text producer cannot claim a different request identity");
+    Expect(engine.ValidateProducerTextRange(handle, 41, 19, 2) ==
+               SS_STATUS_INVALID_BOUNDARY,
+           "native text producer cannot exceed the complete request text");
+    Expect(engine.ValidateProducerTextRange(handle, 41, 20, 0) ==
+               SS_STATUS_OK,
+           "native text producer accepts the complete-text end edge");
     Expect(engine.SubmitForRequest(handle, 41, pcm.data(), pcm.size(),
                                    nullptr, 0, &result) == SS_STATUS_OK,
            "matching native producer feeds the request-scoped handle");
