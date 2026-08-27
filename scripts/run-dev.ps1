@@ -104,6 +104,14 @@ if (-not $NoBuild) {
     & (Join-Path $projectRoot "build-tools\native\build.ps1") -DevRuntime -SkipTests
     if ($LASTEXITCODE) { throw "The native bridge failed to build." }
 
+    # The player embeds the application icon, so generate it before building.
+    # Pillow lives in the virtual environment that this script already requires.
+    $icon = Join-Path $projectRoot ".build\packaging\SelectSpeak.ico"
+    if (-not (Test-Path -LiteralPath $icon -PathType Leaf)) {
+        & $python (Join-Path $projectRoot "build-tools\tools\create_icon.py") $icon
+        if ($LASTEXITCODE) { throw "Icon generation failed." }
+    }
+
     # The XAML compiler can retain locks from a previous interrupted build.
     Get-Process -Name "XamlCompiler" -ErrorAction SilentlyContinue |
         ForEach-Object {

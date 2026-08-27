@@ -136,6 +136,11 @@ if (-not $SkipNativeBuild) {
 }
 & (Join-Path $toolsRoot "stage_native.ps1")
 
+# Generate the icon before the player builds: the WinUI project embeds it, so
+# it has to exist by then rather than only before PyInstaller runs.
+& $python (Join-Path $toolsRoot "create_icon.py") $icon
+if ($LASTEXITCODE) { throw "Icon generation failed." }
+
 if (-not $SkipWinUiBuild) {
     & (Join-Path $PSScriptRoot "winui\build.ps1")
     if ($LASTEXITCODE) { throw "SelectSpeak player build failed." }
@@ -155,9 +160,6 @@ Copy-Item -LiteralPath `
     -Destination $licenseStage
 & $python (Join-Path $toolsRoot "collect_licenses.py") $licenseStage
 if ($LASTEXITCODE) { throw "License collection failed." }
-
-& $python (Join-Path $toolsRoot "create_icon.py") $icon
-if ($LASTEXITCODE) { throw "Icon generation failed." }
 
 & $python -m PyInstaller --noconfirm --clean `
     --distpath (Join-Path $projectRoot "dist") `

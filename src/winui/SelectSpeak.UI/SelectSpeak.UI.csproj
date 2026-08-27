@@ -27,6 +27,17 @@
     <Description>SelectSpeak text-to-speech player</Description>
   </PropertyGroup>
 
+  <!--
+    The player shares the application icon that build-tools/tools/create_icon.py
+    generates from logo/SelectSpeak-logo.png, so the taskbar and window match
+    the frozen executable and the installer. The build generates it before
+    compiling; ApplicationIcon is only applied when it exists so a WinUI-only
+    build still succeeds on a clean tree.
+  -->
+  <PropertyGroup Condition="Exists('$(MSBuildThisFileDirectory)..\..\..\.build\packaging\SelectSpeak.ico')">
+    <ApplicationIcon>$(MSBuildThisFileDirectory)..\..\..\.build\packaging\SelectSpeak.ico</ApplicationIcon>
+  </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.250916003" />
   </ItemGroup>
