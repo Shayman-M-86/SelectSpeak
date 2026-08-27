@@ -90,15 +90,9 @@ jobs:
       - name: Restore locked dependencies
         run: uv sync --locked --extra supertonic
 
+      # The audit writes its reports under .build/security. They are not
+      # uploaded as artifacts: a failure is read from this job's log, and the
+      # reports are reproduced by running the script locally.
       - name: Audit Python and NuGet dependencies
         run: .\build-tools\security\audit_dependencies.ps1
-
-      - name: Upload audit reports
-        if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: dependency-security-reports-${{ github.run_id }}
-          path: .build/security
-          if-no-files-found: warn
-          retention-days: 30
 
