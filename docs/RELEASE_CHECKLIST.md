@@ -13,8 +13,8 @@ For a guided run through the same process, use `.\scripts\release.ps1`.
   git diff --check
   ```
 
-~~- [ ] Commit the generated version changes and merge them to `main` through the normal review process. Confirm the `CI` workflow passes on the merged commit.
-- [ ] Add and review the release's user-visible changes and relevant known limitations in the matching version section of `CHANGELOG.md` before tagging. Leave `Unreleased` ready for future changes.~~
+- [ ] Commit the generated version changes and merge them to `main` through the normal review process. Confirm the `CI` workflow passes on the merged commit.
+- [ ] Add and review the release's user-visible changes and relevant known limitations in the matching version section of `CHANGELOG.md` before tagging. Leave `Unreleased` ready for future changes.
 
 ## 2. Tag the release
 
