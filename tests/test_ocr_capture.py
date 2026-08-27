@@ -13,6 +13,8 @@ from selectspeak.input.ocr_capture import OcrCaptureHotkey
 from selectspeak.native import OcrCallback, get_native_bridge
 
 RUNTIME_OCR_DLL = Path(__file__).parents[1] / ".runtime" / "native" / "selectspeak_native.dll"
+
+
 def _recognize_image(image: Image.Image) -> tuple[int, list[tuple[int, str]]]:
     results: list[tuple[int, str]] = []
     callback = OcrCallback(lambda text, status, _context: results.append((status, text or "")))
@@ -177,9 +179,7 @@ def test_built_bridge_reconstructs_visual_wraps_and_paragraphs() -> None:
 def test_built_bridge_rejects_an_undersized_bgra_buffer() -> None:
     dll = get_native_bridge(str(RUNTIME_OCR_DLL)).library
     callback_results: list[tuple[int, str]] = []
-    callback = OcrCallback(
-        lambda text, status, _context: callback_results.append((status, text or ""))
-    )
+    callback = OcrCallback(lambda text, status, _context: callback_results.append((status, text or "")))
     pixels = (ctypes.c_ubyte * 16)()
 
     result = dll.ss_ocr_recognize_bgra(

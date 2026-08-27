@@ -123,6 +123,7 @@ def test_supertonic_uses_one_stream_and_only_pauses_at_sentence_boundaries(monke
     assert speaker._playback.next_request() == request
     speaker._request_generation = 0
     speaker._generation_statistics = GenerationStatistics()
+
     class AudioSession:
         events: list[tuple[str, object]] = []
 

@@ -28,9 +28,7 @@ class NativeCallError(RuntimeError):
             self.status = None
         status_name = self.status.name.lower() if self.status is not None else "unknown"
         detail = f": {diagnostic}" if diagnostic else ""
-        super().__init__(
-            f"Could not {action}: native status {self.status_code} ({status_name}){detail}"
-        )
+        super().__init__(f"Could not {action}: native status {self.status_code} ({status_name}){detail}")
 
 
 def check_native_status(status_code: int, action: str, diagnostic: str = "") -> None:

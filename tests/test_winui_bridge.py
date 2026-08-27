@@ -50,9 +50,7 @@ def _player_recording_sends() -> tuple[WinUiPlayer, list[dict[str, object]]]:
     """A player whose messages are captured instead of written to a pipe."""
     player = WinUiPlayer(hotkey="alt+s", ocr_hotkey="alt+d")
     sent: list[dict[str, object]] = []
-    cast(Any, player)._send = lambda message_type, **fields: sent.append(
-        {"type": message_type, **fields}
-    )
+    cast(Any, player)._send = lambda message_type, **fields: sent.append({"type": message_type, **fields})
     return player, sent
 
 

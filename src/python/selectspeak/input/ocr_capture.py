@@ -16,6 +16,7 @@ OCR_COMPLETED = 1
 OCR_CANCELLED = 2
 OCR_FAILED = 3
 
+
 class OcrCaptureError(RuntimeError):
     pass
 

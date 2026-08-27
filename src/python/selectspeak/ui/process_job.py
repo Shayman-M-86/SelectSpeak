@@ -82,9 +82,7 @@ class ChildProcessJob:
         kernel32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
         handle = kernel32.CreateJobObjectW(None, None)
         if not handle:
-            logger.warning(
-                "process_job.create_failed error=%s", ctypes.get_last_error()
-            )
+            logger.warning("process_job.create_failed error=%s", ctypes.get_last_error())
             return
 
         limits = _JobObjectExtendedLimitInformation()
@@ -101,9 +99,7 @@ class ChildProcessJob:
             ctypes.byref(limits),
             ctypes.sizeof(limits),
         ):
-            logger.warning(
-                "process_job.configure_failed error=%s", ctypes.get_last_error()
-            )
+            logger.warning("process_job.configure_failed error=%s", ctypes.get_last_error())
             kernel32.CloseHandle(handle)
             return
 
@@ -122,13 +118,9 @@ class ChildProcessJob:
         kernel32 = self._kernel32
         kernel32.OpenProcess.restype = wintypes.HANDLE
         kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-        process = kernel32.OpenProcess(
-            _PROCESS_SET_QUOTA | _PROCESS_TERMINATE, False, pid
-        )
+        process = kernel32.OpenProcess(_PROCESS_SET_QUOTA | _PROCESS_TERMINATE, False, pid)
         if not process:
-            logger.warning(
-                "process_job.open_failed pid=%s error=%s", pid, ctypes.get_last_error()
-            )
+            logger.warning("process_job.open_failed pid=%s error=%s", pid, ctypes.get_last_error())
             return False
         try:
             kernel32.AssignProcessToJobObject.argtypes = [

@@ -93,9 +93,7 @@ def test_both_processes_claim_the_same_shell_identity() -> None:
     """
     from selectspeak.app.app_identity import APP_USER_MODEL_ID
 
-    player = (
-        PROJECT_ROOT / "src" / "winui" / "SelectSpeak.UI" / "App.xaml.cs"
-    ).read_text(encoding="utf-8")
+    player = (PROJECT_ROOT / "src" / "winui" / "SelectSpeak.UI" / "App.xaml.cs").read_text(encoding="utf-8")
 
     assert f'AppUserModelId = "{APP_USER_MODEL_ID}"' in player
 

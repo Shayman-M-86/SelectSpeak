@@ -257,9 +257,7 @@ class VoiceController:
                     option.key if option.backend == "natural" else config.preferred_voice_match
                 ),
                 supertonic_voice=(
-                    option.supertonic_voice
-                    if option.backend == "supertonic"
-                    else config.supertonic_voice
+                    option.supertonic_voice if option.backend == "supertonic" else config.supertonic_voice
                 ),
             )
             if option.backend == "natural" and isinstance(speaker, NaturalVoiceSpeaker):
@@ -314,9 +312,7 @@ class VoiceController:
                 closed = self._closed
             if not closed:
                 self._revert_to(current_key)
-                self._player.call_soon(
-                    lambda message=str(error): self._player.show_backend_error(message)
-                )
+                self._player.call_soon(lambda message=str(error): self._player.show_backend_error(message))
         finally:
             with self._lock:
                 self._switching = False
@@ -375,9 +371,7 @@ class VoiceController:
                 self._worker = None
             if not closed:
                 self._revert_to(current_key)
-                self._player.call_soon(
-                    lambda message=str(error): self._player.show_backend_error(message)
-                )
+                self._player.call_soon(lambda message=str(error): self._player.show_backend_error(message))
             return
         logger.info("supertonic.setup.launched")
         # Setup replaces this installation, so the running application stands

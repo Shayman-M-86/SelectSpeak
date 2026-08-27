@@ -125,8 +125,7 @@ class PcmAdmissionInterrupted(RuntimeError):
         self.request_id = request_id
         self.submitted_frames = submitted_frames
         super().__init__(
-            f"PCM admission interrupted for request {request_id} "
-            f"after {submitted_frames} accepted frames"
+            f"PCM admission interrupted for request {request_id} after {submitted_frames} accepted frames"
         )
 
 
@@ -449,10 +448,7 @@ class PcmPlaybackSession:
             text_end = boundary.text_position + boundary.text_length
             if text_end > self._text_length_utf16:
                 raise ValueError("boundary text range exceeds the complete request")
-            if (
-                boundary.text_position not in self._valid_text_edges
-                or text_end not in self._valid_text_edges
-            ):
+            if boundary.text_position not in self._valid_text_edges or text_end not in self._valid_text_edges:
                 raise ValueError("boundary text range splits a UTF-16 surrogate pair")
             previous_frame = boundary.frame_offset
         return frame_count

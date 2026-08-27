@@ -142,7 +142,16 @@ def test_incomplete_supertonic_download_is_not_reported_as_installed(tmp_path: P
 
 def test_available_supertonic_voices_uses_installed_styles_or_stable_defaults(tmp_path: Path) -> None:
     assert supertonic_setup.available_voices(tmp_path) == (
-        "F1", "F2", "F3", "F4", "F5", "M1", "M2", "M3", "M4", "M5"
+        "F1",
+        "F2",
+        "F3",
+        "F4",
+        "F5",
+        "M1",
+        "M2",
+        "M3",
+        "M4",
+        "M5",
     )
     styles = tmp_path / "voice_styles"
     styles.mkdir()

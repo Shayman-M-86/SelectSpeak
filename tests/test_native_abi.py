@@ -94,9 +94,7 @@ def test_python_audio_wire_values_and_layout_match_the_frozen_contract() -> None
         NativeStatus.CLOSED,
         NativeStatus.INTERNAL_ERROR,
     ]
-    assert [status.value for status in NativeTerminalStatus] == [
-        status.value for status in TerminalStatus
-    ]
+    assert [status.value for status in NativeTerminalStatus] == [status.value for status in TerminalStatus]
     assert NativeSampleFormat.PCM_S16_LE == 1
     assert NativeAudioEventKind.TERMINAL == 4
     assert ctypes.sizeof(NativeAudioFormat) == 16
@@ -160,9 +158,7 @@ def test_staged_bridge_matches_version_8_audio_abi() -> None:
         assert status == NativeStatus.OK
         assert handle.value != 0
         assert started.wait(2)
-        assert bridge.library.ss_audio_request_stop(
-            handle, NativeTerminalStatus.CLOSED
-        ) == NativeStatus.OK
+        assert bridge.library.ss_audio_request_stop(handle, NativeTerminalStatus.CLOSED) == NativeStatus.OK
         assert terminal.wait(2)
         assert events == [
             (NativeAudioEventKind.STARTED, NativeTerminalStatus.NONE),

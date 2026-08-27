@@ -52,9 +52,10 @@ def test_ordered_voices_uses_exact_package_and_sdk_name() -> None:
         NaturalVoice("C:/shared", "SDK Alpha", "en-US", "Alpha"),
     ]
 
-    assert NaturalVoiceEngine._ordered_voices(
-        voices, natural_voice_key("C:/shared", "SDK Alpha")
-    ) == [voices[1], voices[0]]
+    assert NaturalVoiceEngine._ordered_voices(voices, natural_voice_key("C:/shared", "SDK Alpha")) == [
+        voices[1],
+        voices[0],
+    ]
 
 
 def test_package_only_preference_migrates_with_a_deterministic_sdk_name() -> None:

@@ -132,19 +132,14 @@ def _structure_lines(text: str) -> tuple[str, int, int, int, int, int]:
         if spoken_line:
             is_explicit_structure = bool(heading_match or bullet_match or numbered_match)
             next_line = next(
-                (
-                    candidate.strip()
-                    for candidate in lines[index + 1 :]
-                    if candidate.strip()
-                ),
+                (candidate.strip() for candidate in lines[index + 1 :] if candidate.strip()),
                 None,
             )
             # Explicit structure ends a thought by construction; wrapped prose
             # does not, so never break a sentence that continues on the next
             # line.
             if is_explicit_structure or (
-                structured_multiline
-                and not _continues_on_next_line(spoken_line, next_line)
+                structured_multiline and not _continues_on_next_line(spoken_line, next_line)
             ):
                 spoken_line = _ensure_pause(spoken_line)
             if pending_paragraph_break and segments and segments[-1] != "":
