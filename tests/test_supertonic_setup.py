@@ -1,7 +1,9 @@
 import json
 import os
 import sys
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from types import ModuleType
 
 from selectspeak.speech import supertonic_setup
 
@@ -97,12 +99,22 @@ def test_application_imports_without_the_supertonic_dependency_layer() -> None:
 
     real_import = builtins.__import__
 
-    def without_optional_layer(name: str, *args: object, **kwargs: object) -> object:
+    # Mirrors __import__ exactly: builtins is typed, so a looser signature does
+    # not type-check against it.
+    def without_optional_layer(
+        name: str,
+        globals: Mapping[str, object] | None = None,
+        locals: Mapping[str, object] | None = None,
+        fromlist: Sequence[str] | None = (),
+        level: int = 0,
+    ) -> ModuleType:
         if name.split(".")[0] in optional:
             raise ModuleNotFoundError(f"No module named {name!r}")
-        return real_import(name, *args, **kwargs)  # type: ignore[arg-type]
+        return real_import(name, globals, locals, fromlist, level)
 
-    builtins.__import__ = without_optional_layer
+    # The replacement matches __import__'s signature, but the checker treats
+    # the builtin as not reassignable regardless.
+    builtins.__import__ = without_optional_layer  # ty: ignore[invalid-assignment]
     try:
         import selectspeak.app  # noqa: F401
         import selectspeak.speech.factory  # noqa: F401
